@@ -8,6 +8,11 @@ server. Unit tests live in `tests/` and are registered through CTest. Build pres
 defined in `CMakePresets.json`; CI is defined in `.github/workflows/ci.yml`. Local editor
 debug tasks are under `.vscode/`.
 
+Read `STEP0.md` before assuming integration readiness. It documents the current
+implemented scaffold and the missing pieces that still block real `neuriplo`,
+`vision-core`, and `vision-inference` integration. Treat `ROADMAP.md` as the target
+roadmap and `STEP0.md` as the current-state snapshot.
+
 ## Build, Test, and Development Commands
 
 Use CMake presets for repeatable local builds:
