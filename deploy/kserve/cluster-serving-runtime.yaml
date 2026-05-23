@@ -1,0 +1,39 @@
+apiVersion: serving.kserve.io/v1alpha1
+kind: ClusterServingRuntime
+metadata:
+  name: neuriplo-kserve-runtime
+spec:
+  supportedModelFormats:
+    - name: neuriplo
+      version: "1"
+      autoSelect: false
+  protocolVersions:
+    - v2
+  containers:
+    - name: kserve-container
+      image: neuriplo-kserve-runtime:latest
+      imagePullPolicy: IfNotPresent
+      args:
+        - --host
+        - "0.0.0.0"
+        - --port
+        - "8080"
+        - --model-name
+        - "{{.Name}}"
+      env:
+        - name: MODEL_PATH
+          value: /mnt/models
+        - name: BACKEND
+          value: stub
+        - name: PROTOCOL
+          value: v2
+      ports:
+        - containerPort: 8080
+          protocol: TCP
+      resources:
+        requests:
+          cpu: 100m
+          memory: 128Mi
+        limits:
+          cpu: "1"
+          memory: 512Mi

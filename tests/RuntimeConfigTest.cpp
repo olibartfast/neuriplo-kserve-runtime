@@ -1,18 +1,38 @@
 #include "RuntimeConfig.hpp"
 #include "Test.hpp"
 
+#include <optional>
 #include <stdexcept>
+#include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace {
 
-RuntimeConfig parse(const std::vector<const char *> &args) {
+RuntimeEnvironment testEnvironment(std::unordered_map<std::string, std::string> values = {},
+                                   bool mntModelsExists = false) {
+    return RuntimeEnvironment{
+        [values = std::move(values)](const std::string &name) -> std::optional<std::string> {
+            const auto found = values.find(name);
+            if (found == values.end()) {
+                return std::nullopt;
+            }
+            return found->second;
+        },
+        [mntModelsExists](const std::string &path) {
+            return path == "/mnt/models" && mntModelsExists;
+        },
+    };
+}
+
+RuntimeConfig parse(const std::vector<const char *> &args,
+                    RuntimeEnvironment environment = testEnvironment()) {
     std::vector<char *> argv;
     argv.reserve(args.size());
     for (const char *arg : args) {
         argv.push_back(const_cast<char *>(arg));
     }
-    return parseRuntimeConfig(static_cast<int>(argv.size()), argv.data());
+    return parseRuntimeConfig(static_cast<int>(argv.size()), argv.data(), environment);
 }
 
 } // namespace
@@ -23,6 +43,42 @@ TEST_CASE(parse_runtime_config_uses_defaults) {
     REQUIRE_EQ(config.port, 8080);
     REQUIRE_EQ(config.model_name, "demo");
     REQUIRE_EQ(config.backend, "stub");
+    REQUIRE_EQ(config.model_path, "");
+    REQUIRE_EQ(config.storage_uri, "");
+}
+
+TEST_CASE(parse_runtime_config_uses_environment_defaults) {
+    const auto config = parse({"neuriplo-kserve-runtime"},
+                              testEnvironment({{"MODEL_NAME", "image-model"},
+                                               {"MODEL_PATH", "/models/from-env"},
+                                               {"BACKEND", "neuriplo_backend"},
+                                               {"STORAGE_URI", "pvc://models/image-model"}}));
+    REQUIRE_EQ(config.model_name, "image-model");
+    REQUIRE_EQ(config.model_path, "/models/from-env");
+    REQUIRE_EQ(config.backend, "neuriplo_backend");
+    REQUIRE_EQ(config.storage_uri, "pvc://models/image-model");
+}
+
+TEST_CASE(parse_runtime_config_cli_overrides_environment_defaults) {
+    const auto config = parse({"neuriplo-kserve-runtime", "--model-name", "cli-model",
+                               "--model-path", "/models/from-cli", "--backend", "cli_backend"},
+                              testEnvironment({{"MODEL_NAME", "env-model"},
+                                               {"MODEL_PATH", "/models/from-env"},
+                                               {"BACKEND", "env_backend"}}));
+    REQUIRE_EQ(config.model_name, "cli-model");
+    REQUIRE_EQ(config.model_path, "/models/from-cli");
+    REQUIRE_EQ(config.backend, "cli_backend");
+}
+
+TEST_CASE(parse_runtime_config_defaults_to_mnt_models_when_present) {
+    const auto config = parse({"neuriplo-kserve-runtime"}, testEnvironment({}, true));
+    REQUIRE_EQ(config.model_path, "/mnt/models");
+}
+
+TEST_CASE(parse_runtime_config_model_path_env_overrides_mnt_models_default) {
+    const auto config = parse({"neuriplo-kserve-runtime"},
+                              testEnvironment({{"MODEL_PATH", "/models/from-env"}}, true));
+    REQUIRE_EQ(config.model_path, "/models/from-env");
 }
 
 TEST_CASE(parse_runtime_config_accepts_overrides) {

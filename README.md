@@ -83,6 +83,20 @@ valgrind --leak-check=full --error-exitcode=1 ./build/debug/neuriplo-kserve-runt
   --port 8080
 ```
 
+The runtime also reads KServe-friendly environment defaults. CLI flags override
+environment values.
+
+```text
+MODEL_NAME   default model name
+MODEL_PATH   default model path
+BACKEND      default backend name
+STORAGE_URI  retained for diagnostics; the server does not download it
+```
+
+When `MODEL_PATH` is unset and `/mnt/models` exists, the runtime uses
+`/mnt/models` as the model path. This matches KServe storage-initializer and PVC
+mount conventions.
+
 ## Endpoints
 
 ```text
@@ -93,5 +107,38 @@ GET  /v2/models/{model_name}
 GET  /v2/models/{model_name}/ready
 POST /v2/models/{model_name}/infer
 ```
+
+## KServe Packaging
+
+Build a local image:
+
+```bash
+docker build -f docker/Dockerfile -t neuriplo-kserve-runtime:latest .
+```
+
+For a local minikube-style cluster, make the image available to the cluster
+before applying the runtime. Then install the custom runtime and example service:
+
+```bash
+kubectl apply -f deploy/kserve/cluster-serving-runtime.yaml
+kubectl apply -f deploy/kserve/inferenceservice.yaml
+```
+
+The example `InferenceService` uses `modelFormat.name: neuriplo`,
+`protocolVersion: v2`, and explicitly selects `runtime:
+neuriplo-kserve-runtime`. Replace the placeholder `storageUri` with the location
+of your model artifact.
+
+Check readiness and the current V2 metadata surface:
+
+```bash
+kubectl get inferenceservice neuriplo-demo
+curl http://<host>/v2
+curl http://<host>/v2/health/ready
+curl http://<host>/v2/models/neuriplo-demo
+```
+
+Step 1 packaging still uses the stub execution path. The `/infer` endpoint
+returns a fixed placeholder tensor and does not run a real `neuriplo` backend.
 
 [neuriplo]: https://github.com/olibartfast/neuriplo

@@ -1,5 +1,7 @@
 #include "RuntimeConfig.hpp"
 
+#include <cstdlib>
+#include <filesystem>
 #include <stdexcept>
 #include <string>
 
@@ -13,10 +15,44 @@ std::string requireValue(int &index, int argc, char **argv, const std::string &f
     return argv[index];
 }
 
+void applyStringEnvironmentDefault(std::string &target, const RuntimeEnvironment &environment,
+                                   const std::string &name) {
+    const auto value = environment.get(name);
+    if (value.has_value() && !value->empty()) {
+        target = *value;
+    }
+}
+
+RuntimeEnvironment processEnvironment() {
+    return RuntimeEnvironment{
+        [](const std::string &name) -> std::optional<std::string> {
+            const char *value = std::getenv(name.c_str());
+            if (value == nullptr) {
+                return std::nullopt;
+            }
+            return std::string(value);
+        },
+        [](const std::string &path) { return std::filesystem::exists(path); },
+    };
+}
+
 } // namespace
 
 RuntimeConfig parseRuntimeConfig(int argc, char **argv) {
+    return parseRuntimeConfig(argc, argv, processEnvironment());
+}
+
+RuntimeConfig parseRuntimeConfig(int argc, char **argv, const RuntimeEnvironment &environment) {
     RuntimeConfig config;
+
+    applyStringEnvironmentDefault(config.model_name, environment, "MODEL_NAME");
+    applyStringEnvironmentDefault(config.model_path, environment, "MODEL_PATH");
+    applyStringEnvironmentDefault(config.backend, environment, "BACKEND");
+    applyStringEnvironmentDefault(config.storage_uri, environment, "STORAGE_URI");
+    if (config.model_path.empty() && environment.pathExists("/mnt/models")) {
+        config.model_path = "/mnt/models";
+    }
+
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
         if (arg == "--host") {
