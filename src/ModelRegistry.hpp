@@ -21,14 +21,13 @@ struct ModelMetadata {
 };
 
 class ModelRegistry {
-public:
-    explicit ModelRegistry(const RuntimeConfig& config);
+  public:
+    explicit ModelRegistry(const RuntimeConfig &config);
 
-    std::optional<ModelMetadata> find(const std::string& model_name) const;
-    bool ready(const std::string& model_name) const;
+    std::optional<ModelMetadata> find(const std::string &model_name) const;
+    bool ready(const std::string &model_name) const;
     bool allReady() const;
 
-private:
+  private:
     ModelMetadata model_;
 };
-

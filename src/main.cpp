@@ -3,21 +3,40 @@
 #include "ModelRegistry.hpp"
 #include "RuntimeConfig.hpp"
 
+#include <exception>
 #include <iostream>
+#include <string>
 
-int main(int argc, char** argv) {
+namespace {
+
+bool hasFlag(int argc, char **argv, const std::string &flag) {
+    for (int i = 1; i < argc; ++i) {
+        if (argv[i] == flag) {
+            return true;
+        }
+    }
+    return false;
+}
+
+} // namespace
+
+int main(int argc, char **argv) {
+    if (hasFlag(argc, argv, "--version")) {
+        std::cout << "neuriplo-kserve-runtime 0.1.0" << '\n';
+        return 0;
+    }
+
     try {
         const auto config = parseRuntimeConfig(argc, argv);
         ModelRegistry registry(config);
         KServeRuntime runtime(std::move(registry));
-        HttpServer server(config.host, config.port, [&runtime](const HttpRequest& request) {
+        HttpServer server(config.host, config.port, [&runtime](const HttpRequest &request) {
             return runtime.handle(request);
         });
         server.run();
-    } catch (const std::exception& error) {
-        std::cerr << "fatal: " << error.what() << std::endl;
+    } catch (const std::exception &error) {
+        std::cerr << "fatal: " << error.what() << '\n';
         return 1;
     }
     return 0;
 }
-

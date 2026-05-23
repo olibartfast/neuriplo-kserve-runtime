@@ -34,7 +34,7 @@ std::string reasonPhrase(int status) {
     }
 }
 
-std::string trim(std::string value) {
+std::string trim(const std::string &value) {
     const auto first = value.find_first_not_of(" \t\r\n");
     if (first == std::string::npos) {
         return "";
@@ -43,7 +43,7 @@ std::string trim(std::string value) {
     return value.substr(first, last - first + 1);
 }
 
-HttpRequest parseRequest(const std::string& raw) {
+HttpRequest parseRequest(const std::string &raw) {
     HttpRequest request;
     const auto header_end = raw.find("\r\n\r\n");
     const auto header_block = raw.substr(0, header_end);
@@ -77,13 +77,13 @@ HttpRequest parseRequest(const std::string& raw) {
     return request;
 }
 
-std::string serializeResponse(const HttpResponse& response) {
+std::string serializeResponse(const HttpResponse &response) {
     std::ostringstream out;
     out << "HTTP/1.1 " << response.status << ' ' << reasonPhrase(response.status) << "\r\n";
     out << "Content-Type: " << response.content_type << "\r\n";
     out << "Content-Length: " << response.body.size() << "\r\n";
     out << "Connection: close\r\n";
-    for (const auto& [name, value] : response.headers) {
+    for (const auto &[name, value] : response.headers) {
         out << name << ": " << value << "\r\n";
     }
     out << "\r\n";
@@ -96,7 +96,9 @@ std::string serializeResponse(const HttpResponse& response) {
 HttpServer::HttpServer(std::string host, int port, Handler handler)
     : host_(std::move(host)), port_(port), handler_(std::move(handler)) {}
 
-HttpServer::~HttpServer() { stop(); }
+HttpServer::~HttpServer() {
+    stop();
+}
 
 void HttpServer::run() {
     server_fd_ = ::socket(AF_INET, SOCK_STREAM, 0);
@@ -116,7 +118,7 @@ void HttpServer::run() {
         throw std::runtime_error("invalid listen host: " + host_);
     }
 
-    if (::bind(server_fd_, reinterpret_cast<sockaddr*>(&address), sizeof(address)) < 0) {
+    if (::bind(server_fd_, reinterpret_cast<sockaddr *>(&address), sizeof(address)) < 0) {
         throw std::runtime_error("bind failed: " + std::string(std::strerror(errno)));
     }
 
@@ -125,15 +127,16 @@ void HttpServer::run() {
     }
 
     running_ = true;
-    std::cout << "neuriplo-kserve-runtime listening on " << host_ << ':' << port_ << std::endl;
+    std::cout << "neuriplo-kserve-runtime listening on " << host_ << ':' << port_ << '\n';
 
     while (running_) {
         sockaddr_in client_address{};
         socklen_t client_len = sizeof(client_address);
-        const int client_fd = ::accept(server_fd_, reinterpret_cast<sockaddr*>(&client_address), &client_len);
+        const int client_fd =
+            ::accept(server_fd_, reinterpret_cast<sockaddr *>(&client_address), &client_len);
         if (client_fd < 0) {
             if (running_) {
-                std::cerr << "accept failed: " << std::strerror(errno) << std::endl;
+                std::cerr << "accept failed: " << std::strerror(errno) << '\n';
             }
             continue;
         }
@@ -189,7 +192,7 @@ void HttpServer::handleClient(int client_fd) const {
     HttpResponse response;
     try {
         response = handler_(parseRequest(raw));
-    } catch (const std::exception& error) {
+    } catch (const std::exception &error) {
         response.status = 500;
         response.body = std::string(R"({"error":")") + error.what() + R"("})";
     }

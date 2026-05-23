@@ -5,7 +5,7 @@
 
 namespace {
 
-std::string requireValue(int& index, int argc, char** argv, const std::string& flag) {
+std::string requireValue(int &index, int argc, char **argv, const std::string &flag) {
     if (index + 1 >= argc) {
         throw std::invalid_argument("missing value for " + flag);
     }
@@ -15,7 +15,7 @@ std::string requireValue(int& index, int argc, char** argv, const std::string& f
 
 } // namespace
 
-RuntimeConfig parseRuntimeConfig(int argc, char** argv) {
+RuntimeConfig parseRuntimeConfig(int argc, char **argv) {
     RuntimeConfig config;
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
@@ -47,4 +47,3 @@ RuntimeConfig parseRuntimeConfig(int argc, char** argv) {
 
     return config;
 }
-

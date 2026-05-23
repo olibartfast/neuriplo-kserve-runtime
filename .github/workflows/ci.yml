@@ -1,0 +1,74 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+jobs:
+  build-test:
+    name: Build and unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build tools
+        run: sudo apt-get update && sudo apt-get install -y build-essential cmake
+      - name: Configure
+        run: cmake --preset debug
+      - name: Build
+        run: cmake --build --preset debug --parallel
+      - name: Unit tests
+        run: ctest --preset debug
+
+  lint:
+    name: Lint and formatting
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install lint tools
+        run: sudo apt-get update && sudo apt-get install -y build-essential cmake clang-format clang-tidy
+      - name: Check formatting
+        run: scripts/check-format.sh
+      - name: Configure clang-tidy
+        run: cmake --preset lint
+      - name: Run clang-tidy build
+        run: cmake --build --preset lint --parallel
+
+  sanitizers:
+    name: Sanitizers
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        preset: [asan, ubsan, tsan]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build tools
+        run: sudo apt-get update && sudo apt-get install -y build-essential cmake
+      - name: Configure ${{ matrix.preset }}
+        run: cmake --preset ${{ matrix.preset }}
+      - name: Build ${{ matrix.preset }}
+        run: cmake --build --preset ${{ matrix.preset }} --parallel
+      - name: Test ${{ matrix.preset }}
+        if: ${{ matrix.preset != 'tsan' || env.ACT != 'true' }}
+        run: ctest --preset ${{ matrix.preset }}
+      - name: Skip TSan runtime under act
+        if: ${{ matrix.preset == 'tsan' && env.ACT == 'true' }}
+        run: echo "ThreadSanitizer runtime is not reliable inside act's Docker container; build completed."
+
+  memcheck:
+    name: Memory leak check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install valgrind
+        run: sudo apt-get update && sudo apt-get install -y build-essential cmake valgrind
+      - name: Configure
+        run: cmake --preset debug
+      - name: Build
+        run: cmake --build --preset debug --parallel
+      - name: Run unit tests under valgrind
+        run: valgrind --leak-check=full --error-exitcode=1 ./build/debug/neuriplo-kserve-runtime-tests
+      - name: Run version command under valgrind
+        run: valgrind --leak-check=full --error-exitcode=1 ./build/debug/neuriplo-kserve-runtime --version

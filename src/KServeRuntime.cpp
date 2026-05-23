@@ -11,15 +11,15 @@ HttpResponse json(int status, std::string body) {
     return response;
 }
 
-HttpResponse error(int status, const std::string& code, const std::string& message) {
+HttpResponse error(int status, const std::string &code, const std::string &message) {
     return json(status, R"({"error":{"code":")" + code + R"(","message":")" + message + R"("}})");
 }
 
-bool startsWith(const std::string& value, const std::string& prefix) {
+bool startsWith(const std::string &value, const std::string &prefix) {
     return value.rfind(prefix, 0) == 0;
 }
 
-std::string shapeJson(const std::vector<int64_t>& shape) {
+std::string shapeJson(const std::vector<int64_t> &shape) {
     std::ostringstream out;
     out << '[';
     for (size_t i = 0; i < shape.size(); ++i) {
@@ -32,12 +32,12 @@ std::string shapeJson(const std::vector<int64_t>& shape) {
     return out.str();
 }
 
-std::string tensorMetadataJson(const TensorMetadata& tensor) {
+std::string tensorMetadataJson(const TensorMetadata &tensor) {
     return R"({"name":")" + tensor.name + R"(","datatype":")" + tensor.datatype + R"(","shape":)" +
            shapeJson(tensor.shape) + '}';
 }
 
-std::string tensorsJson(const std::vector<TensorMetadata>& tensors) {
+std::string tensorsJson(const std::vector<TensorMetadata> &tensors) {
     std::ostringstream out;
     out << '[';
     for (size_t i = 0; i < tensors.size(); ++i) {
@@ -50,7 +50,7 @@ std::string tensorsJson(const std::vector<TensorMetadata>& tensors) {
     return out.str();
 }
 
-std::string extractModelRouteTail(const std::string& path) {
+std::string extractModelRouteTail(const std::string &path) {
     constexpr auto prefix = "/v2/models/";
     if (!startsWith(path, prefix)) {
         return "";
@@ -62,7 +62,7 @@ std::string extractModelRouteTail(const std::string& path) {
 
 KServeRuntime::KServeRuntime(ModelRegistry registry) : registry_(std::move(registry)) {}
 
-HttpResponse KServeRuntime::handle(const HttpRequest& request) const {
+HttpResponse KServeRuntime::handle(const HttpRequest &request) const {
     if (request.method.empty()) {
         return error(400, "INVALID_ARGUMENT", "malformed HTTP request");
     }
@@ -101,7 +101,9 @@ HttpResponse KServeRuntime::serverMetadata() const {
     return json(200, R"({"name":"neuriplo-kserve-runtime","version":"0.1.0","extensions":[]})");
 }
 
-HttpResponse KServeRuntime::live() const { return json(200, R"({"live":true})"); }
+HttpResponse KServeRuntime::live() const {
+    return json(200, R"({"live":true})");
+}
 
 HttpResponse KServeRuntime::ready() const {
     if (!registry_.allReady()) {
@@ -110,7 +112,7 @@ HttpResponse KServeRuntime::ready() const {
     return json(200, R"({"ready":true})");
 }
 
-HttpResponse KServeRuntime::modelMetadata(const std::string& model_name) const {
+HttpResponse KServeRuntime::modelMetadata(const std::string &model_name) const {
     const auto model = registry_.find(model_name);
     if (!model) {
         return error(404, "MODEL_NOT_FOUND", "model not found: " + model_name);
@@ -122,7 +124,7 @@ HttpResponse KServeRuntime::modelMetadata(const std::string& model_name) const {
     return json(200, body);
 }
 
-HttpResponse KServeRuntime::modelReady(const std::string& model_name) const {
+HttpResponse KServeRuntime::modelReady(const std::string &model_name) const {
     if (!registry_.find(model_name)) {
         return error(404, "MODEL_NOT_FOUND", "model not found: " + model_name);
     }
@@ -132,7 +134,7 @@ HttpResponse KServeRuntime::modelReady(const std::string& model_name) const {
     return json(200, R"({"ready":true})");
 }
 
-HttpResponse KServeRuntime::infer(const std::string& model_name, const HttpRequest& request) const {
+HttpResponse KServeRuntime::infer(const std::string &model_name, const HttpRequest &request) const {
     if (!registry_.find(model_name)) {
         return error(404, "MODEL_NOT_FOUND", "model not found: " + model_name);
     }
@@ -141,8 +143,8 @@ HttpResponse KServeRuntime::infer(const std::string& model_name, const HttpReque
     }
 
     (void)request;
-    return json(200,
-                R"({"model_name":")" + model_name +
-                    R"(","outputs":[{"name":"output","shape":[1,1],"datatype":"FP32","data":[0.0]}]})");
+    return json(
+        200,
+        R"({"model_name":")" + model_name +
+            R"(","outputs":[{"name":"output","shape":[1,1],"datatype":"FP32","data":[0.0]}]})");
 }
-

@@ -10,5 +10,4 @@ struct RuntimeConfig {
     std::string backend = "stub";
 };
 
-RuntimeConfig parseRuntimeConfig(int argc, char** argv);
-
+RuntimeConfig parseRuntimeConfig(int argc, char **argv);

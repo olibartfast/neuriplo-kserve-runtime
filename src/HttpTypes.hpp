@@ -16,4 +16,3 @@ struct HttpResponse {
     std::string body;
     std::map<std::string, std::string> headers;
 };
-
