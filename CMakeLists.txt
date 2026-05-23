@@ -89,3 +89,4 @@ endif()
 
 add_test(NAME unit COMMAND neuriplo-kserve-runtime-tests)
 add_test(NAME version COMMAND neuriplo-kserve-runtime --version)
+add_test(NAME help COMMAND neuriplo-kserve-runtime --help)

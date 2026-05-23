@@ -18,11 +18,21 @@ bool hasFlag(int argc, char **argv, const std::string &flag) {
     return false;
 }
 
+void printUsage(std::ostream &out) {
+    out << "usage: neuriplo-kserve-runtime [--host 0.0.0.0] [--port 8080] "
+           "[--model-name demo] [--model-path path] [--backend stub]"
+        << '\n';
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
     if (hasFlag(argc, argv, "--version")) {
         std::cout << "neuriplo-kserve-runtime 0.1.0" << '\n';
+        return 0;
+    }
+    if (hasFlag(argc, argv, "--help") || hasFlag(argc, argv, "-h")) {
+        printUsage(std::cout);
         return 0;
     }
 

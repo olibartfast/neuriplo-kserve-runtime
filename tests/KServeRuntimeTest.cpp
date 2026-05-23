@@ -49,3 +49,30 @@ TEST_CASE(kserve_runtime_handles_placeholder_infer) {
     REQUIRE_EQ(response.status, 200);
     REQUIRE(response.body.find(R"("outputs")") != std::string::npos);
 }
+
+TEST_CASE(kserve_runtime_returns_server_metadata) {
+    const auto runtime = makeRuntime();
+    const auto response = request(runtime, "GET", "/v2");
+    REQUIRE_EQ(response.status, 200);
+    REQUIRE(response.body.find(R"("name":"neuriplo-kserve-runtime")") != std::string::npos);
+    REQUIRE(response.body.find(R"("version":"0.1.0")") != std::string::npos);
+}
+
+TEST_CASE(kserve_runtime_returns_model_ready) {
+    const auto runtime = makeRuntime();
+    const auto response = request(runtime, "GET", "/v2/models/demo/ready");
+    REQUIRE_EQ(response.status, 200);
+    REQUIRE(response.body.find(R"("ready":true)") != std::string::npos);
+}
+
+TEST_CASE(kserve_runtime_rejects_empty_method) {
+    const auto runtime = makeRuntime();
+    REQUIRE_EQ(request(runtime, "", "/v2").status, 400);
+}
+
+TEST_CASE(kserve_runtime_rejects_wrong_method_for_model_metadata) {
+    const auto runtime = makeRuntime();
+    const auto response = request(runtime, "POST", "/v2/models/demo");
+    REQUIRE_EQ(response.status, 404);
+    REQUIRE(response.body.find(R"("code":"NOT_FOUND")") != std::string::npos);
+}
