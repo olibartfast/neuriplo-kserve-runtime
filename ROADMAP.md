@@ -1,4 +1,4 @@
-# neuriplo-kserve-runtime Implementation Plan
+# neuriplo-kserve-runtime Roadmap
 
 ## Goal
 
@@ -111,6 +111,24 @@ predictor:
 Do not advertise automatic selection for generic formats such as `onnx`,
 `openvino`, `tensorrt`, or `gguf` until metadata conversion and backend behavior
 are validated per format.
+
+## Step Index
+
+The roadmap is organized as implementation steps. Each completed step should
+have a matching `STEP<N>.md` snapshot that records what was actually built and
+validated. Work-in-progress step planning should use `STEP<N>_WIP.md`.
+
+```text
+Step 0: Scaffold
+Step 1: KServe Packaging
+Step 2: Protocol Correctness
+Step 3: Model Registry And Executor Abstraction
+Step 4: neuriplo Integration
+Step 5: Scheduler And Autoscaling Behavior
+Step 6: Dynamic Batching
+Step 7: Observability And KServe Deployment Examples
+Step 8: LLM Backends (llama.cpp and Cactus)
+```
 
 ## High-Level Architecture
 
@@ -596,9 +614,9 @@ Avoid:
 - In-process backend fallback if the design goal is server-only inference.
 - Changing CLI behavior for existing task options unless explicitly migrated.
 
-## Milestones
+## Step Roadmap
 
-### M0: Scaffold
+### Step 0: Scaffold
 
 - Create repo.
 - Add CMake project.
@@ -614,7 +632,7 @@ Exit criteria:
 - `curl /v2/health/ready` returns 200 for stub model.
 - `curl /v2/models/demo` returns model metadata.
 
-### M1: KServe Packaging
+### Step 1: KServe Packaging
 
 - Add Dockerfile.
 - Add `ClusterServingRuntime` manifest for `modelFormat: neuriplo`.
@@ -628,7 +646,7 @@ Exit criteria:
 - KServe storage-initialized model path resolves to `/mnt/models`.
 - Health/readiness endpoints are compatible with Kubernetes probes.
 
-### M2: Protocol Correctness
+### Step 2: Protocol Correctness
 
 - Add KServe V2 request/response codec.
 - Add structured errors.
@@ -646,7 +664,7 @@ Exit criteria:
 - Request `id` is preserved in the response.
 - Unsupported datatype/output requests fail predictably.
 
-### M3: Model Registry And Executor Abstraction
+### Step 3: Model Registry And Executor Abstraction
 
 - Add `Executor` interface.
 - Add `StubExecutor`.
@@ -659,7 +677,7 @@ Exit criteria:
 - Stub executor can be replaced without route changes.
 - Readiness tracks model state.
 
-### M4: neuriplo Integration
+### Step 4: neuriplo Integration
 
 - Link `neuriplo`.
 - Add `NeuriploExecutor`.
@@ -673,7 +691,7 @@ Exit criteria:
 - Metadata comes from neuriplo.
 - Single request output matches direct backend output.
 
-### M5: Scheduler And Autoscaling Behavior
+### Step 5: Scheduler And Autoscaling Behavior
 
 - Add bounded request queue.
 - Add worker thread.
@@ -691,7 +709,7 @@ Exit criteria:
 - Multiple concurrent requests complete without data races.
 - Readiness flips false while draining.
 
-### M6: Dynamic Batching
+### Step 6: Dynamic Batching
 
 - Add compatible-request grouping.
 - Add max batch size and max queue delay.
@@ -703,7 +721,7 @@ Exit criteria:
 - Batched outputs are shape/schema equivalent to single-request outputs.
 - Batch size metrics are exposed.
 
-### M7: Observability And KServe Deployment Examples
+### Step 7: Observability And KServe Deployment Examples
 
 - Add `/metrics`.
 - Add structured logs.
@@ -721,7 +739,7 @@ Exit criteria:
 - InferenceGraph example can route to the runtime without custom response
   adapters.
 
-### M8: LLM Backends (llama.cpp and Cactus)
+### Step 8: LLM Backends (llama.cpp and Cactus)
 
 - Add LLM model config for llama.cpp and Cactus backends.
 - Add GGUF/local model artifact conventions where applicable.
