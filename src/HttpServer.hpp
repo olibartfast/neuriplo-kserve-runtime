@@ -5,7 +5,10 @@
 #include <atomic>
 #include <cstddef>
 #include <functional>
+#include <mutex>
 #include <string>
+#include <thread>
+#include <vector>
 
 class HttpServer {
   public:
@@ -22,6 +25,7 @@ class HttpServer {
 
   private:
     void handleClient(int client_fd) const;
+    void joinClientThreads();
 
     std::string host_;
     int port_;
@@ -29,4 +33,6 @@ class HttpServer {
     size_t max_request_bytes_;
     std::atomic<bool> running_{false};
     std::atomic<int> server_fd_{-1};
+    std::mutex client_threads_mutex_;
+    std::vector<std::thread> client_threads_;
 };

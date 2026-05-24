@@ -168,8 +168,10 @@ void HttpServer::run() {
             }
             continue;
         }
-        std::thread(&HttpServer::handleClient, this, client_fd).detach();
+        std::lock_guard<std::mutex> lock(client_threads_mutex_);
+        client_threads_.emplace_back(&HttpServer::handleClient, this, client_fd);
     }
+    joinClientThreads();
 }
 
 void HttpServer::stop() {
@@ -178,6 +180,19 @@ void HttpServer::stop() {
     if (server_fd >= 0) {
         ::shutdown(server_fd, SHUT_RDWR);
         ::close(server_fd);
+    }
+}
+
+void HttpServer::joinClientThreads() {
+    std::vector<std::thread> client_threads;
+    {
+        std::lock_guard<std::mutex> lock(client_threads_mutex_);
+        client_threads.swap(client_threads_);
+    }
+    for (auto &thread : client_threads) {
+        if (thread.joinable()) {
+            thread.join();
+        }
     }
 }
 
