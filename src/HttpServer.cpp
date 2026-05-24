@@ -2,9 +2,12 @@
 
 #include <arpa/inet.h>
 #include <cerrno>
+#include <charconv>
 #include <cstring>
 #include <iostream>
 #include <netinet/in.h>
+#include <nlohmann/json.hpp>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <sys/socket.h>
@@ -12,6 +15,8 @@
 #include <unistd.h>
 
 namespace {
+
+using Json = nlohmann::json;
 
 std::string reasonPhrase(int status) {
     switch (status) {
@@ -25,6 +30,8 @@ std::string reasonPhrase(int status) {
         return "Method Not Allowed";
     case 409:
         return "Conflict";
+    case 413:
+        return "Payload Too Large";
     case 500:
         return "Internal Server Error";
     case 503:
@@ -41,6 +48,25 @@ std::string trim(const std::string &value) {
     }
     const auto last = value.find_last_not_of(" \t\r\n");
     return value.substr(first, last - first + 1);
+}
+
+HttpResponse jsonError(int status, const std::string &code, const std::string &message) {
+    HttpResponse response;
+    response.status = status;
+    response.body = Json{{"error", Json{{"code", code}, {"message", message}}}}.dump();
+    return response;
+}
+
+std::optional<size_t> parseContentLength(const std::string &value) {
+    size_t result = 0;
+    const auto trimmed = trim(value);
+    const auto *begin = trimmed.data();
+    const auto *end = begin + trimmed.size();
+    const auto parsed = std::from_chars(begin, end, result);
+    if (parsed.ec != std::errc{} || parsed.ptr != end) {
+        return std::nullopt;
+    }
+    return result;
 }
 
 HttpRequest parseRequest(const std::string &raw) {
@@ -93,8 +119,9 @@ std::string serializeResponse(const HttpResponse &response) {
 
 } // namespace
 
-HttpServer::HttpServer(std::string host, int port, Handler handler)
-    : host_(std::move(host)), port_(port), handler_(std::move(handler)) {}
+HttpServer::HttpServer(std::string host, int port, Handler handler, size_t max_request_bytes)
+    : host_(std::move(host)), port_(port), handler_(std::move(handler)),
+      max_request_bytes_(max_request_bytes) {}
 
 HttpServer::~HttpServer() {
     stop();
@@ -156,6 +183,7 @@ void HttpServer::stop() {
 void HttpServer::handleClient(int client_fd) const {
     std::string raw;
     char buffer[4096];
+    std::optional<HttpResponse> early_response;
 
     while (true) {
         const auto received = ::recv(client_fd, buffer, sizeof(buffer), 0);
@@ -163,6 +191,11 @@ void HttpServer::handleClient(int client_fd) const {
             break;
         }
         raw.append(buffer, static_cast<size_t>(received));
+        if (raw.size() > max_request_bytes_) {
+            early_response =
+                jsonError(413, "PAYLOAD_TOO_LARGE", "request exceeds max request bytes");
+            break;
+        }
         const auto header_end = raw.find("\r\n\r\n");
         if (header_end == std::string::npos) {
             continue;
@@ -181,8 +214,22 @@ void HttpServer::handleClient(int client_fd) const {
                 continue;
             }
             if (trim(line.substr(0, colon)) == "Content-Length") {
-                content_length = static_cast<size_t>(std::stoul(trim(line.substr(colon + 1))));
+                const auto parsed_content_length = parseContentLength(line.substr(colon + 1));
+                if (!parsed_content_length) {
+                    early_response =
+                        jsonError(400, "INVALID_ARGUMENT", "invalid Content-Length header");
+                    break;
+                }
+                content_length = *parsed_content_length;
             }
+        }
+        if (early_response) {
+            break;
+        }
+        if (header_end + 4 + content_length > max_request_bytes_) {
+            early_response =
+                jsonError(413, "PAYLOAD_TOO_LARGE", "request exceeds max request bytes");
+            break;
         }
         if (raw.size() >= header_end + 4 + content_length) {
             break;
@@ -191,10 +238,14 @@ void HttpServer::handleClient(int client_fd) const {
 
     HttpResponse response;
     try {
-        response = handler_(parseRequest(raw));
+        if (early_response) {
+            response = *early_response;
+        } else {
+            response = handler_(parseRequest(raw));
+        }
     } catch (const std::exception &error) {
         response.status = 500;
-        response.body = std::string(R"({"error":")") + error.what() + R"("})";
+        response.body = Json{{"error", error.what()}}.dump();
     }
 
     const auto serialized = serializeResponse(response);

@@ -20,7 +20,8 @@ bool hasFlag(int argc, char **argv, const std::string &flag) {
 
 void printUsage(std::ostream &out) {
     out << "usage: neuriplo-kserve-runtime [--host 0.0.0.0] [--port 8080] "
-           "[--model-name demo] [--model-path path] [--backend stub]"
+           "[--max-request-bytes 67108864] [--model-name demo] [--model-path path] "
+           "[--backend stub]"
         << '\n';
 }
 
@@ -40,9 +41,10 @@ int main(int argc, char **argv) {
         const auto config = parseRuntimeConfig(argc, argv);
         ModelRegistry registry(config);
         KServeRuntime runtime(std::move(registry));
-        HttpServer server(config.host, config.port, [&runtime](const HttpRequest &request) {
-            return runtime.handle(request);
-        });
+        HttpServer server(
+            config.host, config.port,
+            [&runtime](const HttpRequest &request) { return runtime.handle(request); },
+            config.max_request_bytes);
         server.run();
     } catch (const std::exception &error) {
         std::cerr << "fatal: " << error.what() << '\n';

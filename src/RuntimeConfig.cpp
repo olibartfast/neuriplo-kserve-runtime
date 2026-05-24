@@ -2,6 +2,7 @@
 
 #include <cstdlib>
 #include <filesystem>
+#include <limits>
 #include <stdexcept>
 #include <string>
 
@@ -20,6 +21,14 @@ void applyStringEnvironmentDefault(std::string &target, const RuntimeEnvironment
     const auto value = environment.get(name);
     if (value.has_value() && !value->empty()) {
         target = *value;
+    }
+}
+
+void applySizeEnvironmentDefault(size_t &target, const RuntimeEnvironment &environment,
+                                 const std::string &name) {
+    const auto value = environment.get(name);
+    if (value.has_value() && !value->empty()) {
+        target = static_cast<size_t>(std::stoull(*value));
     }
 }
 
@@ -49,6 +58,7 @@ RuntimeConfig parseRuntimeConfig(int argc, char **argv, const RuntimeEnvironment
     applyStringEnvironmentDefault(config.model_path, environment, "MODEL_PATH");
     applyStringEnvironmentDefault(config.backend, environment, "BACKEND");
     applyStringEnvironmentDefault(config.storage_uri, environment, "STORAGE_URI");
+    applySizeEnvironmentDefault(config.max_request_bytes, environment, "MAX_REQUEST_BYTES");
     if (config.model_path.empty() && environment.pathExists("/mnt/models")) {
         config.model_path = "/mnt/models";
     }
@@ -59,6 +69,9 @@ RuntimeConfig parseRuntimeConfig(int argc, char **argv, const RuntimeEnvironment
             config.host = requireValue(i, argc, argv, arg);
         } else if (arg == "--port") {
             config.port = std::stoi(requireValue(i, argc, argv, arg));
+        } else if (arg == "--max-request-bytes") {
+            config.max_request_bytes =
+                static_cast<size_t>(std::stoull(requireValue(i, argc, argv, arg)));
         } else if (arg == "--model-name") {
             config.model_name = requireValue(i, argc, argv, arg);
         } else if (arg == "--model-path") {
@@ -68,7 +81,8 @@ RuntimeConfig parseRuntimeConfig(int argc, char **argv, const RuntimeEnvironment
         } else if (arg == "--help" || arg == "-h") {
             throw std::invalid_argument(
                 "usage: neuriplo-kserve-runtime [--host 0.0.0.0] [--port 8080] "
-                "[--model-name demo] [--model-path path] [--backend stub]");
+                "[--max-request-bytes 67108864] [--model-name demo] [--model-path path] "
+                "[--backend stub]");
         } else {
             throw std::invalid_argument("unknown argument: " + arg);
         }
@@ -79,6 +93,10 @@ RuntimeConfig parseRuntimeConfig(int argc, char **argv, const RuntimeEnvironment
     }
     if (config.model_name.empty()) {
         throw std::invalid_argument("model name must not be empty");
+    }
+    if (config.max_request_bytes == 0 ||
+        config.max_request_bytes > static_cast<size_t>(std::numeric_limits<int64_t>::max())) {
+        throw std::invalid_argument("max request bytes must be greater than 0");
     }
 
     return config;

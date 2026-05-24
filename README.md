@@ -80,6 +80,7 @@ valgrind --leak-check=full --error-exitcode=1 ./build/debug/neuriplo-kserve-runt
   --model-name demo \
   --model-path /models/model.onnx \
   --backend onnx_runtime \
+  --max-request-bytes 67108864 \
   --port 8080
 ```
 
@@ -91,6 +92,7 @@ MODEL_NAME   default model name
 MODEL_PATH   default model path
 BACKEND      default backend name
 STORAGE_URI  retained for diagnostics; the server does not download it
+MAX_REQUEST_BYTES  maximum accepted HTTP request size
 ```
 
 When `MODEL_PATH` is unset and `/mnt/models` exists, the runtime uses
@@ -106,6 +108,18 @@ GET  /v2/health/ready
 GET  /v2/models/{model_name}
 GET  /v2/models/{model_name}/ready
 POST /v2/models/{model_name}/infer
+GET  /v2/models/{model_name}/versions/{version}
+GET  /v2/models/{model_name}/versions/{version}/ready
+POST /v2/models/{model_name}/versions/{version}/infer
+```
+
+The scaffold model exposes static version `1`. Stub inference validates the V2
+JSON request shape and returns a deterministic placeholder output:
+
+```bash
+curl -X POST http://127.0.0.1:8080/v2/models/demo/infer \
+  -H 'Content-Type: application/json' \
+  -d '{"id":"example","inputs":[{"name":"input","shape":[1,3,224,224],"datatype":"FP32","data":[]}]}'
 ```
 
 ## KServe Packaging
@@ -138,7 +152,8 @@ curl http://<host>/v2/health/ready
 curl http://<host>/v2/models/neuriplo-demo
 ```
 
-Step 1 packaging still uses the stub execution path. The `/infer` endpoint
-returns a fixed placeholder tensor and does not run a real `neuriplo` backend.
+The runtime still uses the stub execution path. The `/infer` endpoint validates
+the request and returns a fixed placeholder tensor; it does not run a real
+`neuriplo` backend yet.
 
 [neuriplo]: https://github.com/olibartfast/neuriplo

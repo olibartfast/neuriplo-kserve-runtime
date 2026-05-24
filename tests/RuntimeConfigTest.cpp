@@ -1,6 +1,7 @@
 #include "RuntimeConfig.hpp"
 #include "Test.hpp"
 
+#include <cstddef>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -41,6 +42,7 @@ TEST_CASE(parse_runtime_config_uses_defaults) {
     const auto config = parse({"neuriplo-kserve-runtime"});
     REQUIRE_EQ(config.host, "0.0.0.0");
     REQUIRE_EQ(config.port, 8080);
+    REQUIRE_EQ(config.max_request_bytes, static_cast<size_t>(67108864));
     REQUIRE_EQ(config.model_name, "demo");
     REQUIRE_EQ(config.backend, "stub");
     REQUIRE_EQ(config.model_path, "");
@@ -52,11 +54,13 @@ TEST_CASE(parse_runtime_config_uses_environment_defaults) {
                               testEnvironment({{"MODEL_NAME", "image-model"},
                                                {"MODEL_PATH", "/models/from-env"},
                                                {"BACKEND", "neuriplo_backend"},
-                                               {"STORAGE_URI", "pvc://models/image-model"}}));
+                                               {"STORAGE_URI", "pvc://models/image-model"},
+                                               {"MAX_REQUEST_BYTES", "1024"}}));
     REQUIRE_EQ(config.model_name, "image-model");
     REQUIRE_EQ(config.model_path, "/models/from-env");
     REQUIRE_EQ(config.backend, "neuriplo_backend");
     REQUIRE_EQ(config.storage_uri, "pvc://models/image-model");
+    REQUIRE_EQ(config.max_request_bytes, static_cast<size_t>(1024));
 }
 
 TEST_CASE(parse_runtime_config_cli_overrides_environment_defaults) {
@@ -82,11 +86,12 @@ TEST_CASE(parse_runtime_config_model_path_env_overrides_mnt_models_default) {
 }
 
 TEST_CASE(parse_runtime_config_accepts_overrides) {
-    const auto config =
-        parse({"neuriplo-kserve-runtime", "--host", "127.0.0.1", "--port", "9090", "--model-name",
-               "classifier", "--model-path", "/models/model.onnx", "--backend", "onnx_runtime"});
+    const auto config = parse({"neuriplo-kserve-runtime", "--host", "127.0.0.1", "--port", "9090",
+                               "--max-request-bytes", "2048", "--model-name", "classifier",
+                               "--model-path", "/models/model.onnx", "--backend", "onnx_runtime"});
     REQUIRE_EQ(config.host, "127.0.0.1");
     REQUIRE_EQ(config.port, 9090);
+    REQUIRE_EQ(config.max_request_bytes, static_cast<size_t>(2048));
     REQUIRE_EQ(config.model_name, "classifier");
     REQUIRE_EQ(config.model_path, "/models/model.onnx");
     REQUIRE_EQ(config.backend, "onnx_runtime");

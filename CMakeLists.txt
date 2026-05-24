@@ -6,6 +6,15 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+include(FetchContent)
+
+FetchContent_Declare(
+    nlohmann_json
+    URL https://github.com/nlohmann/json/releases/download/v3.12.0/json.tar.xz
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+)
+FetchContent_MakeAvailable(nlohmann_json)
+
 option(NEURIPLO_ENABLE_CLANG_TIDY "Run clang-tidy during builds" OFF)
 set(NEURIPLO_SANITIZER "" CACHE STRING "Enable sanitizer instrumentation: address, thread, or undefined")
 set_property(CACHE NEURIPLO_SANITIZER PROPERTY STRINGS "" address thread undefined)
@@ -13,12 +22,14 @@ set_property(CACHE NEURIPLO_SANITIZER PROPERTY STRINGS "" address thread undefin
 set(NEURIPLO_RUNTIME_SOURCES
     src/HttpServer.cpp
     src/KServeRuntime.cpp
+    src/KServeV2Codec.cpp
     src/ModelRegistry.cpp
     src/RuntimeConfig.cpp
 )
 
 add_library(neuriplo-kserve-runtime-core STATIC ${NEURIPLO_RUNTIME_SOURCES})
 target_include_directories(neuriplo-kserve-runtime-core PUBLIC src)
+target_link_libraries(neuriplo-kserve-runtime-core PUBLIC nlohmann_json::nlohmann_json)
 
 add_executable(neuriplo-kserve-runtime src/main.cpp)
 target_link_libraries(neuriplo-kserve-runtime PRIVATE neuriplo-kserve-runtime-core)
@@ -68,7 +79,9 @@ endif()
 enable_testing()
 
 add_executable(neuriplo-kserve-runtime-tests
+    tests/HttpIntegrationTest.cpp
     tests/KServeRuntimeTest.cpp
+    tests/KServeV2CodecTest.cpp
     tests/RuntimeConfigTest.cpp
     tests/TestMain.cpp
 )
