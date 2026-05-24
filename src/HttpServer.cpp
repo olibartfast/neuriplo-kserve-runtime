@@ -128,13 +128,14 @@ HttpServer::~HttpServer() {
 }
 
 void HttpServer::run() {
-    server_fd_ = ::socket(AF_INET, SOCK_STREAM, 0);
-    if (server_fd_ < 0) {
+    const int server_fd = ::socket(AF_INET, SOCK_STREAM, 0);
+    if (server_fd < 0) {
         throw std::runtime_error("socket failed: " + std::string(std::strerror(errno)));
     }
+    server_fd_.store(server_fd);
 
     int reuse = 1;
-    if (::setsockopt(server_fd_, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse)) < 0) {
+    if (::setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse)) < 0) {
         throw std::runtime_error("setsockopt failed: " + std::string(std::strerror(errno)));
     }
 
@@ -145,11 +146,11 @@ void HttpServer::run() {
         throw std::runtime_error("invalid listen host: " + host_);
     }
 
-    if (::bind(server_fd_, reinterpret_cast<sockaddr *>(&address), sizeof(address)) < 0) {
+    if (::bind(server_fd, reinterpret_cast<sockaddr *>(&address), sizeof(address)) < 0) {
         throw std::runtime_error("bind failed: " + std::string(std::strerror(errno)));
     }
 
-    if (::listen(server_fd_, SOMAXCONN) < 0) {
+    if (::listen(server_fd, SOMAXCONN) < 0) {
         throw std::runtime_error("listen failed: " + std::string(std::strerror(errno)));
     }
 
@@ -160,7 +161,7 @@ void HttpServer::run() {
         sockaddr_in client_address{};
         socklen_t client_len = sizeof(client_address);
         const int client_fd =
-            ::accept(server_fd_, reinterpret_cast<sockaddr *>(&client_address), &client_len);
+            ::accept(server_fd, reinterpret_cast<sockaddr *>(&client_address), &client_len);
         if (client_fd < 0) {
             if (running_) {
                 std::cerr << "accept failed: " << std::strerror(errno) << '\n';
@@ -173,10 +174,10 @@ void HttpServer::run() {
 
 void HttpServer::stop() {
     running_ = false;
-    if (server_fd_ >= 0) {
-        ::shutdown(server_fd_, SHUT_RDWR);
-        ::close(server_fd_);
-        server_fd_ = -1;
+    const int server_fd = server_fd_.exchange(-1);
+    if (server_fd >= 0) {
+        ::shutdown(server_fd, SHUT_RDWR);
+        ::close(server_fd);
     }
 }
 
