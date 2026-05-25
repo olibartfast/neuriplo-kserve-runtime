@@ -1,0 +1,118 @@
+#include "ModelRegistry.hpp"
+#include "Executor.hpp"
+#include "RuntimeConfig.hpp"
+#include "Test.hpp"
+
+#include <memory>
+#include <string>
+
+namespace {
+
+RuntimeConfig demoConfig() {
+    RuntimeConfig config;
+    config.model_name = "demo";
+    config.backend = "stub";
+    return config;
+}
+
+class MarkerExecutor final : public Executor {
+  public:
+    explicit MarkerExecutor(ModelMetadata metadata) : metadata_(std::move(metadata)) {}
+
+    const ModelMetadata &metadata() const override {
+        return metadata_;
+    }
+
+    ExecutionResponse infer(const ExecutionRequest &request) override {
+        (void)request;
+        ExecutionResponse response;
+        OutputTensor output;
+        output.name = "output";
+        output.datatype = "FP32";
+        output.shape = {1, 1};
+        output.data = {42.0};
+        response.outputs.push_back(std::move(output));
+        return response;
+    }
+
+  private:
+    ModelMetadata metadata_;
+};
+
+} // namespace
+
+TEST_CASE(model_registry_loads_stub_executor) {
+    const ModelRegistry registry(demoConfig());
+    REQUIRE(registry.allReady());
+    REQUIRE(registry.ready("demo"));
+    const auto metadata = registry.find("demo");
+    REQUIRE(metadata.has_value());
+    REQUIRE_EQ(metadata->platform, "neuriplo_stub");
+
+    const auto *handle = registry.findHandle("demo");
+    REQUIRE(handle != nullptr);
+    REQUIRE_EQ(handle->versions, metadata->versions);
+    REQUIRE_EQ(registry.defaultVersion("demo"), "1");
+}
+
+TEST_CASE(model_registry_reports_not_ready_on_failed_load) {
+    const RuntimeConfig config = demoConfig();
+    const ModelRegistry registry(config, [](const RuntimeConfig &, std::string &error) {
+        error = "injected load failure";
+        return nullptr;
+    });
+    REQUIRE(!registry.allReady());
+    REQUIRE(!registry.ready("demo"));
+}
+
+TEST_CASE(model_registry_resolves_version_from_executor_metadata) {
+    const RuntimeConfig config = demoConfig();
+    const ModelRegistry registry(config, [](const RuntimeConfig &cfg, std::string &error) {
+        (void)error;
+        ModelMetadata metadata;
+        metadata.name = cfg.model_name;
+        metadata.versions = {"42"};
+        metadata.platform = "test_version";
+        metadata.inputs.push_back({"input", "FP32", {1, 3, 224, 224}});
+        metadata.outputs.push_back({"output", "FP32", {1, 1}});
+        struct VersionedExecutor final : Executor {
+            explicit VersionedExecutor(ModelMetadata model_metadata)
+                : model_metadata_(std::move(model_metadata)) {}
+            const ModelMetadata &metadata() const override {
+                return model_metadata_;
+            }
+            ExecutionResponse infer(const ExecutionRequest &) override {
+                return {};
+            }
+            ModelMetadata model_metadata_;
+        };
+        return std::make_unique<VersionedExecutor>(std::move(metadata));
+    });
+
+    REQUIRE(registry.findVersion("demo", "42").has_value());
+    REQUIRE(!registry.findVersion("demo", "1").has_value());
+    REQUIRE_EQ(registry.defaultVersion("demo"), "42");
+    REQUIRE(registry.findHandleVersion("demo", "42") != nullptr);
+}
+
+TEST_CASE(model_registry_uses_injected_executor) {
+    const RuntimeConfig config = demoConfig();
+    const ModelRegistry registry(config, [](const RuntimeConfig &cfg, std::string &error) {
+        (void)error;
+        ModelMetadata metadata;
+        metadata.name = cfg.model_name;
+        metadata.versions = {"1"};
+        metadata.platform = "test_marker";
+        metadata.outputs.push_back({"output", "FP32", {1, 1}});
+        return std::make_unique<MarkerExecutor>(std::move(metadata));
+    });
+
+    const auto *handle = registry.findHandleVersion("demo", "1");
+    REQUIRE(handle != nullptr);
+    REQUIRE(handle->executor != nullptr);
+
+    ExecutionRequest request;
+    request.requested_outputs = {"output"};
+    const auto response = handle->executor->infer(request);
+    REQUIRE_EQ(response.outputs[0].data[0], 42.0);
+}

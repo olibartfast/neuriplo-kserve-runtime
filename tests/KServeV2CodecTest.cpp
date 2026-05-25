@@ -1,6 +1,7 @@
 #include "KServeV2Codec.hpp"
 #include "ModelRegistry.hpp"
 #include "RuntimeConfig.hpp"
+#include "StubExecutor.hpp"
 #include "Test.hpp"
 
 #include <cstddef>
@@ -27,6 +28,13 @@ std::string validBody(std::string extra = "") {
     return body;
 }
 
+RuntimeConfig stubConfig() {
+    RuntimeConfig config;
+    config.model_name = "demo";
+    config.backend = "stub";
+    return config;
+}
+
 } // namespace
 
 TEST_CASE(kserve_v2_codec_parses_valid_inference_request) {
@@ -35,7 +43,7 @@ TEST_CASE(kserve_v2_codec_parses_valid_inference_request) {
     REQUIRE(parsed.request.id.has_value());
     REQUIRE_EQ(*parsed.request.id, "request-1");
     REQUIRE_EQ(parsed.request.requested_outputs.size(), static_cast<size_t>(1));
-    REQUIRE_EQ(parsed.request.requested_outputs[0].name, "output");
+    REQUIRE_EQ(parsed.request.requested_outputs[0], "output");
 }
 
 TEST_CASE(kserve_v2_codec_parses_requested_outputs) {
@@ -43,7 +51,7 @@ TEST_CASE(kserve_v2_codec_parses_requested_outputs) {
         parseInferenceRequest(validBody(R"("outputs":[{"name":"output"}])"), metadata());
     REQUIRE(parsed.ok);
     REQUIRE_EQ(parsed.request.requested_outputs.size(), static_cast<size_t>(1));
-    REQUIRE_EQ(parsed.request.requested_outputs[0].name, "output");
+    REQUIRE_EQ(parsed.request.requested_outputs[0], "output");
 }
 
 TEST_CASE(kserve_v2_codec_rejects_malformed_json) {
@@ -66,13 +74,22 @@ TEST_CASE(kserve_v2_codec_rejects_unknown_input) {
     REQUIRE(parsed.error_message.find("unknown input") != std::string::npos);
 }
 
-TEST_CASE(kserve_v2_codec_serializes_response_with_id) {
+TEST_CASE(kserve_v2_codec_serializes_executor_response_with_id) {
     const auto model = metadata();
     const auto parsed = parseInferenceRequest(validBody(), model);
     REQUIRE(parsed.ok);
-    const auto response = inferenceResponseJson("demo", "1", parsed.request, model);
+
+    std::string error;
+    const auto executor = makeStubExecutor(stubConfig(), error);
+    REQUIRE(executor != nullptr);
+    ExecutionRequest execution_request;
+    execution_request.id = parsed.request.id;
+    execution_request.requested_outputs = parsed.request.requested_outputs;
+    const auto execution_response = executor->infer(execution_request);
+
+    const auto response = inferenceResponseJson("demo", "1", parsed.request, execution_response);
     REQUIRE(response.find(R"("model_name":"demo")") != std::string::npos);
     REQUIRE(response.find(R"("model_version":"1")") != std::string::npos);
     REQUIRE(response.find(R"("id":"request-1")") != std::string::npos);
-    REQUIRE(response.find(R"("outputs")") != std::string::npos);
+    REQUIRE(response.find(R"("shape":[1,1000])") != std::string::npos);
 }

@@ -1,37 +1,35 @@
 #pragma once
 
+#include "ModelHandle.hpp"
+#include "ModelMetadata.hpp"
 #include "RuntimeConfig.hpp"
 
+#include <functional>
+#include <memory>
 #include <optional>
 #include <string>
-#include <vector>
-
-struct TensorMetadata {
-    std::string name;
-    std::string datatype;
-    std::vector<int64_t> shape;
-};
-
-struct ModelMetadata {
-    std::string name;
-    std::vector<std::string> versions;
-    std::string platform;
-    std::vector<TensorMetadata> inputs;
-    std::vector<TensorMetadata> outputs;
-    bool ready = false;
-};
 
 class ModelRegistry {
   public:
+    using ExecutorFactory =
+        std::function<std::unique_ptr<Executor>(const RuntimeConfig &, std::string &error)>;
+
     explicit ModelRegistry(const RuntimeConfig &config);
+    ModelRegistry(const RuntimeConfig &config, ExecutorFactory factory);
 
     std::optional<ModelMetadata> find(const std::string &model_name) const;
     std::optional<ModelMetadata> findVersion(const std::string &model_name,
                                              const std::string &version) const;
+    const ModelHandle *findHandle(const std::string &model_name) const;
+    const ModelHandle *findHandleVersion(const std::string &model_name,
+                                         const std::string &version) const;
     bool ready(const std::string &model_name) const;
     bool readyVersion(const std::string &model_name, const std::string &version) const;
     bool allReady() const;
+    std::optional<std::string> defaultVersion(const std::string &model_name) const;
 
   private:
-    ModelMetadata model_;
+    void loadModel(const RuntimeConfig &config, ExecutorFactory factory);
+
+    ModelHandle handle_;
 };

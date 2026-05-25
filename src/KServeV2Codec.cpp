@@ -41,20 +41,34 @@ bool shapeMatches(const Json &shape, const TensorMetadata &metadata) {
     return true;
 }
 
-std::vector<RequestedOutput> allOutputs(const ModelMetadata &metadata) {
-    std::vector<RequestedOutput> outputs;
+std::vector<std::string> allOutputNames(const ModelMetadata &metadata) {
+    std::vector<std::string> outputs;
     outputs.reserve(metadata.outputs.size());
     for (const auto &output : metadata.outputs) {
-        outputs.push_back({output.name});
+        outputs.push_back(output.name);
     }
     return outputs;
 }
 
-Json stubOutputJson(const std::string &name) {
-    return Json{{"name", name},
-                {"shape", Json::array({1, 1})},
-                {"datatype", "FP32"},
-                {"data", Json::array({0.0})}};
+Json tensorMetadataJson(const TensorMetadata &tensor) {
+    Json shape = Json::array();
+    for (const auto dimension : tensor.shape) {
+        shape.push_back(dimension);
+    }
+    return Json{{"name", tensor.name}, {"datatype", tensor.datatype}, {"shape", shape}};
+}
+
+Json outputTensorJson(const OutputTensor &tensor) {
+    Json shape = Json::array();
+    for (const auto dimension : tensor.shape) {
+        shape.push_back(dimension);
+    }
+    Json data = Json::array();
+    for (const auto value : tensor.data) {
+        data.push_back(value);
+    }
+    return Json{
+        {"name", tensor.name}, {"datatype", tensor.datatype}, {"shape", shape}, {"data", data}};
 }
 
 } // namespace
@@ -132,10 +146,10 @@ InferenceParseResult parseInferenceRequest(const std::string &body, const ModelM
             if (findTensor(metadata.outputs, name) == nullptr) {
                 return invalid("unknown output: " + name);
             }
-            request.requested_outputs.push_back({name});
+            request.requested_outputs.push_back(name);
         }
     } else {
-        request.requested_outputs = allOutputs(metadata);
+        request.requested_outputs = allOutputNames(metadata);
     }
 
     InferenceParseResult result;
@@ -144,19 +158,35 @@ InferenceParseResult parseInferenceRequest(const std::string &body, const ModelM
     return result;
 }
 
+std::string modelMetadataJson(const ModelMetadata &metadata) {
+    Json inputs = Json::array();
+    for (const auto &input : metadata.inputs) {
+        inputs.push_back(tensorMetadataJson(input));
+    }
+    Json outputs = Json::array();
+    for (const auto &output : metadata.outputs) {
+        outputs.push_back(tensorMetadataJson(output));
+    }
+    return Json{{"name", metadata.name},
+                {"versions", metadata.versions},
+                {"platform", metadata.platform},
+                {"inputs", inputs},
+                {"outputs", outputs}}
+        .dump();
+}
+
 std::string inferenceResponseJson(const std::string &model_name, const std::string &model_version,
-                                  const InferenceRequest &request, const ModelMetadata &metadata) {
-    const auto requested_outputs =
-        request.requested_outputs.empty() ? allOutputs(metadata) : request.requested_outputs;
-
-    Json response{{"model_name", model_name}, {"model_version", model_version}};
+                                  const InferenceRequest &request,
+                                  const ExecutionResponse &response) {
+    Json body{{"model_name", model_name}, {"model_version", model_version}};
     if (request.id.has_value()) {
-        response["id"] = *request.id;
+        body["id"] = *request.id;
     }
 
-    response["outputs"] = Json::array();
-    for (const auto &output : requested_outputs) {
-        response["outputs"].push_back(stubOutputJson(output.name));
+    Json outputs = Json::array();
+    for (const auto &output : response.outputs) {
+        outputs.push_back(outputTensorJson(output));
     }
-    return response.dump();
+    body["outputs"] = outputs;
+    return body.dump();
 }

@@ -25,6 +25,7 @@ set(NEURIPLO_RUNTIME_SOURCES
     src/KServeV2Codec.cpp
     src/ModelRegistry.cpp
     src/RuntimeConfig.cpp
+    src/StubExecutor.cpp
 )
 
 add_library(neuriplo-kserve-runtime-core STATIC ${NEURIPLO_RUNTIME_SOURCES})
@@ -82,7 +83,9 @@ add_executable(neuriplo-kserve-runtime-tests
     tests/HttpIntegrationTest.cpp
     tests/KServeRuntimeTest.cpp
     tests/KServeV2CodecTest.cpp
+    tests/ModelRegistryTest.cpp
     tests/RuntimeConfigTest.cpp
+    tests/StubExecutorTest.cpp
     tests/TestMain.cpp
 )
 target_link_libraries(neuriplo-kserve-runtime-tests PRIVATE neuriplo-kserve-runtime-core)

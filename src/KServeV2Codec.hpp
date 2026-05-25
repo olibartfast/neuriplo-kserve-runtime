@@ -1,18 +1,15 @@
 #pragma once
 
-#include "ModelRegistry.hpp"
+#include "Executor.hpp"
+#include "ModelMetadata.hpp"
 
 #include <optional>
 #include <string>
 #include <vector>
 
-struct RequestedOutput {
-    std::string name;
-};
-
 struct InferenceRequest {
     std::optional<std::string> id;
-    std::vector<RequestedOutput> requested_outputs;
+    std::vector<std::string> requested_outputs;
 };
 
 struct InferenceParseResult {
@@ -23,5 +20,8 @@ struct InferenceParseResult {
 
 InferenceParseResult parseInferenceRequest(const std::string &body, const ModelMetadata &metadata);
 
+std::string modelMetadataJson(const ModelMetadata &metadata);
+
 std::string inferenceResponseJson(const std::string &model_name, const std::string &model_version,
-                                  const InferenceRequest &request, const ModelMetadata &metadata);
+                                  const InferenceRequest &request,
+                                  const ExecutionResponse &response);

@@ -3,7 +3,7 @@
 #include "KServeV2Codec.hpp"
 
 #include <nlohmann/json.hpp>
-#include <sstream>
+#include <utility>
 
 namespace {
 
@@ -22,50 +22,6 @@ HttpResponse error(int status, const std::string &code, const std::string &messa
 
 bool startsWith(const std::string &value, const std::string &prefix) {
     return value.rfind(prefix, 0) == 0;
-}
-
-std::string shapeJson(const std::vector<int64_t> &shape) {
-    std::ostringstream out;
-    out << '[';
-    for (size_t i = 0; i < shape.size(); ++i) {
-        if (i != 0) {
-            out << ',';
-        }
-        out << shape[i];
-    }
-    out << ']';
-    return out.str();
-}
-
-std::string tensorMetadataJson(const TensorMetadata &tensor) {
-    return R"({"name":")" + tensor.name + R"(","datatype":")" + tensor.datatype + R"(","shape":)" +
-           shapeJson(tensor.shape) + '}';
-}
-
-std::string tensorsJson(const std::vector<TensorMetadata> &tensors) {
-    std::ostringstream out;
-    out << '[';
-    for (size_t i = 0; i < tensors.size(); ++i) {
-        if (i != 0) {
-            out << ',';
-        }
-        out << tensorMetadataJson(tensors[i]);
-    }
-    out << ']';
-    return out.str();
-}
-
-std::string versionsJson(const std::vector<std::string> &versions) {
-    std::ostringstream out;
-    out << '[';
-    for (size_t i = 0; i < versions.size(); ++i) {
-        if (i != 0) {
-            out << ',';
-        }
-        out << '"' << versions[i] << '"';
-    }
-    out << ']';
-    return out.str();
 }
 
 std::string extractModelRouteTail(const std::string &path) {
@@ -94,6 +50,18 @@ VersionedRoute parseVersionedRoute(const std::string &suffix) {
     route.version = rest.substr(0, slash);
     route.suffix = slash == std::string::npos ? "" : rest.substr(slash);
     return route;
+}
+
+HttpResponse modelStateError(const ModelHandle &handle) {
+    if (handle.state == ModelState::Failed) {
+        const auto message =
+            handle.load_error.has_value() ? *handle.load_error : "model failed to load";
+        return error(503, "UNAVAILABLE", message);
+    }
+    if (handle.state == ModelState::Unavailable) {
+        return error(503, "UNAVAILABLE", "model is unavailable");
+    }
+    return error(409, "MODEL_NOT_READY", "model is not ready: " + handle.name);
 }
 
 } // namespace
@@ -128,7 +96,11 @@ HttpResponse KServeRuntime::handle(const HttpRequest &request) const {
             return modelReady(model_name);
         }
         if (request.method == "POST" && suffix == "/infer") {
-            return infer(model_name, "1", request);
+            const auto version = registry_.defaultVersion(model_name);
+            if (!version) {
+                return error(404, "MODEL_NOT_FOUND", "model not found: " + model_name);
+            }
+            return infer(model_name, *version, request);
         }
 
         const auto versioned_route = parseVersionedRoute(suffix);
@@ -177,42 +149,45 @@ HttpResponse KServeRuntime::modelMetadata(const std::string &model_name,
     if (!model) {
         return error(404, "MODEL_NOT_FOUND", "model not found: " + model_name);
     }
-
-    const auto body = R"({"name":")" + model->name + R"(","versions":)" +
-                      versionsJson(model->versions) + R"(,"platform":")" + model->platform +
-                      R"(","inputs":)" + tensorsJson(model->inputs) + R"(,"outputs":)" +
-                      tensorsJson(model->outputs) + '}';
-    return json(200, body);
+    return json(200, modelMetadataJson(*model));
 }
 
 HttpResponse KServeRuntime::modelReady(const std::string &model_name,
                                        const std::string &model_version) const {
-    const auto model = model_version.empty() ? registry_.find(model_name)
-                                             : registry_.findVersion(model_name, model_version);
-    if (!model) {
+    const auto *handle = model_version.empty()
+                             ? registry_.findHandle(model_name)
+                             : registry_.findHandleVersion(model_name, model_version);
+    if (handle == nullptr) {
         return error(404, "MODEL_NOT_FOUND", "model not found: " + model_name);
     }
-    const auto is_ready = model_version.empty() ? registry_.ready(model_name)
-                                                : registry_.readyVersion(model_name, model_version);
-    if (!is_ready) {
-        return error(409, "MODEL_NOT_READY", "model is not ready: " + model_name);
+    if (!handle->isReady()) {
+        return modelStateError(*handle);
     }
     return json(200, R"({"ready":true})");
 }
 
 HttpResponse KServeRuntime::infer(const std::string &model_name, const std::string &model_version,
                                   const HttpRequest &request) const {
-    const auto model = registry_.findVersion(model_name, model_version);
-    if (!model) {
+    const auto *handle = registry_.findHandleVersion(model_name, model_version);
+    if (handle == nullptr) {
         return error(404, "MODEL_NOT_FOUND", "model not found: " + model_name);
     }
-    if (!registry_.readyVersion(model_name, model_version)) {
-        return error(409, "MODEL_NOT_READY", "model is not ready: " + model_name);
+    if (!handle->isReady()) {
+        return modelStateError(*handle);
+    }
+    if (handle->executor == nullptr) {
+        return error(503, "UNAVAILABLE", "model executor is unavailable");
     }
 
-    const auto parsed = parseInferenceRequest(request.body, *model);
+    const auto parsed = parseInferenceRequest(request.body, handle->metadata);
     if (!parsed.ok) {
         return error(400, "INVALID_ARGUMENT", parsed.error_message);
     }
-    return json(200, inferenceResponseJson(model_name, model_version, parsed.request, *model));
+
+    ExecutionRequest execution_request;
+    execution_request.id = parsed.request.id;
+    execution_request.requested_outputs = parsed.request.requested_outputs;
+    const auto execution_response = handle->executor->infer(execution_request);
+    return json(
+        200, inferenceResponseJson(model_name, model_version, parsed.request, execution_response));
 }

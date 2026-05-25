@@ -106,3 +106,33 @@ TEST_CASE(parse_runtime_config_rejects_invalid_port) {
     }
     REQUIRE(threw);
 }
+
+TEST_CASE(parse_runtime_config_rejects_zero_max_request_bytes_cli) {
+    bool threw = false;
+    try {
+        (void)parse({"neuriplo-kserve-runtime", "--max-request-bytes", "0"});
+    } catch (const std::invalid_argument &) {
+        threw = true;
+    }
+    REQUIRE(threw);
+}
+
+TEST_CASE(parse_runtime_config_rejects_zero_max_request_bytes_env) {
+    bool threw = false;
+    try {
+        (void)parse({"neuriplo-kserve-runtime"}, testEnvironment({{"MAX_REQUEST_BYTES", "0"}}));
+    } catch (const std::invalid_argument &) {
+        threw = true;
+    }
+    REQUIRE(threw);
+}
+
+TEST_CASE(parse_runtime_config_rejects_excessive_max_request_bytes) {
+    bool threw = false;
+    try {
+        (void)parse({"neuriplo-kserve-runtime", "--max-request-bytes", "9223372036854775808"});
+    } catch (const std::invalid_argument &) {
+        threw = true;
+    }
+    REQUIRE(threw);
+}

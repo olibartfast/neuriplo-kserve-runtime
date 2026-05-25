@@ -1,9 +1,11 @@
 #include "KServeRuntime.hpp"
+#include "Executor.hpp"
 #include "ModelRegistry.hpp"
 #include "RuntimeConfig.hpp"
 #include "Test.hpp"
 
 #include <cstddef>
+#include <memory>
 #include <string>
 #include <utility>
 
@@ -176,4 +178,95 @@ TEST_CASE(kserve_runtime_rejects_wrong_method_for_model_infer) {
     const auto response = request(runtime, "GET", "/v2/models/demo/infer");
     REQUIRE_EQ(response.status, 405);
     REQUIRE(response.body.find(R"("code":"METHOD_NOT_ALLOWED")") != std::string::npos);
+}
+
+TEST_CASE(kserve_runtime_unversioned_infer_uses_default_executor_version) {
+    RuntimeConfig config;
+    config.model_name = "demo";
+    config.backend = "stub";
+    ModelRegistry registry(config, [](const RuntimeConfig &cfg, std::string &error) {
+        (void)error;
+        ModelMetadata metadata;
+        metadata.name = cfg.model_name;
+        metadata.versions = {"42"};
+        metadata.platform = "test_version";
+        metadata.inputs.push_back({"input", "FP32", {1, 3, 224, 224}});
+        metadata.outputs.push_back({"output", "FP32", {1, 1}});
+        struct VersionedExecutor final : Executor {
+            explicit VersionedExecutor(ModelMetadata model_metadata)
+                : model_metadata_(std::move(model_metadata)) {}
+            const ModelMetadata &metadata() const override {
+                return model_metadata_;
+            }
+            ExecutionResponse infer(const ExecutionRequest &request) override {
+                (void)request;
+                ExecutionResponse response;
+                OutputTensor output;
+                output.name = "output";
+                output.datatype = "FP32";
+                output.shape = {1, 1};
+                output.data = {7.0};
+                response.outputs.push_back(std::move(output));
+                return response;
+            }
+            ModelMetadata model_metadata_;
+        };
+        return std::make_unique<VersionedExecutor>(std::move(metadata));
+    });
+    const KServeRuntime runtime(std::move(registry));
+    const auto response = request(runtime, "POST", "/v2/models/demo/infer", validInferBody());
+    REQUIRE_EQ(response.status, 200);
+    REQUIRE(response.body.find(R"("model_version":"42")") != std::string::npos);
+    REQUIRE(response.body.find(R"("data":[7.0])") != std::string::npos);
+}
+
+TEST_CASE(kserve_runtime_reports_not_ready_when_model_load_failed) {
+    RuntimeConfig config;
+    config.model_name = "demo";
+    config.backend = "stub";
+    ModelRegistry registry(config, [](const RuntimeConfig &, std::string &error) {
+        error = "load failed";
+        return nullptr;
+    });
+    const KServeRuntime runtime(std::move(registry));
+    REQUIRE_EQ(request(runtime, "GET", "/v2/health/ready").status, 503);
+    REQUIRE_EQ(request(runtime, "GET", "/v2/models/demo/ready").status, 503);
+}
+
+TEST_CASE(kserve_runtime_uses_injected_executor_without_route_changes) {
+    RuntimeConfig config;
+    config.model_name = "demo";
+    config.backend = "stub";
+    ModelRegistry registry(config, [](const RuntimeConfig &cfg, std::string &error) {
+        (void)error;
+        ModelMetadata metadata;
+        metadata.name = cfg.model_name;
+        metadata.versions = {"1"};
+        metadata.platform = "test_marker";
+        metadata.inputs.push_back({"input", "FP32", {1, 3, 224, 224}});
+        metadata.outputs.push_back({"output", "FP32", {1, 1}});
+        struct MarkerExecutor final : Executor {
+            explicit MarkerExecutor(ModelMetadata model_metadata)
+                : model_metadata_(std::move(model_metadata)) {}
+            const ModelMetadata &metadata() const override {
+                return model_metadata_;
+            }
+            ExecutionResponse infer(const ExecutionRequest &) override {
+                ExecutionResponse response;
+                OutputTensor output;
+                output.name = "output";
+                output.datatype = "FP32";
+                output.shape = {1, 1};
+                output.data = {42.0};
+                response.outputs.push_back(std::move(output));
+                return response;
+            }
+            ModelMetadata model_metadata_;
+        };
+        return std::make_unique<MarkerExecutor>(std::move(metadata));
+    });
+    const KServeRuntime runtime(std::move(registry));
+    const auto response = request(runtime, "POST", "/v2/models/demo/infer", validInferBody());
+    REQUIRE_EQ(response.status, 200);
+    REQUIRE(response.body.find(R"("data":[42.0])") != std::string::npos);
 }

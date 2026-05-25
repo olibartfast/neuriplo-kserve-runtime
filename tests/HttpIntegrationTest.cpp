@@ -202,3 +202,21 @@ TEST_CASE(http_integration_rejects_oversized_request) {
     REQUIRE_EQ(response.status, 413);
     REQUIRE(response.body.find(R"("code":"PAYLOAD_TOO_LARGE")") != std::string::npos);
 }
+
+TEST_CASE(http_integration_rejects_invalid_content_length) {
+    const TestServer server;
+    const auto response = sendRaw(
+        server.port,
+        "POST /v2/models/demo/infer HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: abc\r\n\r\n");
+    REQUIRE_EQ(response.status, 400);
+    REQUIRE(response.body.find(R"("code":"INVALID_ARGUMENT")") != std::string::npos);
+}
+
+TEST_CASE(http_integration_rejects_declared_content_length_over_limit) {
+    const TestServer server;
+    const auto response =
+        sendRaw(server.port, "POST /v2/models/demo/infer HTTP/1.1\r\nHost: 127.0.0.1\r\n"
+                             "Content-Type: application/json\r\nContent-Length: 4096\r\n\r\n{}");
+    REQUIRE_EQ(response.status, 413);
+    REQUIRE(response.body.find(R"("code":"PAYLOAD_TOO_LARGE")") != std::string::npos);
+}
