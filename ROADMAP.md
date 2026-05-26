@@ -123,7 +123,7 @@ Step 0: Scaffold
 Step 1: KServe Packaging
 Step 2: Protocol Correctness
 Step 3: Model Registry And Executor Abstraction
-Step 4: neuriplo Integration
+Step 4: Atomic neuriplo Integration
 Step 5: Scheduler And Autoscaling Behavior
 Step 6: Dynamic Batching
 Step 7: Observability And KServe Deployment Examples
@@ -677,18 +677,116 @@ Exit criteria:
 - Stub executor can be replaced without route changes.
 - Readiness tracks model state.
 
-### Step 4: neuriplo Integration
+### Step 4: Atomic neuriplo Integration
 
-- Link `neuriplo`.
-- Add `NeuriploExecutor`.
-- Load a configured backend/model once at startup.
-- Convert KServe tensors to neuriplo input buffers.
-- Convert neuriplo outputs to KServe tensors.
+Step 4 integrates real `neuriplo` execution in independently buildable
+substeps. Routes already delegate through `ModelRegistry` and `Executor`, but
+`ExecutionRequest` does not yet preserve parsed input tensor data. Real backend
+execution must start by carrying validated KServe inputs through the executor
+boundary.
+
+#### Step 4.1: Preserve KServe Input Tensors
+
+- Add an input tensor representation to executor-facing request types.
+- Have `KServeV2Codec` validate and pass input `name`, `datatype`, `shape`, and
+  `data` into `ExecutionRequest`.
+- Keep `StubExecutor` behavior unchanged.
+
+Exit criteria:
+
+- Codec tests prove parsed input tensor data reaches `ExecutionRequest`.
+- Stub inference responses remain compatible with existing tests.
+
+#### Step 4.2: Define A neuriplo Adapter Boundary
+
+- Add a small internal adapter interface or wrapper so tests can fake
+  `neuriplo` behavior before linking the real library.
+- Keep `neuriplo`-specific types out of HTTP, routing, and registry code.
+- Keep `Executor` as the only runtime execution interface used by
+  `ModelRegistry` and routes.
+
+Exit criteria:
+
+- Unit tests can inject fake backend metadata, load failures, and inference
+  results without linking real `neuriplo`.
+- Public route and registry types do not include `neuriplo` headers.
+
+#### Step 4.3: Add NeuriploExecutor Skeleton
+
+- Implement `Executor` using the adapter boundary.
+- Load model metadata from the adapter.
+- Support construction or load failure with stable registry failed-state
+  behavior.
+
+Exit criteria:
+
+- Fake-adapter tests cover load success, load failure, metadata mapping, and
+  readiness behavior.
+- Failed real-backend startup keeps `/v2/health/ready` false.
+
+#### Step 4.4: Wire Backend Selection
+
+- Keep `stub` mapped to `StubExecutor`.
+- Map explicitly supported real backend ids to `NeuriploExecutor`.
+- Keep unknown backend ids failing predictably.
+
+Exit criteria:
+
+- Factory tests cover `stub`, supported real backend ids, and unknown backend
+  ids.
+- Unsupported backend configuration produces a stable startup or readiness
+  failure.
+
+#### Step 4.5: Convert Request Inputs
+
+- Convert supported KServe JSON tensor datatypes and shapes into `neuriplo`
+  input buffers.
+- Start with the minimum datatype needed by the chosen smoke backend, likely
+  `FP32`.
+- Return stable inference errors for unsupported or malformed backend-bound
+  tensors.
+
+Exit criteria:
+
+- Fake-adapter tests cover inference success, unsupported datatypes, malformed
+  shapes, and backend-bound tensor validation errors.
+- Dense JSON tensor data is supported for the first smoke backend.
+
+#### Step 4.6: Convert Backend Outputs
+
+- Convert dense `neuriplo` outputs into `ExecutionResponse`.
+- Preserve requested-output filtering semantics.
+- Keep KServe response JSON shape compatible with existing tests.
+
+Exit criteria:
+
+- Fake-adapter tests cover dense output conversion and requested-output
+  filtering.
+- Existing KServe response shape tests continue to pass.
+
+#### Step 4.7: Link Real neuriplo
+
+- Add the selected CMake discovery path: package, sibling checkout, or vendored
+  path.
+- Keep the build usable without real `neuriplo` unless the real backend option
+  is enabled.
+
+Exit criteria:
+
+- Default `stub` builds still work without `neuriplo` installed.
+- Enabling the real backend option links the selected `neuriplo` target.
+
+#### Step 4.8: Add Smoke Model Validation
+
+- Pick one first backend, preferably ONNX Runtime unless the `neuriplo` API
+  strongly favors OpenCV DNN.
+- Add a small model fixture or documented local smoke command.
+- Compare runtime `/infer` output against direct backend execution.
 
 Exit criteria:
 
 - ONNX Runtime or OpenCV DNN smoke model runs through `/infer`.
-- Metadata comes from neuriplo.
+- Metadata comes from `neuriplo`.
 - Single request output matches direct backend output.
 
 ### Step 5: Scheduler And Autoscaling Behavior
@@ -822,4 +920,3 @@ Performance checks:
 7. Add llama.cpp and Cactus LLM support as a dedicated scheduling policy, not
    as ordinary dynamic batching.
 8. Prefer correctness and stable protocol behavior before optimizing transport.
-

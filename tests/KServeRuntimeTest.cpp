@@ -270,3 +270,43 @@ TEST_CASE(kserve_runtime_uses_injected_executor_without_route_changes) {
     REQUIRE_EQ(response.status, 200);
     REQUIRE(response.body.find(R"("data":[42.0])") != std::string::npos);
 }
+
+TEST_CASE(kserve_runtime_passes_input_tensors_to_executor) {
+    RuntimeConfig config;
+    config.model_name = "demo";
+    config.backend = "stub";
+    ModelRegistry registry(config, [](const RuntimeConfig &cfg, std::string &error) {
+        (void)error;
+        ModelMetadata metadata;
+        metadata.name = cfg.model_name;
+        metadata.versions = {"1"};
+        metadata.platform = "test_input_capture";
+        metadata.inputs.push_back({"input", "FP32", {1, 3}});
+        metadata.outputs.push_back({"output", "FP32", {1, 1}});
+        struct InputEchoExecutor final : Executor {
+            explicit InputEchoExecutor(ModelMetadata model_metadata)
+                : model_metadata_(std::move(model_metadata)) {}
+            const ModelMetadata &metadata() const override {
+                return model_metadata_;
+            }
+            ExecutionResponse infer(const ExecutionRequest &request) override {
+                ExecutionResponse response;
+                OutputTensor output;
+                output.name = "output";
+                output.datatype = "FP32";
+                output.shape = {1, 1};
+                output.data = {request.inputs.at(0).data.at(1)};
+                response.outputs.push_back(std::move(output));
+                return response;
+            }
+            ModelMetadata model_metadata_;
+        };
+        return std::make_unique<InputEchoExecutor>(std::move(metadata));
+    });
+    const KServeRuntime runtime(std::move(registry));
+    const auto response = request(
+        runtime, "POST", "/v2/models/demo/infer",
+        R"({"inputs":[{"name":"input","shape":[1,3],"datatype":"FP32","data":[4.0,5.5,6.0]}]})");
+    REQUIRE_EQ(response.status, 200);
+    REQUIRE(response.body.find(R"("data":[5.5])") != std::string::npos);
+}
