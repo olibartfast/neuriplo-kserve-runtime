@@ -16,6 +16,9 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(nlohmann_json)
 
 option(NEURIPLO_ENABLE_CLANG_TIDY "Run clang-tidy during builds" OFF)
+option(NEURIPLO_RUNTIME_ENABLE_REAL_NEURIPLO "Build the real neuriplo adapter" OFF)
+set(NEURIPLO_RUNTIME_NEURIPLO_SOURCE_DIR "../neuriplo" CACHE PATH
+    "Path to a local neuriplo checkout when real neuriplo support is enabled")
 set(NEURIPLO_SANITIZER "" CACHE STRING "Enable sanitizer instrumentation: address, thread, or undefined")
 set_property(CACHE NEURIPLO_SANITIZER PROPERTY STRINGS "" address thread undefined)
 
@@ -24,13 +27,34 @@ set(NEURIPLO_RUNTIME_SOURCES
     src/KServeRuntime.cpp
     src/KServeV2Codec.cpp
     src/ModelRegistry.cpp
+    src/NeuriploExecutor.cpp
+    src/RealNeuriploAdapter.cpp
     src/RuntimeConfig.cpp
     src/StubExecutor.cpp
 )
 
+if(NEURIPLO_RUNTIME_ENABLE_REAL_NEURIPLO)
+    if(NOT EXISTS "${NEURIPLO_RUNTIME_NEURIPLO_SOURCE_DIR}/CMakeLists.txt")
+        message(FATAL_ERROR "NEURIPLO_RUNTIME_NEURIPLO_SOURCE_DIR must point to a neuriplo checkout")
+    endif()
+    find_package(OpenCV REQUIRED)
+    find_package(glog REQUIRED)
+    set(BUILD_INFERENCE_ENGINE_TESTS OFF CACHE BOOL "Disable neuriplo tests when embedded" FORCE)
+    add_subdirectory("${NEURIPLO_RUNTIME_NEURIPLO_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/neuriplo")
+endif()
+
 add_library(neuriplo-kserve-runtime-core STATIC ${NEURIPLO_RUNTIME_SOURCES})
 target_include_directories(neuriplo-kserve-runtime-core PUBLIC src)
 target_link_libraries(neuriplo-kserve-runtime-core PUBLIC nlohmann_json::nlohmann_json)
+
+if(NEURIPLO_RUNTIME_ENABLE_REAL_NEURIPLO)
+    target_compile_definitions(neuriplo-kserve-runtime-core PRIVATE NEURIPLO_RUNTIME_WITH_REAL_NEURIPLO)
+    target_include_directories(neuriplo-kserve-runtime-core PRIVATE
+        "${NEURIPLO_RUNTIME_NEURIPLO_SOURCE_DIR}/backends/src"
+        ${OpenCV_INCLUDE_DIRS}
+    )
+    target_link_libraries(neuriplo-kserve-runtime-core PRIVATE neuriplo glog::glog)
+endif()
 
 add_executable(neuriplo-kserve-runtime src/main.cpp)
 target_link_libraries(neuriplo-kserve-runtime PRIVATE neuriplo-kserve-runtime-core)
@@ -84,6 +108,7 @@ add_executable(neuriplo-kserve-runtime-tests
     tests/KServeRuntimeTest.cpp
     tests/KServeV2CodecTest.cpp
     tests/ModelRegistryTest.cpp
+    tests/NeuriploExecutorTest.cpp
     tests/RuntimeConfigTest.cpp
     tests/StubExecutorTest.cpp
     tests/TestMain.cpp
@@ -93,6 +118,11 @@ target_link_libraries(neuriplo-kserve-runtime-tests PRIVATE neuriplo-kserve-runt
 target_compile_options(neuriplo-kserve-runtime-tests PRIVATE
     $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic>
 )
+
+if(NEURIPLO_RUNTIME_ENABLE_REAL_NEURIPLO)
+    target_sources(neuriplo-kserve-runtime-tests PRIVATE tests/RealNeuriploSmokeTest.cpp)
+    target_compile_definitions(neuriplo-kserve-runtime-tests PRIVATE NEURIPLO_RUNTIME_WITH_REAL_NEURIPLO)
+endif()
 
 if(NEURIPLO_ENABLE_CLANG_TIDY)
     set_target_properties(neuriplo-kserve-runtime-tests PROPERTIES CXX_CLANG_TIDY "${CLANG_TIDY_EXE}")

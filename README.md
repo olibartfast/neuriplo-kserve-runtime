@@ -12,7 +12,8 @@ and operational endpoints. The actual backend execution remains owned by
 - HTTP KServe V2 health and metadata endpoints.
 - Single-model runtime process.
 - Bounded request handling.
-- Raw tensor inference API placeholder.
+- Raw tensor inference through the stub executor by default, with optional
+  `neuriplo` executor wiring.
 - CMake-based C++ build.
 
 ## Planned Flow
@@ -40,6 +41,24 @@ cmake --build build
 cmake --preset debug
 cmake --build --preset debug
 ctest --preset debug
+```
+
+The default build does not require `neuriplo`. To compile the real adapter
+against a sibling checkout:
+
+```bash
+cmake -S . -B build/real-neuriplo \
+  -DNEURIPLO_RUNTIME_ENABLE_REAL_NEURIPLO=ON \
+  -DNEURIPLO_RUNTIME_NEURIPLO_SOURCE_DIR=/path/to/neuriplo
+cmake --build build/real-neuriplo
+```
+
+For the local sibling checkout and ONNX Runtime smoke test:
+
+```bash
+cmake --preset real-onnx
+cmake --build --preset real-onnx
+ctest --preset real-onnx
 ```
 
 ### Unit tests
@@ -113,8 +132,8 @@ GET  /v2/models/{model_name}/versions/{version}/ready
 POST /v2/models/{model_name}/versions/{version}/infer
 ```
 
-The scaffold model exposes static version `1`. Stub inference validates the V2
-JSON request shape and returns a deterministic placeholder output:
+The stub model exposes static version `1`. Stub inference validates the V2 JSON
+request shape and returns a deterministic placeholder output:
 
 ```bash
 curl -X POST http://127.0.0.1:8080/v2/models/demo/infer \
@@ -152,8 +171,8 @@ curl http://<host>/v2/health/ready
 curl http://<host>/v2/models/neuriplo-demo
 ```
 
-The runtime still uses the stub execution path. The `/infer` endpoint validates
-the request and returns a fixed placeholder tensor; it does not run a real
-`neuriplo` backend yet.
+The default image still uses the stub execution path unless it is built with
+`NEURIPLO_RUNTIME_ENABLE_REAL_NEURIPLO=ON` and the corresponding `neuriplo`
+backend dependencies.
 
 [neuriplo]: https://github.com/olibartfast/neuriplo

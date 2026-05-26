@@ -61,6 +61,18 @@
       "cacheVariables": {
         "NEURIPLO_SANITIZER": "undefined"
       }
+    },
+    {
+      "name": "real-onnx",
+      "inherits": "debug",
+      "displayName": "Real neuriplo ONNX Runtime",
+      "binaryDir": "${sourceDir}/build/real-onnx",
+      "cacheVariables": {
+        "NEURIPLO_RUNTIME_ENABLE_REAL_NEURIPLO": "ON",
+        "NEURIPLO_RUNTIME_NEURIPLO_SOURCE_DIR": "${sourceDir}/../neuriplo",
+        "DEFAULT_BACKEND": "ONNX_RUNTIME",
+        "BUILD_INFERENCE_ENGINE_TESTS": "OFF"
+      }
     }
   ],
   "buildPresets": [
@@ -69,7 +81,8 @@
     { "name": "lint", "configurePreset": "lint" },
     { "name": "asan", "configurePreset": "asan" },
     { "name": "tsan", "configurePreset": "tsan" },
-    { "name": "ubsan", "configurePreset": "ubsan" }
+    { "name": "ubsan", "configurePreset": "ubsan" },
+    { "name": "real-onnx", "configurePreset": "real-onnx" }
   ],
   "testPresets": [
     {
@@ -90,6 +103,11 @@
     {
       "name": "ubsan",
       "configurePreset": "ubsan",
+      "output": { "outputOnFailure": true }
+    },
+    {
+      "name": "real-onnx",
+      "configurePreset": "real-onnx",
       "output": { "outputOnFailure": true }
     }
   ]

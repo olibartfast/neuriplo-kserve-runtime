@@ -116,3 +116,31 @@ TEST_CASE(model_registry_uses_injected_executor) {
     const auto response = handle->executor->infer(request);
     REQUIRE_EQ(response.outputs[0].data[0], 42.0);
 }
+
+TEST_CASE(model_registry_rejects_unknown_backend) {
+    RuntimeConfig config = demoConfig();
+    config.backend = "does_not_exist";
+
+    const ModelRegistry registry(config);
+    REQUIRE(!registry.allReady());
+    const auto *handle = registry.findHandle("demo");
+    REQUIRE(handle != nullptr);
+    REQUIRE(handle->load_error.has_value());
+    REQUIRE(handle->load_error->find("unsupported backend") != std::string::npos);
+}
+
+#ifndef NEURIPLO_RUNTIME_WITH_REAL_NEURIPLO
+TEST_CASE(
+    model_registry_maps_supported_real_backend_to_neuriplo_executor_when_real_support_disabled) {
+    RuntimeConfig config = demoConfig();
+    config.backend = "onnx_runtime";
+    config.model_path = "/tmp/model.onnx";
+
+    const ModelRegistry registry(config);
+    REQUIRE(!registry.allReady());
+    const auto *handle = registry.findHandle("demo");
+    REQUIRE(handle != nullptr);
+    REQUIRE(handle->load_error.has_value());
+    REQUIRE(handle->load_error->find("real neuriplo support is not enabled") != std::string::npos);
+}
+#endif
