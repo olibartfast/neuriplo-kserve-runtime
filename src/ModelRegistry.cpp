@@ -1,18 +1,35 @@
 #include "ModelRegistry.hpp"
 
+#include "NeuriploExecutor.hpp"
 #include "StubExecutor.hpp"
 
+#include <array>
 #include <stdexcept>
 #include <utility>
 
 namespace {
 
-std::unique_ptr<Executor> defaultExecutorFactory(const RuntimeConfig &config, std::string &error) {
-    if (config.backend != "stub") {
-        error = "unsupported backend: " + config.backend;
-        return nullptr;
+bool isNeuriploBackend(const std::string &backend) {
+    constexpr std::array<const char *, 11> supported = {
+        "onnx_runtime", "opencv_dnn", "openvino", "tensorrt", "libtorch",  "libtensorflow",
+        "ggml",         "llamacpp",   "cactus",   "migraphx", "executorch"};
+    for (const auto *known_backend : supported) {
+        if (backend == known_backend) {
+            return true;
+        }
     }
-    return makeStubExecutor(config, error);
+    return false;
+}
+
+std::unique_ptr<Executor> defaultExecutorFactory(const RuntimeConfig &config, std::string &error) {
+    if (config.backend == "stub") {
+        return makeStubExecutor(config, error);
+    }
+    if (isNeuriploBackend(config.backend)) {
+        return makeNeuriploExecutor(config, error);
+    }
+    error = "unsupported backend: " + config.backend;
+    return nullptr;
 }
 
 } // namespace

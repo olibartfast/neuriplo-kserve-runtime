@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <nlohmann/json.hpp>
 #include <string>
+#include <utility>
 
 namespace {
 
@@ -25,6 +26,10 @@ const TensorMetadata *findTensor(const std::vector<TensorMetadata> &tensors,
     return &*found;
 }
 
+bool containsName(const std::vector<std::string> &names, const std::string &name) {
+    return std::find(names.begin(), names.end(), name) != names.end();
+}
+
 bool shapeMatches(const Json &shape, const TensorMetadata &metadata) {
     if (!shape.is_array() || shape.size() != metadata.shape.size()) {
         return false;
@@ -39,6 +44,27 @@ bool shapeMatches(const Json &shape, const TensorMetadata &metadata) {
         }
     }
     return true;
+}
+
+std::vector<int64_t> parseShape(const Json &shape) {
+    std::vector<int64_t> parsed;
+    parsed.reserve(shape.size());
+    for (const auto &dimension : shape) {
+        parsed.push_back(dimension.get<int64_t>());
+    }
+    return parsed;
+}
+
+std::optional<std::vector<double>> parseData(const Json &data) {
+    std::vector<double> parsed;
+    parsed.reserve(data.size());
+    for (const auto &value : data) {
+        if (!value.is_number()) {
+            return std::nullopt;
+        }
+        parsed.push_back(value.get<double>());
+    }
+    return parsed;
 }
 
 std::vector<std::string> allOutputNames(const ModelMetadata &metadata) {
@@ -100,6 +126,8 @@ InferenceParseResult parseInferenceRequest(const std::string &body, const ModelM
         return invalid("inputs must not be empty");
     }
 
+    std::vector<std::string> seen_input_names;
+    seen_input_names.reserve(root["inputs"].size());
     for (const auto &input : root["inputs"]) {
         if (!input.is_object()) {
             return invalid("each input must be an object");
@@ -118,16 +146,40 @@ InferenceParseResult parseInferenceRequest(const std::string &body, const ModelM
         }
 
         const auto name = input["name"].get<std::string>();
+        if (containsName(seen_input_names, name)) {
+            return invalid("duplicate input: " + name);
+        }
         const auto *metadata_input = findTensor(metadata.inputs, name);
         if (metadata_input == nullptr) {
             return invalid("unknown input: " + name);
         }
+        seen_input_names.push_back(name);
         const auto datatype = input["datatype"].get<std::string>();
         if (datatype != metadata_input->datatype) {
             return invalid("unsupported datatype for input: " + name);
         }
         if (!shapeMatches(input["shape"], *metadata_input)) {
             return invalid("invalid shape for input: " + name);
+        }
+
+        auto data = parseData(input["data"]);
+        if (!data.has_value()) {
+            return invalid("input data values must be numbers for input: " + name);
+        }
+
+        const auto parsed_shape = parseShape(input["shape"]);
+
+        InputTensor tensor;
+        tensor.name = name;
+        tensor.datatype = datatype;
+        tensor.shape = std::move(parsed_shape);
+        tensor.data = std::move(*data);
+        request.inputs.push_back(std::move(tensor));
+    }
+
+    for (const auto &expected_input : metadata.inputs) {
+        if (!containsName(seen_input_names, expected_input.name)) {
+            return invalid("missing required input: " + expected_input.name);
         }
     }
 

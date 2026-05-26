@@ -17,6 +17,27 @@ ModelMetadata metadata() {
     return *registry.find("demo");
 }
 
+ModelMetadata smallMetadata() {
+    ModelMetadata model;
+    model.name = "demo";
+    model.versions = {"1"};
+    model.platform = "test";
+    model.inputs.push_back({"input", "FP32", {1, 3}});
+    model.outputs.push_back({"output", "FP32", {1, 1}});
+    return model;
+}
+
+ModelMetadata multiInputMetadata() {
+    ModelMetadata model;
+    model.name = "demo";
+    model.versions = {"1"};
+    model.platform = "test";
+    model.inputs.push_back({"image", "FP32", {1, 3}});
+    model.inputs.push_back({"scale", "FP32", {1}});
+    model.outputs.push_back({"output", "FP32", {1, 1}});
+    return model;
+}
+
 std::string validBody(std::string extra = "") {
     std::string body =
         "{\"id\":\"request-1\",\"inputs\":[{\"name\":\"input\",\"shape\":[1,3,224,224],"
@@ -44,6 +65,23 @@ TEST_CASE(kserve_v2_codec_parses_valid_inference_request) {
     REQUIRE_EQ(*parsed.request.id, "request-1");
     REQUIRE_EQ(parsed.request.requested_outputs.size(), static_cast<size_t>(1));
     REQUIRE_EQ(parsed.request.requested_outputs[0], "output");
+}
+
+TEST_CASE(kserve_v2_codec_preserves_input_tensor_data) {
+    const auto parsed = parseInferenceRequest(
+        R"({"inputs":[{"name":"input","shape":[1,3],"datatype":"FP32","data":[1.25,2.5,3.75]}]})",
+        smallMetadata());
+    REQUIRE(parsed.ok);
+    REQUIRE_EQ(parsed.request.inputs.size(), static_cast<size_t>(1));
+    REQUIRE_EQ(parsed.request.inputs[0].name, "input");
+    REQUIRE_EQ(parsed.request.inputs[0].datatype, "FP32");
+    REQUIRE_EQ(parsed.request.inputs[0].shape.size(), static_cast<size_t>(2));
+    REQUIRE_EQ(parsed.request.inputs[0].shape[0], 1);
+    REQUIRE_EQ(parsed.request.inputs[0].shape[1], 3);
+    REQUIRE_EQ(parsed.request.inputs[0].data.size(), static_cast<size_t>(3));
+    REQUIRE_EQ(parsed.request.inputs[0].data[0], 1.25);
+    REQUIRE_EQ(parsed.request.inputs[0].data[1], 2.5);
+    REQUIRE_EQ(parsed.request.inputs[0].data[2], 3.75);
 }
 
 TEST_CASE(kserve_v2_codec_parses_requested_outputs) {
@@ -74,6 +112,31 @@ TEST_CASE(kserve_v2_codec_rejects_unknown_input) {
     REQUIRE(parsed.error_message.find("unknown input") != std::string::npos);
 }
 
+TEST_CASE(kserve_v2_codec_rejects_duplicate_input) {
+    const auto parsed = parseInferenceRequest(
+        R"({"inputs":[{"name":"input","shape":[1,3],"datatype":"FP32","data":[1,2,3]},)"
+        R"({"name":"input","shape":[1,3],"datatype":"FP32","data":[4,5,6]}]})",
+        smallMetadata());
+    REQUIRE(!parsed.ok);
+    REQUIRE(parsed.error_message.find("duplicate input") != std::string::npos);
+}
+
+TEST_CASE(kserve_v2_codec_rejects_missing_required_model_input) {
+    const auto parsed = parseInferenceRequest(
+        R"({"inputs":[{"name":"image","shape":[1,3],"datatype":"FP32","data":[1,2,3]}]})",
+        multiInputMetadata());
+    REQUIRE(!parsed.ok);
+    REQUIRE(parsed.error_message.find("missing required input: scale") != std::string::npos);
+}
+
+TEST_CASE(kserve_v2_codec_rejects_non_numeric_input_data) {
+    const auto parsed = parseInferenceRequest(
+        R"({"inputs":[{"name":"input","shape":[1,3],"datatype":"FP32","data":[1,"bad",3]}]})",
+        smallMetadata());
+    REQUIRE(!parsed.ok);
+    REQUIRE(parsed.error_message.find("input data values") != std::string::npos);
+}
+
 TEST_CASE(kserve_v2_codec_serializes_executor_response_with_id) {
     const auto model = metadata();
     const auto parsed = parseInferenceRequest(validBody(), model);
@@ -84,6 +147,7 @@ TEST_CASE(kserve_v2_codec_serializes_executor_response_with_id) {
     REQUIRE(executor != nullptr);
     ExecutionRequest execution_request;
     execution_request.id = parsed.request.id;
+    execution_request.inputs = parsed.request.inputs;
     execution_request.requested_outputs = parsed.request.requested_outputs;
     const auto execution_response = executor->infer(execution_request);
 

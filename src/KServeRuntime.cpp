@@ -186,8 +186,18 @@ HttpResponse KServeRuntime::infer(const std::string &model_name, const std::stri
 
     ExecutionRequest execution_request;
     execution_request.id = parsed.request.id;
+    execution_request.inputs = parsed.request.inputs;
     execution_request.requested_outputs = parsed.request.requested_outputs;
     const auto execution_response = handle->executor->infer(execution_request);
+    if (!execution_response.ok) {
+        const auto status = execution_response.error_code == "INVALID_ARGUMENT" ? 400 : 500;
+        const auto code =
+            execution_response.error_code.empty() ? "BACKEND_ERROR" : execution_response.error_code;
+        const auto message = execution_response.error_message.empty()
+                                 ? "backend inference failed"
+                                 : execution_response.error_message;
+        return error(status, code, message);
+    }
     return json(
         200, inferenceResponseJson(model_name, model_version, parsed.request, execution_response));
 }

@@ -9,6 +9,7 @@
 
 struct InferenceRequest {
     std::optional<std::string> id;
+    std::vector<InputTensor> inputs;
     std::vector<std::string> requested_outputs;
 };
 
