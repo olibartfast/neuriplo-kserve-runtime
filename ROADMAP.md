@@ -130,7 +130,158 @@ Step 7: Observability And KServe Deployment Examples
 Step 8: LLM Backends (llama.cpp and Cactus)
 ```
 
-## High-Level Architecture
+Current architecture patterns are documented in `DESIGN_PATTERNS.md`. That file
+records what exists today; this section records what to grow into and when.
+
+## Architecture And Design Pattern Evolution
+
+The runtime already uses a sound baseline: Strategy (`Executor`, `Scheduler`,
+`NeuriploAdapter`), factory functions, PIMPL, dependency injection, bounded
+producer/consumer scheduling, adapter/anti-corruption layers, and composite
+batch merge/split. These are appropriate for a C++17 KServe runtime and do not
+need replacement.
+
+The gap versus production-oriented serving stacks is mostly operational and
+systems patterns, not missing GoF abstractions. The roadmap below adds modern
+serving mechanics incrementally without over-engineering the current scaffold.
+
+### Current Patterns (Keep)
+
+| Pattern | Location | Status |
+|---------|----------|--------|
+| Strategy / interface boundaries | `Executor`, `Scheduler`, `NeuriploAdapter` | In use |
+| Factory + PIMPL | `makeModelScheduler`, `makeStubExecutor`, `ModelScheduler.cpp` | In use |
+| Dependency injection | `ModelRegistry::ExecutorFactory`, `HttpServer::Handler` | In use |
+| Facade | `KServeRuntime` | In use |
+| Producer/consumer + promise/future | `ModelScheduler` | In use |
+| Specification / policy | `BatchCompatibility`, `shouldDispatchBatchSize` | In use |
+| Composite batch processing | `DynamicBatcher` merge/split | In use |
+| Object pool + least-inflight | `--instances`, `selectExecutorIndex()` | In use |
+
+### Near-Term Pattern Additions
+
+#### Step 7: Observability patterns
+
+- Add Prometheus metrics export and latency histograms (already planned).
+- Add structured logging with request id, model, queue/infer/total latency.
+- Add trace spans for admit → queue → batch form → infer → split → respond.
+  Prefer OpenTelemetry-compatible span names even if export starts minimal.
+- Stabilize error taxonomy (`INVALID_ARGUMENT`, `QUEUE_FULL`, etc.) across HTTP,
+  scheduler, and backend layers.
+
+Exit criteria additions:
+
+- A single request can be traced through queue, batch, and infer stages in logs
+  or metrics labels.
+- Error categories are stable and documented.
+
+#### Step 7–8: Cancellation and deadline propagation
+
+- Propagate deadline/cancel context from HTTP submit through scheduler into
+  executor/backend calls.
+- Extend beyond the current client-side timeout + `PendingRequest::cancelled`
+  flag.
+- Prefer `std::stop_token` or an internal cancel scope once C++20 usage is
+  allowed in the build.
+
+Exit criteria:
+
+- Slow backend work can be abandoned when the client deadline expires.
+- LLM decode loops honor cancellation (required for Step 8).
+
+#### Step 7: Request pipeline / middleware chain
+
+- Refactor infer handling into composable stages instead of growing
+  `KServeRuntime::handleInfer()` monolithically:
+
+```text
+decode → validate → admit → schedule → encode
+```
+
+- Keep stages as plain functions or small callables; no framework required.
+- Extension points: request id, rate limits, auth hooks, payload size checks.
+
+Exit criteria:
+
+- New cross-cutting infer behavior can be added without editing every route
+  handler.
+
+#### Step 3–7: Formal model state machine
+
+- Make `ModelState` transitions explicit in `ModelRegistry`/`ModelHandle`:
+
+```text
+UNLOADED → LOADING → READY → UNLOADING → UNLOADED
+                     ↓
+                  UNAVAILABLE / FAILED
+```
+
+- Replace scattered readiness checks with transition helpers.
+- Align with drain behavior from Step 5.
+
+Exit criteria:
+
+- Invalid state transitions are rejected or logged.
+- Readiness endpoints reflect state machine state deterministically.
+
+### Mid-Term Pattern Additions
+
+#### Step 8: Separate scheduling strategies
+
+- Do not extend tensor dynamic batching for LLM/token workloads.
+- Add a second scheduler strategy (or scheduler policy interface) for:
+  prefill, decode, KV cache slots, streaming, context limits.
+- Share admission, metrics, cancellation, and error mapping; not batch merge/split.
+
+Exit criteria:
+
+- Tensor and LLM paths share lifecycle/metrics but not batch-formation logic.
+
+#### Step 8+: Backend plugin registry
+
+- Evolve `ExecutorFactory` into an explicit backend registry keyed by backend id
+  and capabilities (tensor vs token).
+- Support test doubles and optional compile-time backend registration.
+
+Exit criteria:
+
+- New backend ids can be registered without editing a central switch statement.
+
+#### Post–Step 8: Control plane vs data plane split
+
+- Separate model load/drain/reload (control) from infer hot path (data).
+- Required before multi-model hot reload and version-specific policies.
+
+Exit criteria:
+
+- Model reload/drain does not block in-flight inference beyond defined drain
+  semantics.
+
+### Long-Term / Scale-Only Patterns
+
+Add these only when profiling or deployment pressure justifies the complexity:
+
+| Pattern | Trigger | Notes |
+|---------|---------|-------|
+| Async HTTP reactor | High connection concurrency | Replace thread-per-client `HttpServer` with epoll/io_uring/Asio-style event loop |
+| Zero-copy / borrowed tensor buffers | Copy overhead in hot path | Reduce `vector<double>` copies; consider external buffer lifetime rules |
+| Arena / PMR allocators | Allocation churn under load | Per-request or per-batch memory pools for tensor staging |
+| Structured result types (`std::expected` / typed `Result`) | Error-handling bugs | Gradual adoption at executor/scheduler boundaries |
+| gRPC V2 surface | Client demand | Parallel adapter layer; reuse scheduler and executor boundaries |
+
+### Explicit Non-Goals
+
+Do not introduce these into this repository unless requirements change materially:
+
+- In-process microservices or event sourcing
+- CQRS across infer requests
+- Heavy DDD aggregate hierarchies
+- Actor-model rewrite of the scheduler
+- Template-heavy CRTP frameworks for hot paths
+
+Prefer correctness, stable protocol behavior, and operability before transport
+or memory micro-optimizations.
+
 
 ```text
 HttpServer
@@ -339,7 +490,9 @@ Dynamic batching scheduler:
 ```text
 queue first compatible request
 wait up to max_queue_delay_us
-append compatible requests until max_batch_size
+scan queue for compatible candidates; skip incompatible; fulfill expired inline
+append compatible requests until merged tensor batch dimension reaches max_batch_size
+honor preferred_batch_sizes against merged tensor batch dimension
 dispatch batch
 split outputs
 ```
@@ -824,6 +977,7 @@ Exit criteria:
 - Add `/metrics`.
 - Add structured logs.
 - Add optional payload logging controls.
+- Add request-path trace spans (admit, queue, batch, infer, split).
 - Add canary rollout example.
 - Add InferenceGraph example.
 - Add deployment documentation.
@@ -833,6 +987,7 @@ Exit criteria:
 - Runtime deploys as a KServe custom serving runtime.
 - Health/readiness work in Kubernetes.
 - Metrics scrape succeeds.
+- Logs or metrics can follow one request through queue and infer stages.
 - Canary example documents runtime-image and model-artifact rollout.
 - InferenceGraph example can route to the runtime without custom response
   adapters.
@@ -842,7 +997,9 @@ Exit criteria:
 - Add LLM model config for llama.cpp and Cactus backends.
 - Add GGUF/local model artifact conventions where applicable.
 - Add backend selection for llama.cpp vs Cactus through neuriplo.
-- Add token-aware scheduler with prefill, decode, cancellation, and deadlines.
+- Add token-aware scheduler strategy separate from tensor dynamic batching.
+- Add prefill, decode, cancellation, and deadline propagation into backend
+  calls.
 - Add KServe V2 `BYTES` prompt convention.
 - Add streaming response design for generated tokens.
 - Add OpenAI-compatible `/v1/completions`, `/v1/chat/completions`, and
@@ -852,7 +1009,8 @@ Exit criteria:
 
 - llama.cpp and Cactus completion paths work through `/v2/models/{model}/infer`.
 - Context limits and generation parameters are enforced.
-- Cancellation/deadline behavior is defined.
+- Cancellation/deadline behavior is defined and tested.
+- LLM scheduling does not reuse tensor batch merge/split logic.
 
 ## Validation Strategy
 
@@ -920,3 +1078,5 @@ Performance checks:
 7. Add llama.cpp and Cactus LLM support as a dedicated scheduling policy, not
    as ordinary dynamic batching.
 8. Prefer correctness and stable protocol behavior before optimizing transport.
+9. Evolve architecture using `DESIGN_PATTERNS.md` for current patterns and the
+   "Architecture And Design Pattern Evolution" section for target patterns.

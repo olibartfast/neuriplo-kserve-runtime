@@ -10,8 +10,14 @@ debug tasks are under `.vscode/`.
 
 Read `STEP0.md` before assuming integration readiness. It documents the current
 implemented scaffold and the missing pieces that still block real `neuriplo`,
-`vision-core`, and `vision-inference` integration. Treat `ROADMAP.md` as the target
-roadmap and `STEP0.md` as the current-state snapshot.
+`vision-core`, and `vision-inference` integration. Completed step snapshots live in
+`STEP1.md` through `STEP6.md`; use `STEP<N>_WIP.md` only for in-progress step work.
+
+Treat `ROADMAP.md` as the target roadmap and step snapshots as the current-state
+record. For architecture work, read `DESIGN_PATTERNS.md` for patterns in use today and
+the "Architecture And Design Pattern Evolution" section in `ROADMAP.md` for planned
+patterns. Prefer extending existing Strategy/factory/adapter boundaries over adding new
+frameworks unless the roadmap calls for them.
 
 ## Build, Test, and Development Commands
 
@@ -36,7 +42,9 @@ instrumentation. Run the runtime locally with:
 Use 4-space indentation and the repository `.clang-format` profile. Types and classes
 use `PascalCase` (`ModelRegistry`, `HttpResponse`); functions and variables use
 `camelCase` or lower snake case where already established. Keep headers in `src/*.hpp`
-and implementation in matching `src/*.cpp` files. Run formatting before submitting:
+and implementation in matching `src/*.cpp` files. Hide concrete scheduler/backend
+types behind interfaces and factory functions when touching scheduling or execution
+code (`Scheduler`, `Executor`, `NeuriploAdapter`). Run formatting before submitting:
 
 ```bash
 scripts/check-format.sh
@@ -61,4 +69,6 @@ issues when available. Include API examples or endpoint output when behavior cha
 
 Do not commit model files, secrets, tokens, or generated `build*/` directories. Keep
 runtime defaults safe for local development, and document any new network-facing options
-in `README.md` and tests.
+in `README.md` and tests. Update `DESIGN_PATTERNS.md` when introducing a new
+cross-cutting architectural pattern, and update `ROADMAP.md` when changing planned
+architecture direction.
