@@ -1,5 +1,6 @@
 #pragma once
 
+#include "DynamicBatcher.hpp"
 #include "Executor.hpp"
 #include "SchedulerMetrics.hpp"
 
@@ -20,6 +21,7 @@ struct SchedulerConfig {
     size_t max_queue_size = 64;
     int64_t request_timeout_ms = 30000;
     size_t instances = 1;
+    DynamicBatchingConfig dynamic_batching;
 };
 
 struct SchedulerResult {
