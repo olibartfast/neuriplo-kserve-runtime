@@ -109,12 +109,13 @@ TEST_CASE(model_registry_uses_injected_executor) {
 
     const auto *handle = registry.findHandleVersion("demo", "1");
     REQUIRE(handle != nullptr);
-    REQUIRE(handle->executor != nullptr);
+    REQUIRE(handle->scheduler != nullptr);
 
     ExecutionRequest request;
     request.requested_outputs = {"output"};
-    const auto response = handle->executor->infer(request);
-    REQUIRE_EQ(response.outputs[0].data[0], 42.0);
+    const auto result = handle->scheduler->submit(std::move(request));
+    REQUIRE(result.ok);
+    REQUIRE_EQ(result.response.outputs[0].data[0], 42.0);
 }
 
 TEST_CASE(model_registry_rejects_unknown_backend) {

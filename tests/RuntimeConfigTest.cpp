@@ -47,6 +47,9 @@ TEST_CASE(parse_runtime_config_uses_defaults) {
     REQUIRE_EQ(config.backend, "stub");
     REQUIRE_EQ(config.model_path, "");
     REQUIRE_EQ(config.storage_uri, "");
+    REQUIRE_EQ(config.max_queue_size, static_cast<size_t>(64));
+    REQUIRE_EQ(config.request_timeout_ms, static_cast<int64_t>(30000));
+    REQUIRE_EQ(config.instances, static_cast<size_t>(1));
 }
 
 TEST_CASE(parse_runtime_config_uses_environment_defaults) {
@@ -121,6 +124,44 @@ TEST_CASE(parse_runtime_config_rejects_zero_max_request_bytes_env) {
     bool threw = false;
     try {
         (void)parse({"neuriplo-kserve-runtime"}, testEnvironment({{"MAX_REQUEST_BYTES", "0"}}));
+    } catch (const std::invalid_argument &) {
+        threw = true;
+    }
+    REQUIRE(threw);
+}
+
+TEST_CASE(parse_runtime_config_accepts_scheduler_overrides) {
+    const auto config = parse({"neuriplo-kserve-runtime", "--max-queue-size", "128",
+                               "--request-timeout-ms", "1500", "--instances", "4"});
+    REQUIRE_EQ(config.max_queue_size, static_cast<size_t>(128));
+    REQUIRE_EQ(config.request_timeout_ms, static_cast<int64_t>(1500));
+    REQUIRE_EQ(config.instances, static_cast<size_t>(4));
+}
+
+TEST_CASE(parse_runtime_config_rejects_zero_max_queue_size) {
+    bool threw = false;
+    try {
+        (void)parse({"neuriplo-kserve-runtime", "--max-queue-size", "0"});
+    } catch (const std::invalid_argument &) {
+        threw = true;
+    }
+    REQUIRE(threw);
+}
+
+TEST_CASE(parse_runtime_config_rejects_zero_request_timeout) {
+    bool threw = false;
+    try {
+        (void)parse({"neuriplo-kserve-runtime", "--request-timeout-ms", "0"});
+    } catch (const std::invalid_argument &) {
+        threw = true;
+    }
+    REQUIRE(threw);
+}
+
+TEST_CASE(parse_runtime_config_rejects_zero_instances) {
+    bool threw = false;
+    try {
+        (void)parse({"neuriplo-kserve-runtime", "--instances", "0"});
     } catch (const std::invalid_argument &) {
         threw = true;
     }

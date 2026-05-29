@@ -27,6 +27,7 @@ set(NEURIPLO_RUNTIME_SOURCES
     src/KServeRuntime.cpp
     src/KServeV2Codec.cpp
     src/ModelRegistry.cpp
+    src/ModelScheduler.cpp
     src/NeuriploExecutor.cpp
     src/RealNeuriploAdapter.cpp
     src/RuntimeConfig.cpp
@@ -110,6 +111,7 @@ add_executable(neuriplo-kserve-runtime-tests
     tests/ModelRegistryTest.cpp
     tests/NeuriploExecutorTest.cpp
     tests/RuntimeConfigTest.cpp
+    tests/SchedulerTest.cpp
     tests/StubExecutorTest.cpp
     tests/TestMain.cpp
 )

@@ -13,6 +13,9 @@ struct RuntimeConfig {
     std::string model_path;
     std::string backend = "stub";
     std::string storage_uri;
+    size_t max_queue_size = 64;
+    int64_t request_timeout_ms = 30000;
+    size_t instances = 1;
 };
 
 struct RuntimeEnvironment {
