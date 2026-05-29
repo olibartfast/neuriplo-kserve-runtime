@@ -123,6 +123,10 @@ Scheduler flags:
 --max-queue-size <count>       bounded per-model request queue capacity (default 64)
 --request-timeout-ms <ms>      request deadline in milliseconds (default 30000)
 --instances <count>            worker threads and executor instances per model (default 1)
+--dynamic-batching-enabled true|false  enable compatible-request batching (default false)
+--max-batch-size <count>       maximum requests per batch (default 1)
+--max-queue-delay-us <us>      max wait for additional compatible requests (default 0)
+--preferred-batch-sizes <csv>  optional preferred batch sizes, e.g. 2,4,8
 ```
 
 When `MODEL_PATH` is unset and `/mnt/models` exists, the runtime uses

@@ -24,6 +24,11 @@ class StubExecutor final : public Executor {
             output_names = request.requested_outputs;
         }
 
+        int64_t batch_size = 1;
+        if (!request.inputs.empty() && !request.inputs.front().shape.empty()) {
+            batch_size = request.inputs.front().shape.front();
+        }
+
         ExecutionResponse response;
         response.outputs.reserve(output_names.size());
         for (const auto &name : output_names) {
@@ -31,7 +36,7 @@ class StubExecutor final : public Executor {
             if (tensor_metadata == nullptr) {
                 continue;
             }
-            response.outputs.push_back(makeOutput(*tensor_metadata));
+            response.outputs.push_back(makeOutput(*tensor_metadata, batch_size));
         }
         return response;
     }
@@ -47,14 +52,17 @@ class StubExecutor final : public Executor {
         return &*found;
     }
 
-    static OutputTensor makeOutput(const TensorMetadata &metadata) {
+    static OutputTensor makeOutput(const TensorMetadata &metadata, int64_t batch_size) {
         OutputTensor output;
         output.name = metadata.name;
         output.datatype = metadata.datatype;
         output.shape = metadata.shape;
+        if (!output.shape.empty()) {
+            output.shape[0] = batch_size;
+        }
 
         size_t element_count = 1;
-        for (const auto dimension : metadata.shape) {
+        for (const auto dimension : output.shape) {
             element_count *= static_cast<size_t>(dimension);
         }
         output.data.assign(element_count, 0.0);

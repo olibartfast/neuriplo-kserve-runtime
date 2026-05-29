@@ -15,6 +15,11 @@ struct SchedulerMetricsSnapshot {
     uint64_t execution_ns_total = 0;
     uint64_t total_ns_total = 0;
     uint64_t completed_requests = 0;
+    uint64_t batches_formed = 0;
+    uint64_t batched_requests_total = 0;
+    // Nanoseconds; divide by 1e9 at Step 7 Prometheus export.
+    uint64_t batch_formation_ns_total = 0;
+    uint64_t batch_execution_ns_total = 0;
 };
 
 namespace SchedulerMetricNames {
@@ -27,6 +32,11 @@ inline constexpr const char *requestsTimedOut = "neuriplo_scheduler_requests_tim
 inline constexpr const char *queueWaitSeconds = "neuriplo_scheduler_queue_wait_seconds";
 inline constexpr const char *executionSeconds = "neuriplo_scheduler_execution_seconds";
 inline constexpr const char *totalSeconds = "neuriplo_scheduler_request_total_seconds";
+inline constexpr const char *batchesFormed = "neuriplo_scheduler_batches_formed_total";
+inline constexpr const char *batchedRequests = "neuriplo_scheduler_batched_requests_total";
+inline constexpr const char *batchFormationSeconds = "neuriplo_scheduler_batch_formation_seconds";
+inline constexpr const char *batchExecutionSeconds = "neuriplo_scheduler_batch_execution_seconds";
+inline constexpr const char *batchSize = "neuriplo_scheduler_batch_size";
 
 inline constexpr const char *modelLabel = "model";
 

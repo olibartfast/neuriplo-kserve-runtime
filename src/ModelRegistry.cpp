@@ -73,6 +73,10 @@ void ModelRegistry::loadModel(const RuntimeConfig &config, ExecutorFactory facto
     scheduler_config.max_queue_size = config.max_queue_size;
     scheduler_config.request_timeout_ms = config.request_timeout_ms;
     scheduler_config.instances = config.instances;
+    scheduler_config.dynamic_batching.enabled = config.dynamic_batching_enabled;
+    scheduler_config.dynamic_batching.max_batch_size = config.max_batch_size;
+    scheduler_config.dynamic_batching.max_queue_delay_us = config.max_queue_delay_us;
+    scheduler_config.dynamic_batching.preferred_batch_sizes = config.preferred_batch_sizes;
     handle_.scheduler =
         makeModelScheduler(std::move(executors), scheduler_config, config.model_name);
     handle_.state = ModelState::Ready;
