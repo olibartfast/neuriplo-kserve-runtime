@@ -4,9 +4,13 @@
 #include "RuntimeConfig.hpp"
 #include "Test.hpp"
 
+#include <chrono>
+#include <condition_variable>
 #include <cstddef>
 #include <memory>
+#include <mutex>
 #include <string>
+#include <thread>
 #include <utility>
 
 namespace {
@@ -309,4 +313,88 @@ TEST_CASE(kserve_runtime_passes_input_tensors_to_executor) {
         R"({"inputs":[{"name":"input","shape":[1,3],"datatype":"FP32","data":[4.0,5.5,6.0]}]})");
     REQUIRE_EQ(response.status, 200);
     REQUIRE(response.body.find(R"("data":[5.5])") != std::string::npos);
+}
+
+TEST_CASE(kserve_runtime_returns_overload_when_queue_is_full) {
+    RuntimeConfig config;
+    config.model_name = "demo";
+    config.backend = "stub";
+    config.max_queue_size = 1;
+    config.instances = 1;
+    config.request_timeout_ms = 5000;
+
+    struct BlockingExecutor final : Executor {
+        explicit BlockingExecutor(ModelMetadata metadata) : metadata_(std::move(metadata)) {}
+        const ModelMetadata &metadata() const override {
+            return metadata_;
+        }
+        ExecutionResponse infer(const ExecutionRequest &request) override {
+            (void)request;
+            std::unique_lock<std::mutex> lock(mutex_);
+            cv_.wait(lock, [this]() { return release_; });
+            ExecutionResponse response;
+            OutputTensor output;
+            output.name = "output";
+            output.datatype = "FP32";
+            output.shape = {1, 1};
+            output.data = {1.0};
+            response.outputs.push_back(std::move(output));
+            return response;
+        }
+        void releaseAll() {
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                release_ = true;
+            }
+            cv_.notify_all();
+        }
+        ModelMetadata metadata_;
+        std::mutex mutex_;
+        std::condition_variable cv_;
+        bool release_ = false;
+    };
+
+    BlockingExecutor *blocking_ptr = nullptr;
+    ModelRegistry registry(config, [&](const RuntimeConfig &cfg, std::string &error) {
+        (void)error;
+        ModelMetadata metadata;
+        metadata.name = cfg.model_name;
+        metadata.versions = {"1"};
+        metadata.platform = "test_blocking";
+        metadata.inputs.push_back({"input", "FP32", {1, 3, 224, 224}});
+        metadata.outputs.push_back({"output", "FP32", {1, 1}});
+        auto executor = std::make_unique<BlockingExecutor>(std::move(metadata));
+        blocking_ptr = executor.get();
+        return executor;
+    });
+    const KServeRuntime runtime(std::move(registry));
+
+    std::thread first([&]() {
+        (void)request(runtime, "POST", "/v2/models/demo/infer", validInferBody("first"));
+    });
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    std::thread second([&]() {
+        (void)request(runtime, "POST", "/v2/models/demo/infer", validInferBody("second"));
+    });
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+
+    const auto response =
+        request(runtime, "POST", "/v2/models/demo/infer", validInferBody("third"));
+    REQUIRE_EQ(response.status, 429);
+    REQUIRE(response.body.find(R"("code":"OVERLOADED")") != std::string::npos);
+
+    blocking_ptr->releaseAll();
+    first.join();
+    second.join();
+}
+
+TEST_CASE(kserve_runtime_reports_not_ready_while_draining) {
+    RuntimeConfig config;
+    config.model_name = "demo";
+    config.backend = "stub";
+    ModelRegistry registry(config);
+    REQUIRE(registry.beginDrain("demo"));
+    const KServeRuntime runtime(std::move(registry));
+    REQUIRE_EQ(request(runtime, "GET", "/v2/health/ready").status, 503);
+    REQUIRE_EQ(request(runtime, "GET", "/v2/models/demo/ready").status, 503);
 }

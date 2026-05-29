@@ -78,11 +78,19 @@ RuntimeConfig parseRuntimeConfig(int argc, char **argv, const RuntimeEnvironment
             config.model_path = requireValue(i, argc, argv, arg);
         } else if (arg == "--backend") {
             config.backend = requireValue(i, argc, argv, arg);
+        } else if (arg == "--max-queue-size") {
+            config.max_queue_size =
+                static_cast<size_t>(std::stoull(requireValue(i, argc, argv, arg)));
+        } else if (arg == "--request-timeout-ms") {
+            config.request_timeout_ms = std::stoll(requireValue(i, argc, argv, arg));
+        } else if (arg == "--instances") {
+            config.instances = static_cast<size_t>(std::stoull(requireValue(i, argc, argv, arg)));
         } else if (arg == "--help" || arg == "-h") {
             throw std::invalid_argument(
                 "usage: neuriplo-kserve-runtime [--host 0.0.0.0] [--port 8080] "
                 "[--max-request-bytes 67108864] [--model-name demo] [--model-path path] "
-                "[--backend stub]");
+                "[--backend stub] [--max-queue-size 64] [--request-timeout-ms 30000] "
+                "[--instances 1]");
         } else {
             throw std::invalid_argument("unknown argument: " + arg);
         }
@@ -97,6 +105,15 @@ RuntimeConfig parseRuntimeConfig(int argc, char **argv, const RuntimeEnvironment
     if (config.max_request_bytes == 0 ||
         config.max_request_bytes > static_cast<size_t>(std::numeric_limits<int64_t>::max())) {
         throw std::invalid_argument("max request bytes must be greater than 0");
+    }
+    if (config.max_queue_size == 0) {
+        throw std::invalid_argument("max queue size must be greater than 0");
+    }
+    if (config.request_timeout_ms <= 0) {
+        throw std::invalid_argument("request timeout must be greater than 0");
+    }
+    if (config.instances == 0) {
+        throw std::invalid_argument("instances must be greater than 0");
     }
 
     return config;

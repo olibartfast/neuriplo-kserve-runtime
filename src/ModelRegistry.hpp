@@ -27,6 +27,7 @@ class ModelRegistry {
     bool readyVersion(const std::string &model_name, const std::string &version) const;
     bool allReady() const;
     std::optional<std::string> defaultVersion(const std::string &model_name) const;
+    bool beginDrain(const std::string &model_name);
 
   private:
     void loadModel(const RuntimeConfig &config, ExecutorFactory factory);

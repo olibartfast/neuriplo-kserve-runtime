@@ -1,8 +1,8 @@
 #pragma once
 
-#include "Executor.hpp"
 #include "ModelMetadata.hpp"
 #include "ModelState.hpp"
+#include "Scheduler.hpp"
 
 #include <memory>
 #include <optional>
@@ -14,10 +14,10 @@ struct ModelHandle {
     std::vector<std::string> versions;
     ModelState state = ModelState::Loading;
     ModelMetadata metadata;
-    std::unique_ptr<Executor> executor;
+    std::unique_ptr<Scheduler> scheduler;
     std::optional<std::string> load_error;
 
     bool isReady() const {
-        return state == ModelState::Ready;
+        return state == ModelState::Ready && scheduler != nullptr && scheduler->isReady();
     }
 };

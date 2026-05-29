@@ -1,6 +1,7 @@
 #include "KServeRuntime.hpp"
 
 #include "KServeV2Codec.hpp"
+#include "Scheduler.hpp"
 
 #include <nlohmann/json.hpp>
 #include <utility>
@@ -161,6 +162,9 @@ HttpResponse KServeRuntime::modelReady(const std::string &model_name,
         return error(404, "MODEL_NOT_FOUND", "model not found: " + model_name);
     }
     if (!handle->isReady()) {
+        if (handle->scheduler != nullptr && handle->scheduler->isDraining()) {
+            return error(503, "UNAVAILABLE", "model is draining");
+        }
         return modelStateError(*handle);
     }
     return json(200, R"({"ready":true})");
@@ -173,10 +177,13 @@ HttpResponse KServeRuntime::infer(const std::string &model_name, const std::stri
         return error(404, "MODEL_NOT_FOUND", "model not found: " + model_name);
     }
     if (!handle->isReady()) {
+        if (handle->scheduler != nullptr && handle->scheduler->isDraining()) {
+            return error(503, "UNAVAILABLE", "model is draining");
+        }
         return modelStateError(*handle);
     }
-    if (handle->executor == nullptr) {
-        return error(503, "UNAVAILABLE", "model executor is unavailable");
+    if (handle->scheduler == nullptr) {
+        return error(503, "UNAVAILABLE", "model scheduler is unavailable");
     }
 
     const auto parsed = parseInferenceRequest(request.body, handle->metadata);
@@ -188,7 +195,29 @@ HttpResponse KServeRuntime::infer(const std::string &model_name, const std::stri
     execution_request.id = parsed.request.id;
     execution_request.inputs = parsed.request.inputs;
     execution_request.requested_outputs = parsed.request.requested_outputs;
-    const auto execution_response = handle->executor->infer(execution_request);
+    const auto scheduled = handle->scheduler->submit(std::move(execution_request));
+    if (!scheduled.ok) {
+        switch (scheduled.scheduler_error) {
+        case SchedulerError::Overloaded:
+            return error(429, scheduled.error_code.empty() ? "OVERLOADED" : scheduled.error_code,
+                         scheduled.error_message.empty() ? "request queue is full"
+                                                         : scheduled.error_message);
+        case SchedulerError::Timeout:
+            return error(504,
+                         scheduled.error_code.empty() ? "DEADLINE_EXCEEDED" : scheduled.error_code,
+                         scheduled.error_message.empty() ? "request exceeded deadline"
+                                                         : scheduled.error_message);
+        case SchedulerError::Draining:
+        case SchedulerError::Unavailable:
+            return error(503, scheduled.error_code.empty() ? "UNAVAILABLE" : scheduled.error_code,
+                         scheduled.error_message.empty() ? "model is unavailable"
+                                                         : scheduled.error_message);
+        case SchedulerError::None:
+            break;
+        }
+    }
+
+    const auto &execution_response = scheduled.response;
     if (!execution_response.ok) {
         const auto status = execution_response.error_code == "INVALID_ARGUMENT" ? 400 : 500;
         const auto code =

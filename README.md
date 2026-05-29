@@ -100,6 +100,9 @@ valgrind --leak-check=full --error-exitcode=1 ./build/debug/neuriplo-kserve-runt
   --model-path /models/model.onnx \
   --backend onnx_runtime \
   --max-request-bytes 67108864 \
+  --max-queue-size 64 \
+  --request-timeout-ms 30000 \
+  --instances 1 \
   --port 8080
 ```
 
@@ -112,6 +115,14 @@ MODEL_PATH   default model path
 BACKEND      default backend name
 STORAGE_URI  retained for diagnostics; the server does not download it
 MAX_REQUEST_BYTES  maximum accepted HTTP request size
+```
+
+Scheduler flags:
+
+```text
+--max-queue-size <count>       bounded per-model request queue capacity (default 64)
+--request-timeout-ms <ms>      request deadline in milliseconds (default 30000)
+--instances <count>            worker threads and executor instances per model (default 1)
 ```
 
 When `MODEL_PATH` is unset and `/mnt/models` exists, the runtime uses

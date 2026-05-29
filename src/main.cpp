@@ -21,7 +21,8 @@ bool hasFlag(int argc, char **argv, const std::string &flag) {
 void printUsage(std::ostream &out) {
     out << "usage: neuriplo-kserve-runtime [--host 0.0.0.0] [--port 8080] "
            "[--max-request-bytes 67108864] [--model-name demo] [--model-path path] "
-           "[--backend stub]"
+           "[--backend stub] [--max-queue-size 64] [--request-timeout-ms 30000] "
+           "[--instances 1]"
         << '\n';
 }
 
