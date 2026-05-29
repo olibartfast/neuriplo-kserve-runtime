@@ -154,7 +154,7 @@ TEST_CASE(real_neuriplo_onnx_identity_golden_comparison) {
 
     const auto *handle = registry.findHandle("identity");
     REQUIRE(handle != nullptr);
-    REQUIRE(handle->executor != nullptr);
+    REQUIRE(handle->scheduler != nullptr);
     REQUIRE_EQ(handle->metadata.inputs.size(), static_cast<size_t>(1));
     REQUIRE_EQ(handle->metadata.outputs.size(), static_cast<size_t>(1));
     REQUIRE_EQ(handle->metadata.inputs[0].name, "input");
@@ -172,7 +172,9 @@ TEST_CASE(real_neuriplo_onnx_identity_golden_comparison) {
     request.inputs.push_back(input);
     request.requested_outputs = {"output"};
 
-    const auto response = handle->executor->infer(request);
+    const auto scheduled = handle->scheduler->submit(std::move(request));
+    REQUIRE(scheduled.ok);
+    const auto &response = scheduled.response;
     REQUIRE(response.ok);
     REQUIRE_EQ(response.outputs.size(), static_cast<size_t>(1));
     REQUIRE_EQ(response.outputs[0].name, "output");

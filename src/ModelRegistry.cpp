@@ -1,11 +1,13 @@
 #include "ModelRegistry.hpp"
 
 #include "NeuriploExecutor.hpp"
+#include "Scheduler.hpp"
 #include "StubExecutor.hpp"
 
 #include <array>
 #include <stdexcept>
 #include <utility>
+#include <vector>
 
 namespace {
 
@@ -46,20 +48,33 @@ void ModelRegistry::loadModel(const RuntimeConfig &config, ExecutorFactory facto
     handle_.versions = {"1"};
     handle_.state = ModelState::Loading;
 
+    std::vector<std::unique_ptr<Executor>> executors;
+    executors.reserve(config.instances);
     std::string error;
-    handle_.executor = factory(config, error);
-    if (!handle_.executor) {
-        handle_.state = ModelState::Failed;
-        handle_.load_error = error.empty() ? "failed to create executor" : error;
-        handle_.metadata.name = config.model_name;
-        handle_.metadata.versions = handle_.versions;
-        handle_.metadata.platform = "neuriplo_" + config.backend;
-        return;
+    for (size_t instance_index = 0; instance_index < config.instances; ++instance_index) {
+        (void)instance_index;
+        auto executor = factory(config, error);
+        if (!executor) {
+            handle_.state = ModelState::Failed;
+            handle_.load_error = error.empty() ? "failed to create executor" : error;
+            handle_.metadata.name = config.model_name;
+            handle_.metadata.versions = handle_.versions;
+            handle_.metadata.platform = "neuriplo_" + config.backend;
+            return;
+        }
+        executors.push_back(std::move(executor));
     }
 
-    handle_.metadata = handle_.executor->metadata();
+    handle_.metadata = executors.front()->metadata();
     handle_.name = handle_.metadata.name;
     handle_.versions = handle_.metadata.versions;
+
+    SchedulerConfig scheduler_config;
+    scheduler_config.max_queue_size = config.max_queue_size;
+    scheduler_config.request_timeout_ms = config.request_timeout_ms;
+    scheduler_config.instances = config.instances;
+    handle_.scheduler =
+        makeModelScheduler(std::move(executors), scheduler_config, config.model_name);
     handle_.state = ModelState::Ready;
 }
 
@@ -133,4 +148,12 @@ std::optional<std::string> ModelRegistry::defaultVersion(const std::string &mode
         return handle->versions.front();
     }
     return std::nullopt;
+}
+
+bool ModelRegistry::beginDrain(const std::string &model_name) {
+    if (model_name != handle_.name || handle_.scheduler == nullptr) {
+        return false;
+    }
+    handle_.scheduler->beginDrain();
+    return true;
 }
