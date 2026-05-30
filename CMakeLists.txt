@@ -142,3 +142,7 @@ endif()
 add_test(NAME unit COMMAND neuriplo-kserve-runtime-tests)
 add_test(NAME version COMMAND neuriplo-kserve-runtime --version)
 add_test(NAME help COMMAND neuriplo-kserve-runtime --help)
+
+# Bound each test so a deadlock fails the run in minutes instead of stalling
+# CI until the 6h job ceiling (sanitizer builds are slow, so keep headroom).
+set_tests_properties(unit version help PROPERTIES TIMEOUT 300)
