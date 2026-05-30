@@ -134,8 +134,13 @@ class ModelScheduler final : public Scheduler {
     }
 
     void beginDrain() override {
-        if (draining_.exchange(true, std::memory_order_acq_rel)) {
-            return;
+        {
+            // Flip draining_ under queue_mutex_ so a worker sitting between its
+            // predicate check and the internal cv wait cannot miss the wakeup.
+            std::lock_guard<std::mutex> lock(queue_mutex_);
+            if (draining_.exchange(true, std::memory_order_acq_rel)) {
+                return;
+            }
         }
 
         queue_cv_.notify_all();
