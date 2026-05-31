@@ -264,13 +264,14 @@ TEST_CASE(scheduler_rejects_when_queue_is_full) {
     std::this_thread::sleep_for(std::chrono::milliseconds(20));
 
     const auto rejected = scheduler->submit(makeRequest("third"));
-    REQUIRE(!rejected.ok);
-    REQUIRE(rejected.scheduler_error == SchedulerError::Overloaded);
-    REQUIRE_EQ(rejected.error_code, "OVERLOADED");
 
     blocking_ptr->releaseAll();
     first.join();
     second.join();
+
+    REQUIRE(!rejected.ok);
+    REQUIRE(rejected.scheduler_error == SchedulerError::Overloaded);
+    REQUIRE_EQ(rejected.error_code, "QUEUE_FULL");
 }
 
 TEST_CASE(scheduler_preserves_fifo_order) {

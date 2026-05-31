@@ -48,7 +48,7 @@ SchedulerResult makeDrainingResult() {
 }
 
 SchedulerResult makeOverloadedResult() {
-    return makeSchedulerError(SchedulerError::Overloaded, "OVERLOADED", "request queue is full");
+    return makeSchedulerError(SchedulerError::Overloaded, "QUEUE_FULL", "request queue is full");
 }
 
 SchedulerResult makeExecutorFailureResult(std::string message) {
@@ -483,6 +483,10 @@ class ModelScheduler final : public Scheduler {
 
             recordLatencies(pending->enqueued_at, execution_started, execution_finished);
             SchedulerResult result;
+            result.queue_latency_ns = elapsedNs(pending->enqueued_at, execution_started);
+            result.execution_latency_ns = elapsedNs(execution_started, execution_finished);
+            result.total_latency_ns = elapsedNs(pending->enqueued_at, execution_finished);
+            result.batch_size = active_batch.size();
             result.response = split_responses.at(index);
             if (!result.response.ok) {
                 result.ok = false;
@@ -530,6 +534,10 @@ class ModelScheduler final : public Scheduler {
 
         recordLatencies(pending->enqueued_at, execution_started, execution_finished);
         SchedulerResult result;
+        result.queue_latency_ns = elapsedNs(pending->enqueued_at, execution_started);
+        result.execution_latency_ns = elapsedNs(execution_started, execution_finished);
+        result.total_latency_ns = elapsedNs(pending->enqueued_at, execution_finished);
+        result.batch_size = 1;
         result.response = std::move(response);
         if (!result.response.ok) {
             result.ok = false;

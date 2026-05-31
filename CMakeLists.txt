@@ -28,6 +28,8 @@ set(NEURIPLO_RUNTIME_SOURCES
     src/HttpServer.cpp
     src/KServeRuntime.cpp
     src/KServeV2Codec.cpp
+    src/Logging.cpp
+    src/MetricsRegistry.cpp
     src/ModelRegistry.cpp
     src/ModelScheduler.cpp
     src/NeuriploExecutor.cpp

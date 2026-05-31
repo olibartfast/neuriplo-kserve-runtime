@@ -145,6 +145,7 @@ POST /v2/models/{model_name}/infer
 GET  /v2/models/{model_name}/versions/{version}
 GET  /v2/models/{model_name}/versions/{version}/ready
 POST /v2/models/{model_name}/versions/{version}/infer
+GET  /metrics
 ```
 
 The stub model exposes static version `1`. Stub inference validates the V2 JSON
@@ -155,6 +156,78 @@ curl -X POST http://127.0.0.1:8080/v2/models/demo/infer \
   -H 'Content-Type: application/json' \
   -d '{"id":"example","inputs":[{"name":"input","shape":[1,3,224,224],"datatype":"FP32","data":[]}]}'
 ```
+
+## Observability
+
+### Metrics
+
+`GET /metrics` returns Prometheus text-format metrics:
+
+```text
+neuriplo_scheduler_queue_depth       (gauge)
+neuriplo_scheduler_in_flight_requests (gauge)
+neuriplo_scheduler_requests_accepted_total   (counter)
+neuriplo_scheduler_requests_rejected_total   (counter)
+neuriplo_scheduler_requests_timed_out_total  (counter)
+neuriplo_scheduler_queue_wait_seconds        (counter)
+neuriplo_scheduler_execution_seconds         (counter)
+neuriplo_scheduler_request_total_seconds     (counter)
+neuriplo_scheduler_batches_formed_total      (counter)
+neuriplo_scheduler_batched_requests_total    (counter)
+neuriplo_scheduler_batch_formation_seconds   (counter)
+neuriplo_scheduler_batch_execution_seconds   (counter)
+neuriplo_http_infer_requests_total           (counter)
+neuriplo_http_infer_requests_success_total   (counter)
+neuriplo_http_infer_requests_failure_total   (counter)
+neuriplo_model_load_success_total            (counter)
+neuriplo_model_load_failure_total            (counter)
+neuriplo_process_resident_memory_bytes       (gauge)
+```
+
+All scheduler metrics include a `model` label. Process memory reports
+`VmRSS` from `/proc/self/status`.
+
+Sample Prometheus scrape config:
+
+```yaml
+scrape_configs:
+  - job_name: neuriplo-kserve
+    static_configs:
+      - targets: ['localhost:8080']
+    metrics_path: /metrics
+```
+
+### Structured Logging
+
+Logs are emitted as JSON lines to stderr. Each event includes:
+
+```json
+{"timestamp":"2026-01-01T00:00:00.000Z","severity":"info","message":"infer request completed",
+ "model":"demo","model_version":"1","request_id":"abc","route":"/v2/models/demo/infer",
+ "status":200,"queue_latency_ns":50000,"infer_latency_ns":30000,"total_latency_ns":80000,
+ "batch_size":1,"request_bytes":100}
+```
+
+### Payload Logging
+
+By default only byte counts are logged. Enable full payload logging with
+`--log-payloads true`. This logs raw JSON request and response bodies for
+diagnostic purposes. Do not enable in production without redaction controls.
+
+### Error Taxonomy
+
+Stable error categories mapped to HTTP status codes:
+
+| Code                | HTTP | Description              |
+|---------------------|------|--------------------------|
+| INVALID_ARGUMENT    | 400  | Malformed request        |
+| MODEL_NOT_FOUND     | 404  | Unknown model            |
+| MODEL_NOT_READY     | 409  | Model not loaded yet     |
+| QUEUE_FULL          | 429  | Request queue at capacity|
+| DEADLINE_EXCEEDED   | 504  | Request timed out        |
+| BACKEND_ERROR       | 500  | Executor failure         |
+| UNAVAILABLE         | 503  | Model draining/failed    |
+| INTERNAL            | 500  | Unexpected error         |
 
 ## KServe Packaging
 
@@ -185,6 +258,30 @@ curl http://<host>/v2
 curl http://<host>/v2/health/ready
 curl http://<host>/v2/models/neuriplo-demo
 ```
+
+### Canary Rollout
+
+The canary example demonstrates changing the runtime image or model artifact
+with traffic splitting:
+
+```bash
+kubectl apply -f deploy/kserve/canary-inferenceservice.yaml
+```
+
+This deploys `neuriplo-demo-canary` with `canaryTrafficPercent: 30`, routing
+30% of traffic to the canary predictor. Adjust the percentage and verify both
+predictors return valid responses before promoting.
+
+### InferenceGraph
+
+The InferenceGraph example routes through the runtime without custom adapters:
+
+```bash
+kubectl apply -f deploy/kserve/inferencegraph.yaml
+```
+
+Response shape compatibility ensures sequence, switch, splitter, and ensemble
+routing work without changes to runtime output formats.
 
 The default image still uses the stub execution path unless it is built with
 `NEURIPLO_RUNTIME_ENABLE_REAL_NEURIPLO=ON` and the corresponding `neuriplo`

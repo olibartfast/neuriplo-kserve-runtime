@@ -1,5 +1,6 @@
 #include "HttpServer.hpp"
 #include "KServeRuntime.hpp"
+#include "MetricsRegistry.hpp"
 #include "ModelRegistry.hpp"
 #include "RuntimeConfig.hpp"
 #include "Test.hpp"
@@ -50,7 +51,7 @@ int findFreePort() {
 class TestServer {
   public:
     TestServer()
-        : port(findFreePort()), registry(config), runtime(std::move(registry)),
+        : port(findFreePort()), registry(config), metrics(), runtime(std::move(registry), metrics),
           server(
               "127.0.0.1", port,
               [this](const HttpRequest &request) { return runtime.handle(request); }, 1024) {
@@ -89,6 +90,7 @@ class TestServer {
 
     RuntimeConfig config;
     ModelRegistry registry;
+    MetricsRegistry metrics;
     KServeRuntime runtime;
     HttpServer server;
     std::thread thread;
