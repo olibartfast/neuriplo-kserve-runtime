@@ -132,13 +132,16 @@ RuntimeConfig parseRuntimeConfig(int argc, char **argv, const RuntimeEnvironment
         } else if (arg == "--preferred-batch-sizes") {
             config.preferred_batch_sizes =
                 parsePreferredBatchSizes(requireValue(i, argc, argv, arg));
+        } else if (arg == "--log-payloads") {
+            config.log_payloads = parseBoolFlag(requireValue(i, argc, argv, arg), arg);
         } else if (arg == "--help" || arg == "-h") {
             throw std::invalid_argument(
                 "usage: neuriplo-kserve-runtime [--host 0.0.0.0] [--port 8080] "
                 "[--max-request-bytes 67108864] [--model-name demo] [--model-path path] "
                 "[--backend stub] [--max-queue-size 64] [--request-timeout-ms 30000] "
                 "[--instances 1] [--dynamic-batching-enabled false] [--max-batch-size 1] "
-                "[--max-queue-delay-us 0] [--preferred-batch-sizes 2,4,8]");
+                "[--max-queue-delay-us 0] [--preferred-batch-sizes 2,4,8] "
+                "[--log-payloads false]");
         } else {
             throw std::invalid_argument("unknown argument: " + arg);
         }

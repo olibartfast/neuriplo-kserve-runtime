@@ -36,10 +36,12 @@ std::unique_ptr<Executor> defaultExecutorFactory(const RuntimeConfig &config, st
 
 } // namespace
 
-ModelRegistry::ModelRegistry(const RuntimeConfig &config)
-    : ModelRegistry(config, defaultExecutorFactory) {}
+ModelRegistry::ModelRegistry(const RuntimeConfig &config) : log_payloads_(config.log_payloads) {
+    loadModel(config, defaultExecutorFactory);
+}
 
-ModelRegistry::ModelRegistry(const RuntimeConfig &config, ExecutorFactory factory) {
+ModelRegistry::ModelRegistry(const RuntimeConfig &config, ExecutorFactory factory)
+    : log_payloads_(config.log_payloads) {
     loadModel(config, std::move(factory));
 }
 
@@ -160,4 +162,20 @@ bool ModelRegistry::beginDrain(const std::string &model_name) {
     }
     handle_.scheduler->beginDrain();
     return true;
+}
+
+SchedulerMetricsSnapshot ModelRegistry::schedulerMetrics(const std::string &model_name) const {
+    const auto *handle = findHandle(model_name);
+    if (handle == nullptr || handle->scheduler == nullptr) {
+        return {};
+    }
+    return handle->scheduler->metrics();
+}
+
+std::string ModelRegistry::modelName() const {
+    return handle_.name;
+}
+
+bool ModelRegistry::logPayloads() const {
+    return log_payloads_;
 }

@@ -1,0 +1,12 @@
+apiVersion: serving.kserve.io/v1alpha1
+kind: InferenceGraph
+metadata:
+  name: neuriplo-graph
+spec:
+  nodes:
+    root:
+      routerType: Sequence
+      steps:
+        - serviceName: neuriplo-demo
+        - serviceName: neuriplo-demo-canary
+          weight: 30

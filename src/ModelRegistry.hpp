@@ -28,9 +28,14 @@ class ModelRegistry {
     bool allReady() const;
     std::optional<std::string> defaultVersion(const std::string &model_name) const;
     bool beginDrain(const std::string &model_name);
+    SchedulerMetricsSnapshot schedulerMetrics(const std::string &model_name) const;
+
+    std::string modelName() const;
+    bool logPayloads() const;
 
   private:
     void loadModel(const RuntimeConfig &config, ExecutorFactory factory);
 
     ModelHandle handle_;
+    bool log_payloads_ = false;
 };

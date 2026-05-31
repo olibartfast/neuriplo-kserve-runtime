@@ -30,6 +30,10 @@ struct SchedulerResult {
     std::string error_code;
     std::string error_message;
     ExecutionResponse response;
+    uint64_t queue_latency_ns = 0;
+    uint64_t execution_latency_ns = 0;
+    uint64_t total_latency_ns = 0;
+    uint64_t batch_size = 0;
 };
 
 class Scheduler {

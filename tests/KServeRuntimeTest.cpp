@@ -1,5 +1,6 @@
 #include "KServeRuntime.hpp"
 #include "Executor.hpp"
+#include "MetricsRegistry.hpp"
 #include "ModelRegistry.hpp"
 #include "RuntimeConfig.hpp"
 #include "Test.hpp"
@@ -19,7 +20,8 @@ KServeRuntime makeRuntime() {
     RuntimeConfig config;
     config.model_name = "demo";
     config.backend = "stub";
-    return KServeRuntime(ModelRegistry(config));
+    static MetricsRegistry metrics;
+    return KServeRuntime(ModelRegistry(config), metrics);
 }
 
 HttpResponse request(const KServeRuntime &runtime, std::string method, std::string path) {
@@ -217,7 +219,8 @@ TEST_CASE(kserve_runtime_unversioned_infer_uses_default_executor_version) {
         };
         return std::make_unique<VersionedExecutor>(std::move(metadata));
     });
-    const KServeRuntime runtime(std::move(registry));
+    MetricsRegistry metrics4a;
+    const KServeRuntime runtime(std::move(registry), metrics4a);
     const auto response = request(runtime, "POST", "/v2/models/demo/infer", validInferBody());
     REQUIRE_EQ(response.status, 200);
     REQUIRE(response.body.find(R"("model_version":"42")") != std::string::npos);
@@ -232,7 +235,8 @@ TEST_CASE(kserve_runtime_reports_not_ready_when_model_load_failed) {
         error = "load failed";
         return nullptr;
     });
-    const KServeRuntime runtime(std::move(registry));
+    MetricsRegistry metrics4b;
+    const KServeRuntime runtime(std::move(registry), metrics4b);
     REQUIRE_EQ(request(runtime, "GET", "/v2/health/ready").status, 503);
     REQUIRE_EQ(request(runtime, "GET", "/v2/models/demo/ready").status, 503);
 }
@@ -269,7 +273,8 @@ TEST_CASE(kserve_runtime_uses_injected_executor_without_route_changes) {
         };
         return std::make_unique<MarkerExecutor>(std::move(metadata));
     });
-    const KServeRuntime runtime(std::move(registry));
+    MetricsRegistry metrics4c;
+    const KServeRuntime runtime(std::move(registry), metrics4c);
     const auto response = request(runtime, "POST", "/v2/models/demo/infer", validInferBody());
     REQUIRE_EQ(response.status, 200);
     REQUIRE(response.body.find(R"("data":[42.0])") != std::string::npos);
@@ -307,7 +312,8 @@ TEST_CASE(kserve_runtime_passes_input_tensors_to_executor) {
         };
         return std::make_unique<InputEchoExecutor>(std::move(metadata));
     });
-    const KServeRuntime runtime(std::move(registry));
+    MetricsRegistry metrics4d;
+    const KServeRuntime runtime(std::move(registry), metrics4d);
     const auto response = request(
         runtime, "POST", "/v2/models/demo/infer",
         R"({"inputs":[{"name":"input","shape":[1,3],"datatype":"FP32","data":[4.0,5.5,6.0]}]})");
@@ -367,7 +373,8 @@ TEST_CASE(kserve_runtime_returns_overload_when_queue_is_full) {
         blocking_ptr = executor.get();
         return executor;
     });
-    const KServeRuntime runtime(std::move(registry));
+    MetricsRegistry metrics4e;
+    const KServeRuntime runtime(std::move(registry), metrics4e);
 
     std::thread first([&]() {
         (void)request(runtime, "POST", "/v2/models/demo/infer", validInferBody("first"));
@@ -381,7 +388,7 @@ TEST_CASE(kserve_runtime_returns_overload_when_queue_is_full) {
     const auto response =
         request(runtime, "POST", "/v2/models/demo/infer", validInferBody("third"));
     REQUIRE_EQ(response.status, 429);
-    REQUIRE(response.body.find(R"("code":"OVERLOADED")") != std::string::npos);
+    REQUIRE(response.body.find(R"("code":"QUEUE_FULL")") != std::string::npos);
 
     blocking_ptr->releaseAll();
     first.join();
@@ -394,7 +401,63 @@ TEST_CASE(kserve_runtime_reports_not_ready_while_draining) {
     config.backend = "stub";
     ModelRegistry registry(config);
     REQUIRE(registry.beginDrain("demo"));
-    const KServeRuntime runtime(std::move(registry));
+    MetricsRegistry metrics4f;
+    const KServeRuntime runtime(std::move(registry), metrics4f);
     REQUIRE_EQ(request(runtime, "GET", "/v2/health/ready").status, 503);
     REQUIRE_EQ(request(runtime, "GET", "/v2/models/demo/ready").status, 503);
+}
+
+TEST_CASE(kserve_runtime_exposes_metrics_endpoint) {
+    const auto runtime = makeRuntime();
+    const auto response = request(runtime, "GET", "/metrics");
+    REQUIRE_EQ(response.status, 200);
+    REQUIRE(response.content_type.find("text/plain") != std::string::npos);
+    REQUIRE(response.body.find("neuriplo_scheduler_queue_depth") != std::string::npos);
+    REQUIRE(response.body.find("neuriplo_http_infer_requests_total") != std::string::npos);
+    REQUIRE(response.body.find("neuriplo_process_resident_memory_bytes") != std::string::npos);
+}
+
+TEST_CASE(kserve_runtime_observability_details) {
+    RuntimeConfig config;
+    config.model_name = "observability-demo";
+    config.backend = "stub";
+    config.log_payloads = true;
+
+    MetricsRegistry metrics;
+    KServeRuntime runtime(ModelRegistry(config), metrics);
+
+    // Call infer once to populate metrics and trace logs
+    const auto response = request(runtime, "POST", "/v2/models/observability-demo/infer",
+                                  validInferBody("test-request-123"));
+    REQUIRE_EQ(response.status, 200);
+
+    // 1. Verify metrics content
+    const auto metrics_response = request(runtime, "GET", "/metrics");
+    REQUIRE_EQ(metrics_response.status, 200);
+
+    // Check dynamic model labeling
+    REQUIRE(metrics_response.body.find("model=\"observability-demo\"") != std::string::npos);
+
+    // Check HTTP infer request counters
+    REQUIRE(metrics_response.body.find(
+                "neuriplo_http_infer_requests_total{model=\"observability-demo\"} 1") !=
+            std::string::npos);
+    REQUIRE(metrics_response.body.find(
+                "neuriplo_http_infer_requests_success_total{model=\"observability-demo\"} 1") !=
+            std::string::npos);
+
+    // Check detailed requests counter by status and model
+    REQUIRE(metrics_response.body.find(
+                "neuriplo_http_requests_total{model=\"observability-demo\",status=\"200\"} 1") !=
+            std::string::npos);
+
+    // Check histograms
+    REQUIRE(metrics_response.body.find("neuriplo_scheduler_queue_latency_seconds_bucket") !=
+            std::string::npos);
+    REQUIRE(metrics_response.body.find("neuriplo_scheduler_infer_latency_seconds_bucket") !=
+            std::string::npos);
+    REQUIRE(metrics_response.body.find("neuriplo_scheduler_total_latency_seconds_bucket") !=
+            std::string::npos);
+    REQUIRE(metrics_response.body.find("neuriplo_scheduler_batch_size_bucket") !=
+            std::string::npos);
 }

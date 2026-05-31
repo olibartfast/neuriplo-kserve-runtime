@@ -21,6 +21,7 @@ struct RuntimeConfig {
     size_t max_batch_size = 1;
     int64_t max_queue_delay_us = 0;
     std::vector<size_t> preferred_batch_sizes;
+    bool log_payloads = false;
 };
 
 struct RuntimeEnvironment {

@@ -1,0 +1,20 @@
+apiVersion: serving.kserve.io/v1beta1
+kind: InferenceService
+metadata:
+  name: neuriplo-demo-canary
+spec:
+  predictor:
+    canaryTrafficPercent: 30
+    model:
+      modelFormat:
+        name: neuriplo
+      protocolVersion: v2
+      runtime: neuriplo-kserve-runtime
+      storageUri: pvc://your-model-pvc/path/to/model
+      resources:
+        requests:
+          cpu: 100m
+          memory: 128Mi
+        limits:
+          cpu: "1"
+          memory: 512Mi

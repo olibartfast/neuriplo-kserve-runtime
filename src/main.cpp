@@ -1,11 +1,15 @@
 #include "HttpServer.hpp"
 #include "KServeRuntime.hpp"
+#include "Logging.hpp"
+#include "MetricsRegistry.hpp"
 #include "ModelRegistry.hpp"
 #include "RuntimeConfig.hpp"
 
+#include <chrono>
 #include <exception>
 #include <iostream>
 #include <string>
+#include <thread>
 
 namespace {
 
@@ -23,7 +27,8 @@ void printUsage(std::ostream &out) {
            "[--max-request-bytes 67108864] [--model-name demo] [--model-path path] "
            "[--backend stub] [--max-queue-size 64] [--request-timeout-ms 30000] "
            "[--instances 1] [--dynamic-batching-enabled false] [--max-batch-size 1] "
-           "[--max-queue-delay-us 0] [--preferred-batch-sizes 2,4,8]"
+           "[--max-queue-delay-us 0] [--preferred-batch-sizes 2,4,8] "
+           "[--log-payloads false]"
         << '\n';
 }
 
@@ -41,12 +46,28 @@ int main(int argc, char **argv) {
 
     try {
         const auto config = parseRuntimeConfig(argc, argv);
+        MetricsRegistry metrics;
         ModelRegistry registry(config);
-        KServeRuntime runtime(std::move(registry));
+        KServeRuntime runtime(std::move(registry), metrics);
+
+        auto &logger = defaultLogger();
+        LogEvent startup;
+        startup.severity = "info";
+        startup.model = config.model_name;
+        startup.backend = config.backend;
+        startup.message = "runtime starting";
+        logger.event(startup);
+
+        metrics.recordModelLoadSuccess(config.model_name, config.backend);
+
         HttpServer server(
             config.host, config.port,
-            [&runtime](const HttpRequest &request) { return runtime.handle(request); },
+            [&runtime, &metrics](const HttpRequest &request) {
+                auto response = runtime.handle(request);
+                return response;
+            },
             config.max_request_bytes);
+
         server.run();
     } catch (const std::exception &error) {
         std::cerr << "fatal: " << error.what() << '\n';
