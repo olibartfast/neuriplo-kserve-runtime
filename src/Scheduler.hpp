@@ -24,6 +24,16 @@ struct SchedulerConfig {
     DynamicBatchingConfig dynamic_batching;
 };
 
+struct LlmSchedulerConfig {
+    size_t max_queue_size = 64;
+    int64_t request_timeout_ms = 30000;
+    size_t instances = 1;
+    size_t context_length = 4096;
+    size_t kv_cache_slots = 1;
+    size_t max_tokens = 256;
+    double tokens_per_char = 0.25;
+};
+
 struct SchedulerResult {
     bool ok = true;
     SchedulerError scheduler_error = SchedulerError::None;
@@ -49,3 +59,6 @@ class Scheduler {
 
 std::unique_ptr<Scheduler> makeModelScheduler(std::vector<std::unique_ptr<Executor>> executors,
                                               SchedulerConfig config, std::string model_name = {});
+
+std::unique_ptr<Scheduler> makeLlmScheduler(std::vector<std::unique_ptr<Executor>> executors,
+                                            LlmSchedulerConfig config, std::string model_name = {});

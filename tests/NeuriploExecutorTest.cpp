@@ -213,6 +213,99 @@ TEST_CASE(neuriplo_executor_rejects_data_length_mismatch) {
     REQUIRE(response.error_message.find("data length") != std::string::npos);
 }
 
+TEST_CASE(neuriplo_executor_supports_integer_datatypes) {
+    RuntimeConfig cfg = config();
+    ModelMetadata metadata;
+    metadata.name = cfg.model_name;
+    metadata.versions = {"1"};
+    metadata.platform = "neuriplo_" + cfg.backend;
+    metadata.inputs.push_back({"input", "INT32", {1, 3}});
+    metadata.outputs.push_back({"scores", "INT32", {1, 2}});
+
+    auto adapter = std::make_unique<FakeNeuriploAdapter>(std::move(metadata));
+    adapter->infer_error = "";
+    auto real_adapter = adapter.get();
+
+    std::string error;
+    const auto executor = makeNeuriploExecutor(cfg, error, std::move(adapter));
+    REQUIRE(executor != nullptr);
+
+    ExecutionRequest execution_request;
+    execution_request.inputs.push_back({"input", "INT32", {1, 3}, {1.0, 2.0, 3.0}});
+
+    const auto response = executor->infer(execution_request);
+    REQUIRE(response.ok);
+    REQUIRE_EQ(real_adapter->last_inputs.size(), static_cast<size_t>(1));
+    REQUIRE_EQ(real_adapter->last_inputs[0].datatype, "INT32");
+    REQUIRE_EQ(real_adapter->last_inputs[0].data.size(), static_cast<size_t>(3));
+}
+
+TEST_CASE(neuriplo_executor_supports_fp16_datatype) {
+    RuntimeConfig cfg = config();
+    ModelMetadata metadata;
+    metadata.name = cfg.model_name;
+    metadata.versions = {"1"};
+    metadata.platform = "neuriplo_" + cfg.backend;
+    metadata.inputs.push_back({"input", "FP16", {1, 3}});
+    metadata.outputs.push_back({"scores", "FP16", {1, 2}});
+
+    auto adapter = std::make_unique<FakeNeuriploAdapter>(std::move(metadata));
+
+    std::string error;
+    const auto executor = makeNeuriploExecutor(cfg, error, std::move(adapter));
+    REQUIRE(executor != nullptr);
+
+    ExecutionRequest execution_request;
+    execution_request.inputs.push_back({"input", "FP16", {1, 3}, {1.0, 2.0, 3.0}});
+
+    const auto response = executor->infer(execution_request);
+    REQUIRE(response.ok);
+}
+
+TEST_CASE(neuriplo_executor_supports_fp64_datatype) {
+    RuntimeConfig cfg = config();
+    ModelMetadata metadata;
+    metadata.name = cfg.model_name;
+    metadata.versions = {"1"};
+    metadata.platform = "neuriplo_" + cfg.backend;
+    metadata.inputs.push_back({"input", "FP64", {1, 3}});
+    metadata.outputs.push_back({"scores", "FP64", {1, 2}});
+
+    auto adapter = std::make_unique<FakeNeuriploAdapter>(std::move(metadata));
+
+    std::string error;
+    const auto executor = makeNeuriploExecutor(cfg, error, std::move(adapter));
+    REQUIRE(executor != nullptr);
+
+    ExecutionRequest execution_request;
+    execution_request.inputs.push_back({"input", "FP64", {1, 3}, {1.0, 2.0, 3.0}});
+
+    const auto response = executor->infer(execution_request);
+    REQUIRE(response.ok);
+}
+
+TEST_CASE(neuriplo_executor_supports_uint8_datatype) {
+    RuntimeConfig cfg = config();
+    ModelMetadata metadata;
+    metadata.name = cfg.model_name;
+    metadata.versions = {"1"};
+    metadata.platform = "neuriplo_" + cfg.backend;
+    metadata.inputs.push_back({"input", "UINT8", {1, 3}});
+    metadata.outputs.push_back({"scores", "UINT8", {1, 2}});
+
+    auto adapter = std::make_unique<FakeNeuriploAdapter>(std::move(metadata));
+
+    std::string error;
+    const auto executor = makeNeuriploExecutor(cfg, error, std::move(adapter));
+    REQUIRE(executor != nullptr);
+
+    ExecutionRequest execution_request;
+    execution_request.inputs.push_back({"input", "UINT8", {1, 3}, {1.0, 2.0, 3.0}});
+
+    const auto response = executor->infer(execution_request);
+    REQUIRE(response.ok);
+}
+
 TEST_CASE(neuriplo_executor_maps_adapter_inference_failure) {
     auto adapter = std::make_unique<FakeNeuriploAdapter>(adapterMetadata(config()));
     adapter->infer_error = "backend failed";

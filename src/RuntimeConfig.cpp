@@ -36,6 +36,14 @@ void applySizeEnvironmentDefault(size_t &target, const RuntimeEnvironment &envir
     }
 }
 
+void applyDoubleEnvironmentDefault(double &target, const RuntimeEnvironment &environment,
+                                   const std::string &name) {
+    const auto value = environment.get(name);
+    if (value.has_value() && !value->empty()) {
+        target = std::stod(*value);
+    }
+}
+
 RuntimeEnvironment processEnvironment() {
     return RuntimeEnvironment{
         [](const std::string &name) -> std::optional<std::string> {
@@ -57,6 +65,41 @@ bool parseBoolFlag(const std::string &value, const std::string &flag) {
         return false;
     }
     throw std::invalid_argument(flag + " must be true or false");
+}
+
+void parseSchedulerStrategy(const std::string &value) {
+    if (value != "tensor" && value != "llm") {
+        throw std::invalid_argument("scheduler-strategy must be tensor or llm");
+    }
+}
+
+double parseTemperature(const std::string &value) {
+    const auto parsed = std::stod(value);
+    if (parsed < 0.0) {
+        throw std::invalid_argument("temperature must be greater than or equal to 0");
+    }
+    return parsed;
+}
+
+double parseTopP(const std::string &value) {
+    const auto parsed = std::stod(value);
+    if (parsed <= 0.0 || parsed > 1.0) {
+        throw std::invalid_argument("top-p must be in (0, 1]");
+    }
+    return parsed;
+}
+
+size_t parsePositiveSize(const std::string &value, const std::string &flag) {
+    const auto parsed = static_cast<size_t>(std::stoull(value));
+    if (parsed == 0) {
+        throw std::invalid_argument(flag + " must be greater than 0");
+    }
+    return parsed;
+}
+
+size_t parseNonNegativeSize(const std::string &value, const std::string &flag) {
+    (void)flag;
+    return static_cast<size_t>(std::stoull(value));
 }
 
 std::vector<size_t> parsePreferredBatchSizes(const std::string &value) {
@@ -82,6 +125,14 @@ std::vector<size_t> parsePreferredBatchSizes(const std::string &value) {
     return sizes;
 }
 
+double parseTokensPerChar(const std::string &value) {
+    const auto parsed = std::stod(value);
+    if (parsed <= 0.0 || parsed > 1.0) {
+        throw std::invalid_argument("tokens-per-char must be in (0, 1]");
+    }
+    return parsed;
+}
+
 } // namespace
 
 RuntimeConfig parseRuntimeConfig(int argc, char **argv) {
@@ -96,6 +147,7 @@ RuntimeConfig parseRuntimeConfig(int argc, char **argv, const RuntimeEnvironment
     applyStringEnvironmentDefault(config.backend, environment, "BACKEND");
     applyStringEnvironmentDefault(config.storage_uri, environment, "STORAGE_URI");
     applySizeEnvironmentDefault(config.max_request_bytes, environment, "MAX_REQUEST_BYTES");
+    applyDoubleEnvironmentDefault(config.tokens_per_char, environment, "TOKENS_PER_CHAR");
     if (config.model_path.empty() && environment.pathExists("/mnt/models")) {
         config.model_path = "/mnt/models";
     }
@@ -134,6 +186,28 @@ RuntimeConfig parseRuntimeConfig(int argc, char **argv, const RuntimeEnvironment
                 parsePreferredBatchSizes(requireValue(i, argc, argv, arg));
         } else if (arg == "--log-payloads") {
             config.log_payloads = parseBoolFlag(requireValue(i, argc, argv, arg), arg);
+        } else if (arg == "--scheduler-strategy") {
+            const auto value = requireValue(i, argc, argv, arg);
+            parseSchedulerStrategy(value);
+            config.scheduler_strategy = value;
+        } else if (arg == "--context-length") {
+            config.context_length =
+                parsePositiveSize(requireValue(i, argc, argv, arg), "context-length");
+        } else if (arg == "--kv-cache-slots") {
+            config.kv_cache_slots =
+                parsePositiveSize(requireValue(i, argc, argv, arg), "kv-cache-slots");
+        } else if (arg == "--max-tokens") {
+            config.max_tokens = parsePositiveSize(requireValue(i, argc, argv, arg), "max-tokens");
+        } else if (arg == "--temperature") {
+            config.temperature = parseTemperature(requireValue(i, argc, argv, arg));
+        } else if (arg == "--top-p") {
+            config.top_p = parseTopP(requireValue(i, argc, argv, arg));
+        } else if (arg == "--top-k") {
+            config.top_k = parseNonNegativeSize(requireValue(i, argc, argv, arg), "top-k");
+        } else if (arg == "--streaming-enabled") {
+            config.streaming_enabled = parseBoolFlag(requireValue(i, argc, argv, arg), arg);
+        } else if (arg == "--tokens-per-char") {
+            config.tokens_per_char = parseTokensPerChar(requireValue(i, argc, argv, arg));
         } else if (arg == "--help" || arg == "-h") {
             throw std::invalid_argument(
                 "usage: neuriplo-kserve-runtime [--host 0.0.0.0] [--port 8080] "
@@ -141,7 +215,10 @@ RuntimeConfig parseRuntimeConfig(int argc, char **argv, const RuntimeEnvironment
                 "[--backend stub] [--max-queue-size 64] [--request-timeout-ms 30000] "
                 "[--instances 1] [--dynamic-batching-enabled false] [--max-batch-size 1] "
                 "[--max-queue-delay-us 0] [--preferred-batch-sizes 2,4,8] "
-                "[--log-payloads false]");
+                "[--log-payloads false] [--scheduler-strategy tensor] "
+                "[--context-length 4096] [--kv-cache-slots 1] [--max-tokens 256] "
+                "[--temperature 0.8] [--top-p 0.95] [--top-k 40] "
+                "[--streaming-enabled false] [--tokens-per-char 0.25]");
         } else {
             throw std::invalid_argument("unknown argument: " + arg);
         }
@@ -176,6 +253,7 @@ RuntimeConfig parseRuntimeConfig(int argc, char **argv, const RuntimeEnvironment
         throw std::invalid_argument("max batch size must be at least 2 when dynamic batching "
                                     "is enabled");
     }
+    parseSchedulerStrategy(config.scheduler_strategy);
 
     return config;
 }

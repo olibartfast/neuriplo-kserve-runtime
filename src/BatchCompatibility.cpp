@@ -36,6 +36,17 @@ int64_t requestBatchSize(const ExecutionRequest &request) {
 
 std::optional<std::string> batchCompatibilityError(const ExecutionRequest &left,
                                                    const ExecutionRequest &right) {
+    for (const auto &input : left.inputs) {
+        if (isBytesDatatype(input.datatype)) {
+            return "BYTES tensors are not batch-compatible";
+        }
+    }
+    for (const auto &input : right.inputs) {
+        if (isBytesDatatype(input.datatype)) {
+            return "BYTES tensors are not batch-compatible";
+        }
+    }
+
     if (left.inputs.size() != right.inputs.size()) {
         return "input count mismatch";
     }

@@ -1,5 +1,7 @@
 #include "StubExecutor.hpp"
 
+#include "BackendRegistry.hpp"
+
 #include <algorithm>
 #include <utility>
 
@@ -7,13 +9,27 @@ namespace {
 
 class StubExecutor final : public Executor {
   public:
-    explicit StubExecutor(ModelMetadata metadata) : metadata_(std::move(metadata)) {}
+    explicit StubExecutor(ModelMetadata metadata, bool llm_mode, size_t default_max_tokens)
+        : metadata_(std::move(metadata)), llm_mode_(llm_mode),
+          default_max_tokens_(default_max_tokens) {}
 
     const ModelMetadata &metadata() const override {
         return metadata_;
     }
 
     ExecutionResponse infer(const ExecutionRequest &request) override {
+        if (request.cancel_token && request.cancel_token->load(std::memory_order_acquire)) {
+            ExecutionResponse response;
+            response.ok = false;
+            response.error_code = "DEADLINE_EXCEEDED";
+            response.error_message = "request cancelled before inference";
+            return response;
+        }
+
+        if (llm_mode_) {
+            return inferLlm(request);
+        }
+
         std::vector<std::string> output_names;
         if (request.requested_outputs.empty()) {
             output_names.reserve(metadata_.outputs.size());
@@ -37,6 +53,59 @@ class StubExecutor final : public Executor {
                 continue;
             }
             response.outputs.push_back(makeOutput(*tensor_metadata, batch_size));
+        }
+        return response;
+    }
+
+    ExecutionResponse inferLlm(const ExecutionRequest &request) {
+        const InputTensor *prompt = nullptr;
+        for (const auto &input : request.inputs) {
+            if (isBytesDatatype(input.datatype)) {
+                prompt = &input;
+                break;
+            }
+        }
+        if (prompt == nullptr || prompt->string_data.empty()) {
+            ExecutionResponse response;
+            response.ok = false;
+            response.error_code = "INVALID_ARGUMENT";
+            response.error_message = "LLM request requires a BYTES prompt input";
+            return response;
+        }
+
+        size_t max_tokens = default_max_tokens_;
+        if (request.llm_params && request.llm_params->max_tokens) {
+            max_tokens = *request.llm_params->max_tokens;
+        }
+
+        std::string generated = "stub: ";
+        const auto &prompt_text = prompt->string_data.front();
+        const size_t append_chars = std::min(max_tokens, prompt_text.size());
+        generated.append(prompt_text.data(), append_chars);
+
+        std::vector<std::string> output_names;
+        if (request.requested_outputs.empty()) {
+            output_names.reserve(metadata_.outputs.size());
+            for (const auto &output : metadata_.outputs) {
+                output_names.push_back(output.name);
+            }
+        } else {
+            output_names = request.requested_outputs;
+        }
+
+        ExecutionResponse response;
+        response.outputs.reserve(output_names.size());
+        for (const auto &name : output_names) {
+            const auto *tensor_metadata = findOutput(name);
+            if (tensor_metadata == nullptr) {
+                continue;
+            }
+            OutputTensor output;
+            output.name = tensor_metadata->name;
+            output.datatype = tensor_metadata->datatype;
+            output.shape = tensor_metadata->shape;
+            output.string_data = {generated};
+            response.outputs.push_back(std::move(output));
         }
         return response;
     }
@@ -70,9 +139,11 @@ class StubExecutor final : public Executor {
     }
 
     ModelMetadata metadata_;
+    bool llm_mode_ = false;
+    size_t default_max_tokens_ = 256;
 };
 
-ModelMetadata stubMetadata(const RuntimeConfig &config) {
+ModelMetadata tensorStubMetadata(const RuntimeConfig &config) {
     ModelMetadata metadata;
     metadata.name = config.model_name;
     metadata.versions.push_back("1");
@@ -82,9 +153,21 @@ ModelMetadata stubMetadata(const RuntimeConfig &config) {
     return metadata;
 }
 
+ModelMetadata llmStubMetadata(const RuntimeConfig &config) {
+    ModelMetadata metadata;
+    metadata.name = config.model_name;
+    metadata.versions.push_back("1");
+    metadata.platform = "neuriplo_" + config.backend;
+    metadata.inputs.push_back({"prompt", "BYTES", {1}});
+    metadata.outputs.push_back({"text", "BYTES", {1}});
+    return metadata;
+}
+
 } // namespace
 
 std::unique_ptr<Executor> makeStubExecutor(const RuntimeConfig &config, std::string &error) {
     (void)error;
-    return std::make_unique<StubExecutor>(stubMetadata(config));
+    const bool llm_mode = usesLlmScheduler(config.scheduler_strategy, config.backend);
+    const auto metadata = llm_mode ? llmStubMetadata(config) : tensorStubMetadata(config);
+    return std::make_unique<StubExecutor>(std::move(metadata), llm_mode, config.max_tokens);
 }

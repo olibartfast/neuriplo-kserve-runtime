@@ -96,6 +96,9 @@ class ModelScheduler final : public Scheduler {
         auto promise = std::make_shared<std::promise<SchedulerResult>>();
         auto future = promise->get_future();
 
+        auto cancel_token = request.cancel_token ? request.cancel_token : makeCancelToken();
+        request.cancel_token = cancel_token;
+
         auto pending = std::make_shared<PendingRequest>();
         pending->request = std::move(request);
         pending->enqueued_at = enqueued_at;
@@ -120,6 +123,7 @@ class ModelScheduler final : public Scheduler {
             return future.get();
         }
 
+        cancel_token->store(true, std::memory_order_release);
         pending->cancelled.store(true, std::memory_order_release);
         incrementMetric(&SchedulerMetricsSnapshot::requests_timed_out);
         return makeTimeoutResult();
@@ -254,6 +258,9 @@ class ModelScheduler final : public Scheduler {
     }
 
     void fulfillExpiredRequest(const std::shared_ptr<PendingRequest> &pending) {
+        if (pending->request.cancel_token) {
+            pending->request.cancel_token->store(true, std::memory_order_release);
+        }
         incrementMetric(&SchedulerMetricsSnapshot::requests_timed_out);
         fulfillResult(pending, makeTimeoutResult());
     }
@@ -409,6 +416,9 @@ class ModelScheduler final : public Scheduler {
                 continue;
             }
             if (now >= pending->deadline) {
+                if (pending->request.cancel_token) {
+                    pending->request.cancel_token->store(true, std::memory_order_release);
+                }
                 incrementMetric(&SchedulerMetricsSnapshot::requests_timed_out);
                 fulfillResult(pending, makeTimeoutResult());
             }
@@ -460,6 +470,9 @@ class ModelScheduler final : public Scheduler {
 
         if (!completed) {
             for (const auto &pending : active_batch) {
+                if (pending->request.cancel_token) {
+                    pending->request.cancel_token->store(true, std::memory_order_release);
+                }
                 incrementMetric(&SchedulerMetricsSnapshot::requests_timed_out);
                 fulfillResult(pending, makeTimeoutResult());
             }
@@ -476,6 +489,9 @@ class ModelScheduler final : public Scheduler {
         for (size_t index = 0; index < active_batch.size(); ++index) {
             const auto &pending = active_batch[index];
             if (execution_finished >= pending->deadline) {
+                if (pending->request.cancel_token) {
+                    pending->request.cancel_token->store(true, std::memory_order_release);
+                }
                 incrementMetric(&SchedulerMetricsSnapshot::requests_timed_out);
                 fulfillResult(pending, makeTimeoutResult());
                 continue;
@@ -502,6 +518,9 @@ class ModelScheduler final : public Scheduler {
 
         const auto now = Clock::now();
         if (now >= pending->deadline) {
+            if (pending->request.cancel_token) {
+                pending->request.cancel_token->store(true, std::memory_order_release);
+            }
             incrementMetric(&SchedulerMetricsSnapshot::requests_timed_out);
             fulfillResult(pending, makeTimeoutResult());
             return;
@@ -518,6 +537,9 @@ class ModelScheduler final : public Scheduler {
         decrementInflight(executor_index);
 
         if (!completed) {
+            if (pending->request.cancel_token) {
+                pending->request.cancel_token->store(true, std::memory_order_release);
+            }
             incrementMetric(&SchedulerMetricsSnapshot::requests_timed_out);
             fulfillResult(pending, makeTimeoutResult());
             return;
@@ -527,6 +549,9 @@ class ModelScheduler final : public Scheduler {
             return;
         }
         if (execution_finished >= pending->deadline) {
+            if (pending->request.cancel_token) {
+                pending->request.cancel_token->store(true, std::memory_order_release);
+            }
             incrementMetric(&SchedulerMetricsSnapshot::requests_timed_out);
             fulfillResult(pending, makeTimeoutResult());
             return;

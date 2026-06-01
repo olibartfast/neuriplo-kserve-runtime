@@ -6,7 +6,11 @@
 #include "Scheduler.hpp"
 
 #include <chrono>
+#include <cstdint>
+#include <iomanip>
 #include <nlohmann/json.hpp>
+#include <random>
+#include <sstream>
 #include <string>
 #include <utility>
 
@@ -64,6 +68,12 @@ HttpResponse modelStateError(const ModelHandle &handle) {
             handle.load_error.has_value() ? *handle.load_error : "model failed to load";
         return error(503, KServeErrors::Unavailable, message);
     }
+    if (handle.state == ModelState::Unloaded) {
+        return error(503, KServeErrors::Unavailable, "model has been unloaded");
+    }
+    if (handle.state == ModelState::Loading) {
+        return error(503, KServeErrors::Unavailable, "model is still loading");
+    }
     if (handle.state == ModelState::Unavailable) {
         return error(503, KServeErrors::Unavailable, "model is unavailable");
     }
@@ -100,6 +110,19 @@ std::string errorMessageFor(SchedulerError err) {
     return "internal error";
 }
 
+std::string generateRequestId() {
+    static thread_local std::mt19937_64 rng(std::random_device{}());
+    static thread_local std::uniform_int_distribution<uint32_t> dist(0, 0xFFFFFFFFu);
+    std::ostringstream id;
+    id << std::hex << std::setfill('0');
+    for (int i = 0; i < 8; ++i) {
+        if (i > 0)
+            id << '-';
+        id << std::setw(8) << dist(rng);
+    }
+    return id.str();
+}
+
 } // namespace
 
 KServeRuntime::KServeRuntime(ModelRegistry registry, MetricsRegistry &metrics)
@@ -121,6 +144,9 @@ HttpResponse KServeRuntime::handle(const HttpRequest &request) const {
     }
     if (request.method == "GET" && request.path == "/metrics") {
         return metricsPage();
+    }
+    if (request.method == "POST" && request.path == "/v1/completions") {
+        return completions(request);
     }
 
     const auto route_tail = extractModelRouteTail(request.path);
@@ -222,28 +248,53 @@ HttpResponse KServeRuntime::modelReady(const std::string &model_name,
 
 HttpResponse KServeRuntime::infer(const std::string &model_name, const std::string &model_version,
                                   const HttpRequest &request) const {
-    const auto *handle = registry_.findHandleVersion(model_name, model_version);
-    if (handle == nullptr) {
+    const ModelHandle *handle = nullptr;
+    if (auto error_response = validateInferModel(model_name, model_version, handle)) {
+        return *error_response;
+    }
+
+    InferenceParseResult parsed;
+    if (auto error_response = decodeAndAdmit(request, model_name, model_version, *handle, parsed)) {
+        return *error_response;
+    }
+
+    auto scheduled = scheduleInfer(model_name, model_version, parsed, *handle);
+
+    return encodeInferResponse(model_name, model_version, request, parsed, scheduled);
+}
+
+std::optional<HttpResponse>
+KServeRuntime::validateInferModel(const std::string &model_name, const std::string &model_version,
+                                  const ModelHandle *&out_handle) const {
+    out_handle = registry_.findHandleVersion(model_name, model_version);
+    if (out_handle == nullptr) {
         return error(404, KServeErrors::ModelNotFound, "model not found: " + model_name);
     }
-    if (!handle->isReady()) {
-        if (handle->scheduler != nullptr && handle->scheduler->isDraining()) {
+    if (!out_handle->isReady()) {
+        if (out_handle->scheduler != nullptr && out_handle->scheduler->isDraining()) {
             return error(503, KServeErrors::Unavailable, "model is draining");
         }
-        return modelStateError(*handle);
+        return modelStateError(*out_handle);
     }
-    if (handle->scheduler == nullptr) {
+    if (out_handle->scheduler == nullptr) {
         return error(503, KServeErrors::Unavailable, "model scheduler is unavailable");
     }
+    return std::nullopt;
+}
 
-    const auto parsed = parseInferenceRequest(request.body, handle->metadata);
-    if (!parsed.ok) {
-        return error(400, KServeErrors::InvalidArgument, parsed.error_message);
+std::optional<HttpResponse> KServeRuntime::decodeAndAdmit(const HttpRequest &request,
+                                                          const std::string &model_name,
+                                                          const std::string &model_version,
+                                                          const ModelHandle &handle,
+                                                          InferenceParseResult &out_parsed) const {
+    out_parsed = parseInferenceRequest(request.body, handle.metadata);
+    if (!out_parsed.ok) {
+        return error(400, KServeErrors::InvalidArgument, out_parsed.error_message);
     }
 
-    const std::string request_id = parsed.request.id.has_value() ? *parsed.request.id : "";
+    const std::string request_id =
+        out_parsed.request.id.has_value() ? *out_parsed.request.id : generateRequestId();
 
-    // Trace Span: admit
     {
         LogEvent span;
         span.severity = "info";
@@ -257,7 +308,16 @@ HttpResponse KServeRuntime::infer(const std::string &model_name, const std::stri
         defaultLogger().event(span);
     }
 
-    // Trace Span: queue (enqueue start)
+    return std::nullopt;
+}
+
+SchedulerResult KServeRuntime::scheduleInfer(const std::string &model_name,
+                                             const std::string &model_version,
+                                             const InferenceParseResult &parsed,
+                                             const ModelHandle &handle) const {
+    const std::string request_id =
+        parsed.request.id.has_value() ? *parsed.request.id : generateRequestId();
+
     {
         LogEvent span;
         span.severity = "info";
@@ -265,7 +325,6 @@ HttpResponse KServeRuntime::infer(const std::string &model_name, const std::stri
         span.request_id = request_id;
         span.model = model_name;
         span.model_version = model_version;
-        span.route = request.path;
         defaultLogger().event(span);
     }
 
@@ -273,8 +332,55 @@ HttpResponse KServeRuntime::infer(const std::string &model_name, const std::stri
     execution_request.id = parsed.request.id;
     execution_request.inputs = parsed.request.inputs;
     execution_request.requested_outputs = parsed.request.requested_outputs;
+    execution_request.llm_params = parsed.request.llm_params;
 
-    auto scheduled = handle->scheduler->submit(std::move(execution_request));
+    auto scheduled = handle.scheduler->submit(std::move(execution_request));
+
+    {
+        LogEvent span;
+        span.severity = "info";
+        span.message = "span: batch form";
+        span.request_id = request_id;
+        span.model = model_name;
+        span.model_version = model_version;
+        span.batch_size = scheduled.batch_size;
+        span.queue_latency_ns = scheduled.queue_latency_ns;
+        defaultLogger().event(span);
+    }
+
+    {
+        LogEvent span;
+        span.severity = "info";
+        span.message = "span: infer";
+        span.request_id = request_id;
+        span.model = model_name;
+        span.model_version = model_version;
+        span.batch_size = scheduled.batch_size;
+        span.infer_latency_ns = scheduled.execution_latency_ns;
+        defaultLogger().event(span);
+    }
+
+    {
+        LogEvent span;
+        span.severity = "info";
+        span.message = "span: split";
+        span.request_id = request_id;
+        span.model = model_name;
+        span.model_version = model_version;
+        span.batch_size = scheduled.batch_size;
+        defaultLogger().event(span);
+    }
+
+    return scheduled;
+}
+
+HttpResponse KServeRuntime::encodeInferResponse(const std::string &model_name,
+                                                const std::string &model_version,
+                                                const HttpRequest &request,
+                                                const InferenceParseResult &parsed,
+                                                const SchedulerResult &scheduled) const {
+    const std::string request_id =
+        parsed.request.id.has_value() ? *parsed.request.id : generateRequestId();
 
     if (!scheduled.ok) {
         const auto code = scheduled.error_code.empty() ? errorCodeFor(scheduled.scheduler_error)
@@ -288,7 +394,6 @@ HttpResponse KServeRuntime::infer(const std::string &model_name, const std::stri
 
         HttpResponse err_res = error(status, code, msg);
 
-        // Trace Span: respond (on queue failure)
         {
             LogEvent span;
             span.severity = "warn";
@@ -308,47 +413,6 @@ HttpResponse KServeRuntime::infer(const std::string &model_name, const std::stri
         return err_res;
     }
 
-    // Trace Span: batch form
-    {
-        LogEvent span;
-        span.severity = "info";
-        span.message = "span: batch form";
-        span.request_id = request_id;
-        span.model = model_name;
-        span.model_version = model_version;
-        span.route = request.path;
-        span.batch_size = scheduled.batch_size;
-        span.queue_latency_ns = scheduled.queue_latency_ns;
-        defaultLogger().event(span);
-    }
-
-    // Trace Span: infer (execution starts/completes)
-    {
-        LogEvent span;
-        span.severity = "info";
-        span.message = "span: infer";
-        span.request_id = request_id;
-        span.model = model_name;
-        span.model_version = model_version;
-        span.route = request.path;
-        span.batch_size = scheduled.batch_size;
-        span.infer_latency_ns = scheduled.execution_latency_ns;
-        defaultLogger().event(span);
-    }
-
-    // Trace Span: split (results split from batch)
-    {
-        LogEvent span;
-        span.severity = "info";
-        span.message = "span: split";
-        span.request_id = request_id;
-        span.model = model_name;
-        span.model_version = model_version;
-        span.route = request.path;
-        span.batch_size = scheduled.batch_size;
-        defaultLogger().event(span);
-    }
-
     const auto &execution_response = scheduled.response;
     if (!execution_response.ok) {
         const auto status =
@@ -365,7 +429,6 @@ HttpResponse KServeRuntime::infer(const std::string &model_name, const std::stri
 
         HttpResponse err_res = error(status, code, message);
 
-        // Trace Span: respond (on execution failure)
         {
             LogEvent span;
             span.severity = "error";
@@ -396,7 +459,6 @@ HttpResponse KServeRuntime::infer(const std::string &model_name, const std::stri
     HttpResponse success_res = json(
         200, inferenceResponseJson(model_name, model_version, parsed.request, execution_response));
 
-    // Trace Span: respond (on success)
     {
         LogEvent span;
         span.severity = "info";
@@ -417,4 +479,129 @@ HttpResponse KServeRuntime::infer(const std::string &model_name, const std::stri
     }
 
     return success_res;
+}
+
+HttpResponse KServeRuntime::completions(const HttpRequest &request) const {
+    using Json = nlohmann::json;
+
+    Json body;
+    try {
+        body = Json::parse(request.body);
+    } catch (const Json::parse_error &) {
+        return error(400, KServeErrors::InvalidArgument, "invalid JSON request body");
+    }
+
+    if (!body.is_object()) {
+        return error(400, KServeErrors::InvalidArgument, "request body must be a JSON object");
+    }
+
+    if (!body.contains("model") || !body["model"].is_string()) {
+        return error(400, KServeErrors::InvalidArgument, "model name must be a string");
+    }
+    const std::string model_name = body["model"].get<std::string>();
+
+    if (!body.contains("prompt")) {
+        return error(400, KServeErrors::InvalidArgument, "prompt is required");
+    }
+    std::string prompt_text;
+    if (body["prompt"].is_string()) {
+        prompt_text = body["prompt"].get<std::string>();
+    } else if (body["prompt"].is_array()) {
+        for (const auto &elem : body["prompt"]) {
+            if (!elem.is_string()) {
+                return error(400, KServeErrors::InvalidArgument,
+                             "prompt array elements must be strings");
+            }
+            prompt_text += elem.get<std::string>();
+        }
+    } else {
+        return error(400, KServeErrors::InvalidArgument, "prompt must be a string or array");
+    }
+
+    const auto *handle = registry_.findHandle(model_name);
+    if (handle == nullptr) {
+        return error(404, KServeErrors::ModelNotFound, "model not found: " + model_name);
+    }
+    if (!handle->isReady()) {
+        return error(503, KServeErrors::Unavailable, "model is not ready");
+    }
+    if (handle->scheduler == nullptr) {
+        return error(503, KServeErrors::Unavailable, "model scheduler is unavailable");
+    }
+
+    InferenceRequest inf_req;
+    inf_req.id = generateRequestId();
+    inf_req.llm_params = LlmGenerationParams{};
+    if (body.contains("max_tokens") && body["max_tokens"].is_number_unsigned()) {
+        inf_req.llm_params->max_tokens = body["max_tokens"].get<size_t>();
+    }
+    if (body.contains("temperature") && body["temperature"].is_number()) {
+        inf_req.llm_params->temperature = body["temperature"].get<double>();
+    }
+    if (body.contains("top_p") && body["top_p"].is_number()) {
+        inf_req.llm_params->top_p = body["top_p"].get<double>();
+    }
+    if (body.contains("stream") && body["stream"].is_boolean()) {
+        inf_req.llm_params->streaming = body["stream"].get<bool>();
+    }
+
+    const size_t prompt_char_count = prompt_text.size();
+
+    InputTensor prompt_tensor;
+    prompt_tensor.name = "prompt";
+    prompt_tensor.datatype = "BYTES";
+    prompt_tensor.shape = {1};
+    prompt_tensor.string_data = {std::move(prompt_text)};
+    inf_req.inputs.push_back(std::move(prompt_tensor));
+
+    ExecutionRequest exec_req;
+    exec_req.id = inf_req.id;
+    exec_req.inputs = inf_req.inputs;
+    exec_req.llm_params = inf_req.llm_params;
+
+    auto scheduled = handle->scheduler->submit(std::move(exec_req));
+
+    if (!scheduled.ok) {
+        return error(429, KServeErrors::QueueFull, scheduled.error_message);
+    }
+
+    if (!scheduled.response.ok) {
+        return error(500, KServeErrors::BackendError, scheduled.response.error_message);
+    }
+
+    std::string generated_text;
+    for (const auto &output : scheduled.response.outputs) {
+        if (output.datatype == "BYTES" && !output.string_data.empty()) {
+            generated_text += output.string_data.front();
+        }
+    }
+
+    const auto now = std::chrono::system_clock::now();
+    const auto created =
+        std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch()).count();
+
+    Json response;
+    response["id"] = "cmpl-" + (inf_req.id.has_value() ? *inf_req.id : "");
+    response["object"] = "text_completion";
+    response["created"] = created;
+    response["model"] = model_name;
+    response["choices"] = Json::array();
+
+    Json choice;
+    choice["index"] = 0;
+    choice["text"] = generated_text;
+    choice["finish_reason"] = "stop";
+    response["choices"].push_back(choice);
+
+    size_t estimated_prompt_tokens =
+        static_cast<size_t>(static_cast<double>(prompt_char_count) * registry_.tokensPerChar());
+    size_t estimated_completion_tokens =
+        static_cast<size_t>(static_cast<double>(generated_text.size()) * registry_.tokensPerChar());
+    response["usage"] = Json{
+        {"prompt_tokens", estimated_prompt_tokens},
+        {"completion_tokens", estimated_completion_tokens},
+        {"total_tokens", estimated_prompt_tokens + estimated_completion_tokens},
+    };
+
+    return json(200, response.dump());
 }

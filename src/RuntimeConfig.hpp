@@ -22,6 +22,15 @@ struct RuntimeConfig {
     int64_t max_queue_delay_us = 0;
     std::vector<size_t> preferred_batch_sizes;
     bool log_payloads = false;
+    std::string scheduler_strategy = "tensor";
+    size_t context_length = 4096;
+    size_t kv_cache_slots = 1;
+    size_t max_tokens = 256;
+    double tokens_per_char = 0.25;
+    double temperature = 0.8;
+    double top_p = 0.95;
+    size_t top_k = 40;
+    bool streaming_enabled = false;
 };
 
 struct RuntimeEnvironment {

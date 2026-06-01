@@ -461,3 +461,87 @@ TEST_CASE(kserve_runtime_observability_details) {
     REQUIRE(metrics_response.body.find("neuriplo_scheduler_batch_size_bucket") !=
             std::string::npos);
 }
+
+TEST_CASE(kserve_runtime_handles_openai_completions) {
+    RuntimeConfig config;
+    config.model_name = "llm-model";
+    config.backend = "llamacpp";
+    config.scheduler_strategy = "llm";
+    config.max_tokens = 128;
+    ModelRegistry registry(config, [](const RuntimeConfig &cfg, std::string &error) {
+        (void)error;
+        ModelMetadata metadata;
+        metadata.name = cfg.model_name;
+        metadata.versions = {"1"};
+        metadata.platform = "neuriplo_llamacpp";
+        metadata.inputs.push_back({"prompt", "BYTES", {1}});
+        metadata.outputs.push_back({"text", "BYTES", {1}});
+        struct LlmExecutor final : Executor {
+            explicit LlmExecutor(ModelMetadata model_metadata)
+                : model_metadata_(std::move(model_metadata)) {}
+            const ModelMetadata &metadata() const override {
+                return model_metadata_;
+            }
+            ExecutionResponse infer(const ExecutionRequest &request) override {
+                (void)request;
+                ExecutionResponse response;
+                OutputTensor output;
+                output.name = "text";
+                output.datatype = "BYTES";
+                output.shape = {1};
+                output.string_data = {"This is a stub response."};
+                response.outputs.push_back(std::move(output));
+                return response;
+            }
+            ModelMetadata model_metadata_;
+        };
+        return std::make_unique<LlmExecutor>(std::move(metadata));
+    });
+    MetricsRegistry metrics4e;
+    const KServeRuntime runtime(std::move(registry), metrics4e);
+
+    const std::string completions_body = R"({
+        "model": "llm-model",
+        "prompt": "Hello world",
+        "max_tokens": 64,
+        "temperature": 0.8
+    })";
+
+    const auto response = request(runtime, "POST", "/v1/completions", completions_body);
+    REQUIRE_EQ(response.status, 200);
+    REQUIRE(response.body.find(R"("object":"text_completion")") != std::string::npos);
+    REQUIRE(response.body.find(R"("model":"llm-model")") != std::string::npos);
+    REQUIRE(response.body.find(R"("text":"This is a stub response.")") != std::string::npos);
+    REQUIRE(response.body.find(R"("finish_reason":"stop")") != std::string::npos);
+    REQUIRE(response.body.find(R"("usage")") != std::string::npos);
+    REQUIRE(response.body.find(R"("prompt_tokens")") != std::string::npos);
+    REQUIRE(response.body.find(R"("completion_tokens")") != std::string::npos);
+}
+
+TEST_CASE(kserve_runtime_completions_rejects_missing_model) {
+    RuntimeConfig config;
+    config.model_name = "demo";
+    config.backend = "stub";
+    ModelRegistry registry(config);
+    MetricsRegistry metrics4f;
+    const KServeRuntime runtime(std::move(registry), metrics4f);
+
+    const std::string body = R"({"prompt": "Hello"})";
+    const auto response = request(runtime, "POST", "/v1/completions", body);
+    REQUIRE_EQ(response.status, 400);
+    REQUIRE(response.body.find(R"("code":"INVALID_ARGUMENT")") != std::string::npos);
+}
+
+TEST_CASE(kserve_runtime_completions_rejects_missing_prompt) {
+    RuntimeConfig config;
+    config.model_name = "demo";
+    config.backend = "stub";
+    ModelRegistry registry(config);
+    MetricsRegistry metrics4g;
+    const KServeRuntime runtime(std::move(registry), metrics4g);
+
+    const std::string body = R"({"model": "demo"})";
+    const auto response = request(runtime, "POST", "/v1/completions", body);
+    REQUIRE_EQ(response.status, 400);
+    REQUIRE(response.body.find(R"("code":"INVALID_ARGUMENT")") != std::string::npos);
+}

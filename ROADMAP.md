@@ -1080,3 +1080,109 @@ Performance checks:
 8. Prefer correctness and stable protocol behavior before optimizing transport.
 9. Evolve architecture using `DESIGN_PATTERNS.md` for current patterns and the
    "Architecture And Design Pattern Evolution" section for target patterns.
+
+## Production Readiness Gap Analysis
+
+All eight roadmap steps have snapshot documents (STEP1–STEP8.md), and the
+runtime passes its full test suite. This section records what remains before
+this is a production-facing serving runtime. Items are grouped by severity.
+
+### Gaps Blocking Tensor / CV Production Use
+
+These reflect real-backend roughness or missing non-functional requirements on
+the tensor path:
+
+- **Dense FP32-only neuriplo adapter**: `NeuriploExecutor` only converts dense
+  `FP32` tensors. Other datatypes (INT8, FP16, INT32, etc.) are rejected.
+  Multi-input models that do not match the metadata input order exactly need
+  explicit ordering tests.
+- **Thread-per-client HTTP server**: The current `HttpServer` spawns one
+  detached thread per client connection. Under production concurrency this
+  creates unbounded thread pressure. An async reactor (epoll/io_uring) is
+  deferred to the long-term list (see Design Pattern Evolution) and is not a
+  first-launch blocker, but it must be addressed before sustained production
+  load.
+- **gRPC V2 surface**: Not implemented. KServe clients that require gRPC will
+  not work until this adapter layer is added (also deferred to long-term).
+- **No container readiness-gate health checks for model load**: The readiness
+  endpoint flips based on model state, but the startup load-and-ready window
+  does not yet integrate with Kubernetes `startupProbe` / `initialDelaySeconds`
+  documentation.
+- **No formal model state machine**: `ModelRegistry` readiness is still inside
+  scattered checks rather than explicit `UNLOADED → LOADING → READY` transition
+  helpers (planned in Step 3–7 design patterns).
+- **Request pipeline not composable**: The infer handler is monolithic rather
+  than a chain of `decode → validate → admit → schedule → encode` stages
+  (planned in Step 7 middleware). Adding new cross-cutting behavior requires
+  editing route handlers directly.
+- **Request ID generation is weak**: The runtime currently accepts a
+  client-supplied `id` or generates a counter-based ID. No UUID or
+  collision-resistant generation.
+
+### Gaps Blocking LLM Production Use
+
+These are the items remaining from Step 8 (LLM Backends) that prevent any real
+LLM workload:
+
+- **No real LLM backend execution**: `LlmScheduler` dispatches only to the
+  `StubExecutor`. Real llama.cpp and Cactus decode is not wired through
+  `NeuriploExecutor`. Token-by-token decode loops, KV cache management, and
+  generation parameter passthrough are not validated against real hardware.
+- **No streaming responses**: Only non-streaming (full-response) infer is
+  implemented. SSE or chunked transfer encoding for token-by-token output is
+  missing.
+- **No OpenAI-compatible endpoints**: `/v1/completions`,
+  `/v1/chat/completions`, and `/v1/embeddings` are not implemented (Step 8.6).
+- **Token-accurate context enforcement**: The current `LlmScheduler` uses a
+  character-count proxy for context-length checks. Real tokenization is not
+  performed, so context limits are approximate and will break for multi-byte or
+  non-English text.
+- **No cancellation or deadline propagation into backend decode loops**:
+  Cancellation is only at the client-timeout level (`PendingRequest::cancelled`).
+  A slow decode loop cannot be abandoned when the client deadline expires
+  (Step 8.7). This is a correctness requirement for LLM production.
+- **No KV-cache memory pressure policy**: Context length × KV cache slots can
+  silently exceed available memory. No admission control ties memory to slot
+  occupancy.
+
+### Gaps Common To Both Paths
+
+- **No `InferenceGraph` routing validation**: The example YAML exists, but no
+  integration test proves the runtime response shape survives sequence, switch,
+  or splitter routing.
+- **No canary rollout validation**: The canary YAML exists, but no test proves
+  the runtime behaves correctly under traffic-split semantics.
+- **No autoscaling integration tests**: HPA/KEDA/custom autoscaler behavior has
+  not been validated with the exposed metrics.
+- **No structured error documentation for clients**: Error taxonomy is
+  implemented in code but not documented for external consumers.
+- **No latency SLO / performance baseline**: No p50/p95/p99 benchmarks exist
+  in CI or documentation.
+
+### Explicitly Deferred (Long-Term / Scale-Only)
+
+These are recorded in the Design Pattern Evolution section and are NOT blockers
+for a first production launch:
+
+| Item | Trigger |
+|------|---------|
+| Async HTTP reactor (epoll/io_uring) | High connection concurrency |
+| Zero-copy / borrowed tensor buffers | Copy overhead in hot path |
+| Arena / PMR allocators | Allocation churn under load |
+| gRPC V2 surface | Client demand |
+| Multi-model hot reload | Deployment need |
+| Backend plugin registry (no central switch) | Backend count growth |
+| Control plane / data plane split | Multi-model + drain complexity |
+
+### Recommended Next Actions
+
+1. **For tensor CV serving**: Harden the neuriplo adapter to cover the datatypes
+   used by the first target model, then validate end-to-end with a real ONNX
+   model (beyond the identity smoke test). Add a latency baseline.
+2. **For LLM serving**: Wire real llama.cpp decode through `NeuriploExecutor`,
+   implement token-accurate context enforcement, add cancellation propagation,
+   then add streaming. OpenAI-compatible endpoints should follow after the KServe
+   V2 LLM path is stable.
+3. **For Kubernetes deployment**: Add startup probe documentation, validate
+   liveness/readiness under load, and smoke-test the ClusterServingRuntime
+   manifest in a real cluster.
