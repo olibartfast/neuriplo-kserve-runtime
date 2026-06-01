@@ -10,7 +10,15 @@
 namespace {
 
 bool isSupportedInputDatatype(const std::string &datatype) {
-    return datatype == "FP32";
+    static const std::string supported[] = {
+        "BOOL",   "INT8",   "INT16",  "INT32", "INT64", "UINT8",
+        "UINT16", "UINT32", "UINT64", "FP16",  "FP32",  "FP64",
+    };
+    for (const auto &dt : supported) {
+        if (datatype == dt)
+            return true;
+    }
+    return false;
 }
 
 std::optional<size_t> elementCount(const std::vector<int64_t> &shape) {
@@ -159,6 +167,14 @@ ExecutionResponse NeuriploExecutor::infer(const ExecutionRequest &request) {
     auto inputs = orderedInputs(metadata_, request, validation_error);
     if (!inputs.has_value()) {
         return validation_error;
+    }
+
+    if (request.cancel_token && request.cancel_token->load(std::memory_order_acquire)) {
+        ExecutionResponse cancelled;
+        cancelled.ok = false;
+        cancelled.error_code = "DEADLINE_EXCEEDED";
+        cancelled.error_message = "request cancelled before inference";
+        return cancelled;
     }
 
     NeuriploInferenceResult result;

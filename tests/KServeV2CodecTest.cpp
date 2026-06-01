@@ -38,6 +38,16 @@ ModelMetadata multiInputMetadata() {
     return model;
 }
 
+ModelMetadata llmMetadata() {
+    ModelMetadata model;
+    model.name = "llm-demo";
+    model.versions = {"1"};
+    model.platform = "test";
+    model.inputs.push_back({"prompt", "BYTES", {1}});
+    model.outputs.push_back({"text", "BYTES", {1}});
+    return model;
+}
+
 std::string validBody(std::string extra = "") {
     std::string body =
         "{\"id\":\"request-1\",\"inputs\":[{\"name\":\"input\",\"shape\":[1,3,224,224],"
@@ -135,6 +145,41 @@ TEST_CASE(kserve_v2_codec_rejects_non_numeric_input_data) {
         smallMetadata());
     REQUIRE(!parsed.ok);
     REQUIRE(parsed.error_message.find("input data values") != std::string::npos);
+}
+
+TEST_CASE(kserve_v2_codec_parses_bytes_prompt_input) {
+    const auto parsed = parseInferenceRequest(
+        R"({"inputs":[{"name":"prompt","shape":[1],"datatype":"BYTES","data":["Explain KServe briefly."]}],)"
+        R"("parameters":{"max_tokens":128,"temperature":0.7}})",
+        llmMetadata());
+    REQUIRE(parsed.ok);
+    REQUIRE_EQ(parsed.request.inputs.size(), static_cast<size_t>(1));
+    REQUIRE_EQ(parsed.request.inputs[0].datatype, "BYTES");
+    REQUIRE_EQ(parsed.request.inputs[0].string_data.size(), static_cast<size_t>(1));
+    REQUIRE_EQ(parsed.request.inputs[0].string_data[0], "Explain KServe briefly.");
+    REQUIRE(parsed.request.llm_params.has_value());
+    REQUIRE(parsed.request.llm_params->max_tokens.has_value());
+    REQUIRE_EQ(*parsed.request.llm_params->max_tokens, static_cast<size_t>(128));
+    REQUIRE(parsed.request.llm_params->temperature.has_value());
+    REQUIRE_EQ(*parsed.request.llm_params->temperature, 0.7);
+}
+
+TEST_CASE(kserve_v2_codec_serializes_bytes_output) {
+    InferenceRequest request;
+    request.id = "req-bytes";
+    request.requested_outputs = {"text"};
+
+    ExecutionResponse response;
+    OutputTensor output;
+    output.name = "text";
+    output.datatype = "BYTES";
+    output.shape = {1};
+    output.string_data = {"generated text"};
+    response.outputs.push_back(std::move(output));
+
+    const auto json = inferenceResponseJson("llm-demo", "1", request, response);
+    REQUIRE(json.find(R"("datatype":"BYTES")") != std::string::npos);
+    REQUIRE(json.find(R"("data":["generated text"])") != std::string::npos);
 }
 
 TEST_CASE(kserve_v2_codec_serializes_executor_response_with_id) {

@@ -130,6 +130,31 @@ TEST_CASE(model_registry_rejects_unknown_backend) {
     REQUIRE(handle->load_error->find("unsupported backend") != std::string::npos);
 }
 
+TEST_CASE(model_registry_uses_llm_scheduler_for_llm_strategy) {
+    RuntimeConfig config = demoConfig();
+    config.scheduler_strategy = "llm";
+    const ModelRegistry registry(config);
+    REQUIRE(registry.allReady());
+
+    ExecutionRequest request;
+    InputTensor prompt;
+    prompt.name = "prompt";
+    prompt.datatype = "BYTES";
+    prompt.shape = {1};
+    prompt.string_data = {"hello"};
+    request.inputs.push_back(std::move(prompt));
+    request.requested_outputs = {"text"};
+    LlmGenerationParams params;
+    params.max_tokens = 16;
+    request.llm_params = params;
+
+    const auto *handle = registry.findHandle("demo");
+    REQUIRE(handle != nullptr);
+    const auto result = handle->scheduler->submit(std::move(request));
+    REQUIRE(result.ok);
+    REQUIRE_EQ(result.response.outputs[0].string_data[0].substr(0, 6), "stub: ");
+}
+
 #ifndef NEURIPLO_RUNTIME_WITH_REAL_NEURIPLO
 TEST_CASE(
     model_registry_maps_supported_real_backend_to_neuriplo_executor_when_real_support_disabled) {

@@ -1,9 +1,5 @@
 #include "Scheduler.hpp"
 
-#include "BatchCompatibility.hpp"
-#include "DynamicBatcher.hpp"
-
-#include <algorithm>
 #include <atomic>
 #include <condition_variable>
 #include <cstddef>
@@ -51,13 +47,11 @@ SchedulerResult makeOverloadedResult() {
     return makeSchedulerError(SchedulerError::Overloaded, "QUEUE_FULL", "request queue is full");
 }
 
-SchedulerResult makeExecutorFailureResult(std::string message) {
+SchedulerResult makeInvalidArgumentResult(std::string message) {
     SchedulerResult result;
     result.ok = false;
-    result.response.ok = false;
-    result.response.error_code = "BACKEND_ERROR";
-    result.response.error_message =
-        message.empty() ? "executor inference failed" : std::move(message);
+    result.error_code = "INVALID_ARGUMENT";
+    result.error_message = std::move(message);
     return result;
 }
 
@@ -66,27 +60,89 @@ uint64_t elapsedNs(const TimePoint &start, const TimePoint &end) {
         std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count());
 }
 
-class ModelScheduler final : public Scheduler {
+const InputTensor *findBytesPrompt(const ExecutionRequest &request) {
+    for (const auto &input : request.inputs) {
+        if (isBytesDatatype(input.datatype)) {
+            return &input;
+        }
+    }
+    return nullptr;
+}
+
+size_t effectiveMaxTokens(const ExecutionRequest &request, const LlmSchedulerConfig &config) {
+    if (request.llm_params && request.llm_params->max_tokens) {
+        return *request.llm_params->max_tokens;
+    }
+    return config.max_tokens;
+}
+
+std::optional<std::string> validateLlmRequest(const ExecutionRequest &request,
+                                              const LlmSchedulerConfig &config) {
+    const auto *prompt = findBytesPrompt(request);
+    if (prompt == nullptr) {
+        return "LLM request requires a BYTES prompt input";
+    }
+    if (prompt->string_data.empty()) {
+        return "LLM prompt must not be empty";
+    }
+
+    size_t prompt_chars = 0;
+    for (const auto &value : prompt->string_data) {
+        prompt_chars += value.size();
+    }
+    const auto estimated_tokens =
+        static_cast<size_t>(static_cast<double>(prompt_chars) * config.tokens_per_char);
+    if (estimated_tokens > config.context_length) {
+        return "prompt exceeds context length (estimated " + std::to_string(estimated_tokens) +
+               " tokens)";
+    }
+
+    const auto max_tokens = effectiveMaxTokens(request, config);
+    if (max_tokens == 0 || max_tokens > config.max_tokens) {
+        return "max_tokens exceeds configured limit";
+    }
+
+    if (request.llm_params) {
+        if (request.llm_params->temperature && *request.llm_params->temperature < 0.0) {
+            return "temperature must be greater than or equal to 0";
+        }
+        if (request.llm_params->top_p &&
+            (*request.llm_params->top_p <= 0.0 || *request.llm_params->top_p > 1.0)) {
+            return "top_p must be in (0, 1]";
+        }
+    }
+
+    return std::nullopt;
+}
+
+class LlmScheduler final : public Scheduler {
   public:
-    ModelScheduler(std::vector<std::unique_ptr<Executor>> executors, SchedulerConfig config,
-                   std::string model_name)
+    LlmScheduler(std::vector<std::unique_ptr<Executor>> executors, LlmSchedulerConfig config,
+                 std::string model_name)
         : executors_(std::move(executors)), config_(config), model_name_(std::move(model_name)) {
         if (executors_.empty()) {
             throw std::invalid_argument("scheduler requires at least one executor");
         }
+        if (config_.kv_cache_slots == 0) {
+            throw std::invalid_argument("kv cache slots must be greater than 0");
+        }
         inflight_.assign(executors_.size(), 0);
-        workers_.reserve(config_.instances);
-        for (size_t worker_index = 0; worker_index < config_.instances; ++worker_index) {
+        workers_.reserve(config_.kv_cache_slots);
+        for (size_t worker_index = 0; worker_index < config_.kv_cache_slots; ++worker_index) {
             (void)worker_index;
             workers_.emplace_back([this]() { workerLoop(); });
         }
     }
 
-    ~ModelScheduler() override {
+    ~LlmScheduler() override {
         beginDrain();
     }
 
     SchedulerResult submit(ExecutionRequest request) override {
+        if (const auto validation_error = validateLlmRequest(request, config_)) {
+            return makeInvalidArgumentResult(*validation_error);
+        }
+
         if (isDraining()) {
             return makeDrainingResult();
         }
@@ -139,8 +195,6 @@ class ModelScheduler final : public Scheduler {
 
     void beginDrain() override {
         {
-            // Flip draining_ under queue_mutex_ so a worker sitting between its
-            // predicate check and the internal cv wait cannot miss the wakeup.
             std::lock_guard<std::mutex> lock(queue_mutex_);
             if (draining_.exchange(true, std::memory_order_acq_rel)) {
                 return;
@@ -148,6 +202,7 @@ class ModelScheduler final : public Scheduler {
         }
 
         queue_cv_.notify_all();
+        slots_cv_.notify_all();
         for (auto &worker : workers_) {
             if (worker.joinable()) {
                 worker.join();
@@ -174,12 +229,7 @@ class ModelScheduler final : public Scheduler {
     }
 
     size_t currentInFlight() const {
-        std::lock_guard<std::mutex> lock(inflight_mutex_);
-        size_t total = 0;
-        for (const auto count : inflight_) {
-            total += count;
-        }
-        return total;
+        return active_decodes_.load(std::memory_order_acquire);
     }
 
     void rejectQueuedRequests() {
@@ -191,6 +241,31 @@ class ModelScheduler final : public Scheduler {
         for (const auto &request : pending) {
             request->promise->set_value(makeDrainingResult());
         }
+    }
+
+    bool acquireDecodeSlot(const TimePoint &deadline) {
+        std::unique_lock<std::mutex> lock(slots_mutex_);
+        const bool woke = slots_cv_.wait_until(lock, deadline, [this]() {
+            return draining_.load(std::memory_order_acquire) ||
+                   active_decodes_.load(std::memory_order_acquire) < config_.kv_cache_slots;
+        });
+        if (!woke) {
+            return false;
+        }
+        if (draining_.load(std::memory_order_acquire)) {
+            return false;
+        }
+        if (active_decodes_.load(std::memory_order_acquire) >= config_.kv_cache_slots) {
+            return false;
+        }
+        active_decodes_.fetch_add(1, std::memory_order_acq_rel);
+        return true;
+    }
+
+    void releaseDecodeSlot() {
+        active_decodes_.fetch_sub(1, std::memory_order_acq_rel);
+        slots_cv_.notify_one();
+        queue_cv_.notify_one();
     }
 
     size_t selectExecutorIndex() {
@@ -219,14 +294,6 @@ class ModelScheduler final : public Scheduler {
         metrics_.*field += 1;
     }
 
-    void recordBatchMetrics(size_t batch_size, uint64_t formation_ns, uint64_t execution_ns) {
-        std::lock_guard<std::mutex> lock(metrics_mutex_);
-        ++metrics_.batches_formed;
-        metrics_.batched_requests_total += batch_size;
-        metrics_.batch_formation_ns_total += formation_ns;
-        metrics_.batch_execution_ns_total += execution_ns;
-    }
-
     void recordLatencies(const TimePoint &enqueued_at, const TimePoint &execution_started,
                          const TimePoint &execution_finished) {
         std::lock_guard<std::mutex> lock(metrics_mutex_);
@@ -247,123 +314,6 @@ class ModelScheduler final : public Scheduler {
         auto pending = queue_.front();
         queue_.pop_front();
         return pending;
-    }
-
-    size_t mergedBatchDimension(const std::vector<std::shared_ptr<PendingRequest>> &batch) const {
-        size_t total = 0;
-        for (const auto &pending : batch) {
-            total += static_cast<size_t>(requestBatchSize(pending->request));
-        }
-        return total;
-    }
-
-    void fulfillExpiredRequest(const std::shared_ptr<PendingRequest> &pending) {
-        if (pending->request.cancel_token) {
-            pending->request.cancel_token->store(true, std::memory_order_release);
-        }
-        incrementMetric(&SchedulerMetricsSnapshot::requests_timed_out);
-        fulfillResult(pending, makeTimeoutResult());
-    }
-
-    std::vector<std::shared_ptr<PendingRequest>>
-    formBatch(const std::shared_ptr<PendingRequest> &first) {
-        std::vector<std::shared_ptr<PendingRequest>> batch;
-        batch.push_back(first);
-
-        const auto &batching = config_.dynamic_batching;
-        if (!batching.enabled || batching.max_batch_size <= 1) {
-            return batch;
-        }
-
-        const auto formation_started = Clock::now();
-        const auto formation_deadline =
-            formation_started + std::chrono::microseconds(batching.max_queue_delay_us);
-        size_t merged_batch_dimension = mergedBatchDimension(batch);
-
-        while (true) {
-            const auto now = Clock::now();
-            const bool delay_elapsed = now >= formation_deadline;
-            if (shouldDispatchBatchSize(merged_batch_dimension, batching, delay_elapsed) &&
-                batch.size() > 1) {
-                break;
-            }
-            if (merged_batch_dimension >= batching.max_batch_size) {
-                break;
-            }
-
-            std::unique_lock<std::mutex> lock(queue_mutex_);
-            if (draining_.load(std::memory_order_acquire)) {
-                break;
-            }
-
-            bool made_progress = false;
-            for (auto iterator = queue_.begin(); iterator != queue_.end();) {
-                auto next = *iterator;
-                if (next->cancelled.load(std::memory_order_acquire)) {
-                    iterator = queue_.erase(iterator);
-                    made_progress = true;
-                    continue;
-                }
-                if (Clock::now() >= next->deadline) {
-                    iterator = queue_.erase(iterator);
-                    lock.unlock();
-                    queue_cv_.notify_one();
-                    fulfillExpiredRequest(next);
-                    lock.lock();
-                    made_progress = true;
-                    continue;
-                }
-                if (!areBatchCompatible(batch.front()->request, next->request)) {
-                    ++iterator;
-                    continue;
-                }
-
-                const size_t next_batch_dimension =
-                    static_cast<size_t>(requestBatchSize(next->request));
-                if (merged_batch_dimension + next_batch_dimension > batching.max_batch_size) {
-                    ++iterator;
-                    continue;
-                }
-
-                batch.push_back(next);
-                merged_batch_dimension += next_batch_dimension;
-                iterator = queue_.erase(iterator);
-                lock.unlock();
-                queue_cv_.notify_one();
-                made_progress = true;
-
-                if (shouldDispatchBatchSize(merged_batch_dimension, batching,
-                                            Clock::now() >= formation_deadline) &&
-                    batch.size() > 1) {
-                    const auto formation_finished = Clock::now();
-                    recordBatchMetrics(batch.size(),
-                                       elapsedNs(formation_started, formation_finished), 0);
-                    return batch;
-                }
-
-                lock.lock();
-                break;
-            }
-
-            if (!made_progress) {
-                if (delay_elapsed) {
-                    break;
-                }
-                auto wait_deadline = formation_deadline;
-                for (const auto &queued : queue_) {
-                    if (!queued->cancelled.load(std::memory_order_acquire)) {
-                        wait_deadline = std::min(wait_deadline, queued->deadline);
-                    }
-                }
-                queue_cv_.wait_until(lock, wait_deadline);
-            }
-        }
-
-        const auto formation_finished = Clock::now();
-        if (batch.size() > 1) {
-            recordBatchMetrics(batch.size(), elapsedNs(formation_started, formation_finished), 0);
-        }
-        return batch;
     }
 
     bool runInference(Executor &executor, const ExecutionRequest &request,
@@ -394,121 +344,11 @@ class ModelScheduler final : public Scheduler {
         }
     }
 
-    TimePoint batchDeadline(const std::vector<std::shared_ptr<PendingRequest>> &batch) const {
-        auto deadline = batch.front()->deadline;
-        for (const auto &pending : batch) {
-            deadline = std::min(deadline, pending->deadline);
-        }
-        return deadline;
-    }
-
     void fulfillResult(const std::shared_ptr<PendingRequest> &pending, SchedulerResult result) {
         if (pending->cancelled.load(std::memory_order_acquire)) {
             return;
         }
         pending->promise->set_value(std::move(result));
-    }
-
-    void processBatch(std::vector<std::shared_ptr<PendingRequest>> batch) {
-        const auto now = Clock::now();
-        for (const auto &pending : batch) {
-            if (pending->cancelled.load(std::memory_order_acquire)) {
-                continue;
-            }
-            if (now >= pending->deadline) {
-                if (pending->request.cancel_token) {
-                    pending->request.cancel_token->store(true, std::memory_order_release);
-                }
-                incrementMetric(&SchedulerMetricsSnapshot::requests_timed_out);
-                fulfillResult(pending, makeTimeoutResult());
-            }
-        }
-
-        std::vector<std::shared_ptr<PendingRequest>> active_batch;
-        active_batch.reserve(batch.size());
-        for (const auto &pending : batch) {
-            if (pending->cancelled.load(std::memory_order_acquire)) {
-                continue;
-            }
-            if (Clock::now() >= pending->deadline) {
-                continue;
-            }
-            active_batch.push_back(pending);
-        }
-        if (active_batch.empty()) {
-            return;
-        }
-
-        if (active_batch.size() == 1) {
-            processSingle(active_batch.front());
-            return;
-        }
-
-        std::vector<ExecutionRequest> source_requests;
-        source_requests.reserve(active_batch.size());
-        for (const auto &pending : active_batch) {
-            source_requests.push_back(pending->request);
-        }
-
-        MergedBatch merged;
-        if (const auto error = mergeExecutionRequests(source_requests, merged)) {
-            for (const auto &pending : active_batch) {
-                fulfillResult(pending, makeExecutorFailureResult(error.value()));
-            }
-            return;
-        }
-
-        const auto executor_index = selectExecutorIndex();
-        auto &executor = executors_.at(executor_index);
-        const auto execution_started = Clock::now();
-        const auto deadline = batchDeadline(active_batch);
-
-        ExecutionResponse batched_response;
-        const bool completed = runInference(*executor, merged.request, deadline, batched_response);
-        const auto execution_finished = Clock::now();
-        decrementInflight(executor_index);
-
-        if (!completed) {
-            for (const auto &pending : active_batch) {
-                if (pending->request.cancel_token) {
-                    pending->request.cancel_token->store(true, std::memory_order_release);
-                }
-                incrementMetric(&SchedulerMetricsSnapshot::requests_timed_out);
-                fulfillResult(pending, makeTimeoutResult());
-            }
-            return;
-        }
-
-        {
-            std::lock_guard<std::mutex> lock(metrics_mutex_);
-            metrics_.batch_execution_ns_total += elapsedNs(execution_started, execution_finished);
-        }
-
-        const auto split_responses =
-            splitExecutionResponse(batched_response, merged.batch_sizes, source_requests);
-        for (size_t index = 0; index < active_batch.size(); ++index) {
-            const auto &pending = active_batch[index];
-            if (execution_finished >= pending->deadline) {
-                if (pending->request.cancel_token) {
-                    pending->request.cancel_token->store(true, std::memory_order_release);
-                }
-                incrementMetric(&SchedulerMetricsSnapshot::requests_timed_out);
-                fulfillResult(pending, makeTimeoutResult());
-                continue;
-            }
-
-            recordLatencies(pending->enqueued_at, execution_started, execution_finished);
-            SchedulerResult result;
-            result.queue_latency_ns = elapsedNs(pending->enqueued_at, execution_started);
-            result.execution_latency_ns = elapsedNs(execution_started, execution_finished);
-            result.total_latency_ns = elapsedNs(pending->enqueued_at, execution_finished);
-            result.batch_size = active_batch.size();
-            result.response = split_responses.at(index);
-            if (!result.response.ok) {
-                result.ok = false;
-            }
-            fulfillResult(pending, std::move(result));
-        }
     }
 
     void processSingle(const std::shared_ptr<PendingRequest> &pending) {
@@ -526,6 +366,26 @@ class ModelScheduler final : public Scheduler {
             return;
         }
 
+        if (!acquireDecodeSlot(pending->deadline)) {
+            incrementMetric(&SchedulerMetricsSnapshot::requests_timed_out);
+            fulfillResult(pending, makeTimeoutResult());
+            return;
+        }
+        if (draining_.load(std::memory_order_acquire)) {
+            releaseDecodeSlot();
+            fulfillResult(pending, makeDrainingResult());
+            return;
+        }
+        if (Clock::now() >= pending->deadline) {
+            if (pending->request.cancel_token) {
+                pending->request.cancel_token->store(true, std::memory_order_release);
+            }
+            releaseDecodeSlot();
+            incrementMetric(&SchedulerMetricsSnapshot::requests_timed_out);
+            fulfillResult(pending, makeTimeoutResult());
+            return;
+        }
+
         const auto executor_index = selectExecutorIndex();
         auto &executor = executors_.at(executor_index);
         const auto execution_started = Clock::now();
@@ -535,6 +395,7 @@ class ModelScheduler final : public Scheduler {
             runInference(*executor, pending->request, pending->deadline, response);
         const auto execution_finished = Clock::now();
         decrementInflight(executor_index);
+        releaseDecodeSlot();
 
         if (!completed) {
             if (pending->request.cancel_token) {
@@ -576,14 +437,12 @@ class ModelScheduler final : public Scheduler {
             if (pending == nullptr) {
                 return;
             }
-
-            const auto batch = formBatch(pending);
-            processBatch(std::move(batch));
+            processSingle(pending);
         }
     }
 
     std::vector<std::unique_ptr<Executor>> executors_;
-    SchedulerConfig config_;
+    LlmSchedulerConfig config_;
     std::string model_name_;
 
     mutable std::mutex queue_mutex_;
@@ -592,6 +451,11 @@ class ModelScheduler final : public Scheduler {
     std::atomic<bool> draining_{false};
 
     std::vector<std::thread> workers_;
+
+    mutable std::mutex slots_mutex_;
+    std::condition_variable slots_cv_;
+    std::atomic<size_t> active_decodes_{0};
+
     mutable std::mutex inflight_mutex_;
     std::vector<size_t> inflight_;
 
@@ -601,7 +465,7 @@ class ModelScheduler final : public Scheduler {
 
 } // namespace
 
-std::unique_ptr<Scheduler> makeModelScheduler(std::vector<std::unique_ptr<Executor>> executors,
-                                              SchedulerConfig config, std::string model_name) {
-    return std::make_unique<ModelScheduler>(std::move(executors), config, std::move(model_name));
+std::unique_ptr<Scheduler> makeLlmScheduler(std::vector<std::unique_ptr<Executor>> executors,
+                                            LlmSchedulerConfig config, std::string model_name) {
+    return std::make_unique<LlmScheduler>(std::move(executors), config, std::move(model_name));
 }

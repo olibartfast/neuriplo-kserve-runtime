@@ -129,6 +129,23 @@ Scheduler flags:
 --preferred-batch-sizes <csv>  optional preferred batch sizes, e.g. 2,4,8
 ```
 
+LLM scheduler flags (llama.cpp, Cactus, GGUF models):
+
+```text
+--scheduler-strategy <tensor|llm>  scheduler policy (default tensor; LLM backends auto-detect)
+--context-length <tokens>          max prompt context window (default 4096)
+--kv-cache-slots <count>           concurrent decode slots (default 1)
+--max-tokens <count>               default generation limit (default 256)
+--temperature <float>              sampling default (default 0.8)
+--top-p <float>                    nucleus sampling default (default 0.95)
+--top-k <count>                    top-k sampling default (default 40)
+--streaming-enabled true|false     SSE/chunked streaming toggle (default false)
+```
+
+For GGUF/local LLM artifacts in KServe, mount the model directory at `/mnt/models`
+(for example `/mnt/models/model.gguf` or `/mnt/models/` containing the GGUF file).
+Use `--backend llamacpp` or `--backend cactus` with the LLM scheduler path.
+
 When `MODEL_PATH` is unset and `/mnt/models` exists, the runtime uses
 `/mnt/models` as the model path. This matches KServe storage-initializer and PVC
 mount conventions.

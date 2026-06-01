@@ -32,10 +32,12 @@ class ModelRegistry {
 
     std::string modelName() const;
     bool logPayloads() const;
+    double tokensPerChar() const;
 
   private:
     void loadModel(const RuntimeConfig &config, ExecutorFactory factory);
 
     ModelHandle handle_;
     bool log_payloads_ = false;
+    double tokens_per_char_ = 0.25;
 };

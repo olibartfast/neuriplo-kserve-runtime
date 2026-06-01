@@ -67,6 +67,68 @@ std::optional<std::vector<double>> parseData(const Json &data) {
     return parsed;
 }
 
+std::optional<std::vector<std::string>> parseStringData(const Json &data) {
+    std::vector<std::string> parsed;
+    parsed.reserve(data.size());
+    for (const auto &value : data) {
+        if (!value.is_string()) {
+            return std::nullopt;
+        }
+        parsed.push_back(value.get<std::string>());
+    }
+    return parsed;
+}
+
+size_t tensorElementCount(const std::vector<int64_t> &shape) {
+    size_t count = 1;
+    for (const auto dimension : shape) {
+        if (dimension <= 0) {
+            return 0;
+        }
+        count *= static_cast<size_t>(dimension);
+    }
+    return count;
+}
+
+std::optional<LlmGenerationParams> parseLlmParameters(const Json &parameters) {
+    if (!parameters.is_object()) {
+        return std::nullopt;
+    }
+
+    LlmGenerationParams params;
+    if (parameters.contains("max_tokens")) {
+        if (!parameters["max_tokens"].is_number_unsigned()) {
+            return std::nullopt;
+        }
+        params.max_tokens = parameters["max_tokens"].get<size_t>();
+    }
+    if (parameters.contains("temperature")) {
+        if (!parameters["temperature"].is_number()) {
+            return std::nullopt;
+        }
+        params.temperature = parameters["temperature"].get<double>();
+    }
+    if (parameters.contains("top_p")) {
+        if (!parameters["top_p"].is_number()) {
+            return std::nullopt;
+        }
+        params.top_p = parameters["top_p"].get<double>();
+    }
+    if (parameters.contains("top_k")) {
+        if (!parameters["top_k"].is_number_unsigned()) {
+            return std::nullopt;
+        }
+        params.top_k = parameters["top_k"].get<size_t>();
+    }
+    if (parameters.contains("stream")) {
+        if (!parameters["stream"].is_boolean()) {
+            return std::nullopt;
+        }
+        params.streaming = parameters["stream"].get<bool>();
+    }
+    return params;
+}
+
 std::vector<std::string> allOutputNames(const ModelMetadata &metadata) {
     std::vector<std::string> outputs;
     outputs.reserve(metadata.outputs.size());
@@ -90,8 +152,14 @@ Json outputTensorJson(const OutputTensor &tensor) {
         shape.push_back(dimension);
     }
     Json data = Json::array();
-    for (const auto value : tensor.data) {
-        data.push_back(value);
+    if (isBytesDatatype(tensor.datatype)) {
+        for (const auto &value : tensor.string_data) {
+            data.push_back(value);
+        }
+    } else {
+        for (const auto value : tensor.data) {
+            data.push_back(value);
+        }
     }
     return Json{
         {"name", tensor.name}, {"datatype", tensor.datatype}, {"shape", shape}, {"data", data}};
@@ -162,18 +230,38 @@ InferenceParseResult parseInferenceRequest(const std::string &body, const ModelM
             return invalid("invalid shape for input: " + name);
         }
 
-        auto data = parseData(input["data"]);
-        if (!data.has_value()) {
-            return invalid("input data values must be numbers for input: " + name);
+        if (!shapeMatches(input["shape"], *metadata_input)) {
+            return invalid("invalid shape for input: " + name);
         }
 
         const auto parsed_shape = parseShape(input["shape"]);
+        const auto expected_elements = tensorElementCount(parsed_shape);
 
         InputTensor tensor;
         tensor.name = name;
         tensor.datatype = datatype;
-        tensor.shape = std::move(parsed_shape);
-        tensor.data = std::move(*data);
+        tensor.shape = parsed_shape;
+
+        if (isBytesDatatype(datatype)) {
+            auto string_data = parseStringData(input["data"]);
+            if (!string_data.has_value()) {
+                return invalid("input data values must be strings for BYTES input: " + name);
+            }
+            if (!string_data->empty() && expected_elements != 0 &&
+                string_data->size() != expected_elements) {
+                return invalid("input data element count mismatch for input: " + name);
+            }
+            tensor.string_data = std::move(*string_data);
+        } else {
+            auto data = parseData(input["data"]);
+            if (!data.has_value()) {
+                return invalid("input data values must be numbers for input: " + name);
+            }
+            if (!data->empty() && expected_elements != 0 && data->size() != expected_elements) {
+                return invalid("input data element count mismatch for input: " + name);
+            }
+            tensor.data = std::move(*data);
+        }
         request.inputs.push_back(std::move(tensor));
     }
 
@@ -202,6 +290,14 @@ InferenceParseResult parseInferenceRequest(const std::string &body, const ModelM
         }
     } else {
         request.requested_outputs = allOutputNames(metadata);
+    }
+
+    if (root.contains("parameters")) {
+        const auto params = parseLlmParameters(root["parameters"]);
+        if (!params.has_value()) {
+            return invalid("invalid generation parameters");
+        }
+        request.llm_params = *params;
     }
 
     InferenceParseResult result;

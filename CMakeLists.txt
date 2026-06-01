@@ -23,11 +23,13 @@ set(NEURIPLO_SANITIZER "" CACHE STRING "Enable sanitizer instrumentation: addres
 set_property(CACHE NEURIPLO_SANITIZER PROPERTY STRINGS "" address thread undefined)
 
 set(NEURIPLO_RUNTIME_SOURCES
+    src/BackendRegistry.cpp
     src/BatchCompatibility.cpp
     src/DynamicBatcher.cpp
     src/HttpServer.cpp
     src/KServeRuntime.cpp
     src/KServeV2Codec.cpp
+    src/LlmScheduler.cpp
     src/Logging.cpp
     src/MetricsRegistry.cpp
     src/ModelRegistry.cpp
@@ -109,11 +111,13 @@ endif()
 enable_testing()
 
 add_executable(neuriplo-kserve-runtime-tests
+    tests/BackendRegistryTest.cpp
     tests/BatchCompatibilityTest.cpp
     tests/DynamicBatcherTest.cpp
     tests/HttpIntegrationTest.cpp
     tests/KServeRuntimeTest.cpp
     tests/KServeV2CodecTest.cpp
+    tests/LlmSchedulerTest.cpp
     tests/ModelRegistryTest.cpp
     tests/NeuriploExecutorTest.cpp
     tests/RuntimeConfigTest.cpp

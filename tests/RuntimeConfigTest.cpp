@@ -177,3 +177,48 @@ TEST_CASE(parse_runtime_config_rejects_excessive_max_request_bytes) {
     }
     REQUIRE(threw);
 }
+
+TEST_CASE(parse_runtime_config_accepts_llm_overrides) {
+    const auto config =
+        parse({"neuriplo-kserve-runtime", "--scheduler-strategy", "llm", "--context-length", "8192",
+               "--kv-cache-slots", "2", "--max-tokens", "512", "--temperature", "0.7", "--top-p",
+               "0.9", "--top-k", "0", "--streaming-enabled", "true"});
+    REQUIRE_EQ(config.scheduler_strategy, "llm");
+    REQUIRE_EQ(config.context_length, static_cast<size_t>(8192));
+    REQUIRE_EQ(config.kv_cache_slots, static_cast<size_t>(2));
+    REQUIRE_EQ(config.max_tokens, static_cast<size_t>(512));
+    REQUIRE_EQ(config.temperature, 0.7);
+    REQUIRE_EQ(config.top_p, 0.9);
+    REQUIRE_EQ(config.top_k, static_cast<size_t>(0));
+    REQUIRE(config.streaming_enabled);
+}
+
+TEST_CASE(parse_runtime_config_rejects_invalid_scheduler_strategy) {
+    bool threw = false;
+    try {
+        (void)parse({"neuriplo-kserve-runtime", "--scheduler-strategy", "batch"});
+    } catch (const std::invalid_argument &) {
+        threw = true;
+    }
+    REQUIRE(threw);
+}
+
+TEST_CASE(parse_runtime_config_rejects_invalid_temperature) {
+    bool threw = false;
+    try {
+        (void)parse({"neuriplo-kserve-runtime", "--temperature", "-0.1"});
+    } catch (const std::invalid_argument &) {
+        threw = true;
+    }
+    REQUIRE(threw);
+}
+
+TEST_CASE(parse_runtime_config_rejects_invalid_top_p) {
+    bool threw = false;
+    try {
+        (void)parse({"neuriplo-kserve-runtime", "--top-p", "0"});
+    } catch (const std::invalid_argument &) {
+        threw = true;
+    }
+    REQUIRE(threw);
+}

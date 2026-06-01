@@ -13,13 +13,46 @@
 
 namespace {
 
-std::vector<uint8_t> fp32Bytes(const InputTensor &tensor) {
-    std::vector<uint8_t> bytes(tensor.data.size() * sizeof(float));
+template <typename T> std::vector<uint8_t> numericBytes(const InputTensor &tensor) {
+    std::vector<uint8_t> bytes(tensor.data.size() * sizeof(T));
     for (size_t i = 0; i < tensor.data.size(); ++i) {
-        const auto value = static_cast<float>(tensor.data[i]);
-        std::memcpy(bytes.data() + (i * sizeof(float)), &value, sizeof(float));
+        const auto value = static_cast<T>(tensor.data[i]);
+        std::memcpy(bytes.data() + (i * sizeof(T)), &value, sizeof(T));
     }
     return bytes;
+}
+
+std::vector<uint8_t> tensorToBytes(const InputTensor &tensor) {
+    const auto &dt = tensor.datatype;
+    if (dt == "BOOL" || dt == "INT8")
+        return numericBytes<int8_t>(tensor);
+    if (dt == "INT16")
+        return numericBytes<int16_t>(tensor);
+    if (dt == "INT32")
+        return numericBytes<int32_t>(tensor);
+    if (dt == "INT64")
+        return numericBytes<int64_t>(tensor);
+    if (dt == "UINT8")
+        return numericBytes<uint8_t>(tensor);
+    if (dt == "UINT16")
+        return numericBytes<uint16_t>(tensor);
+    if (dt == "UINT32")
+        return numericBytes<uint32_t>(tensor);
+    if (dt == "UINT64")
+        return numericBytes<uint64_t>(tensor);
+    if (dt == "FP16") {
+        std::vector<uint8_t> bytes(tensor.data.size() * sizeof(float));
+        for (size_t i = 0; i < tensor.data.size(); ++i) {
+            const auto value = static_cast<float>(tensor.data[i]);
+            std::memcpy(bytes.data() + (i * sizeof(float)), &value, sizeof(float));
+        }
+        return bytes;
+    }
+    if (dt == "FP32")
+        return numericBytes<float>(tensor);
+    if (dt == "FP64")
+        return numericBytes<double>(tensor);
+    throw std::runtime_error("unsupported input datatype: " + dt);
 }
 
 std::vector<TensorMetadata> convertLayers(const std::vector<LayerInfo> &layers,
@@ -67,10 +100,7 @@ class RealNeuriploAdapter final : public NeuriploAdapter {
         std::vector<std::vector<uint8_t>> backend_inputs;
         backend_inputs.reserve(inputs.size());
         for (const auto &input : inputs) {
-            if (input.datatype != "FP32") {
-                throw std::runtime_error("only FP32 inputs are supported");
-            }
-            backend_inputs.push_back(fp32Bytes(input));
+            backend_inputs.push_back(tensorToBytes(input));
         }
 
         auto [values, shapes] = engine_->get_infer_results(backend_inputs);

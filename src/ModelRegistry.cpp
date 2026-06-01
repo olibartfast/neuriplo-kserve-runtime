@@ -1,54 +1,49 @@
 #include "ModelRegistry.hpp"
 
+#include "BackendRegistry.hpp"
 #include "NeuriploExecutor.hpp"
 #include "Scheduler.hpp"
 #include "StubExecutor.hpp"
 
-#include <array>
 #include <stdexcept>
 #include <utility>
 #include <vector>
 
 namespace {
 
-bool isNeuriploBackend(const std::string &backend) {
-    constexpr std::array<const char *, 11> supported = {
-        "onnx_runtime", "opencv_dnn", "openvino", "tensorrt", "libtorch",  "libtensorflow",
-        "ggml",         "llamacpp",   "cactus",   "migraphx", "executorch"};
-    for (const auto *known_backend : supported) {
-        if (backend == known_backend) {
-            return true;
-        }
-    }
-    return false;
-}
-
 std::unique_ptr<Executor> defaultExecutorFactory(const RuntimeConfig &config, std::string &error) {
     if (config.backend == "stub") {
         return makeStubExecutor(config, error);
     }
-    if (isNeuriploBackend(config.backend)) {
-        return makeNeuriploExecutor(config, error);
+
+    const auto capability = findBackendCapability(config.backend);
+    if (!capability) {
+        error = "unsupported backend: " + config.backend;
+        return nullptr;
     }
-    error = "unsupported backend: " + config.backend;
-    return nullptr;
+    if (!capability->uses_neuriplo) {
+        error = "unsupported backend: " + config.backend;
+        return nullptr;
+    }
+    return makeNeuriploExecutor(config, error);
 }
 
 } // namespace
 
-ModelRegistry::ModelRegistry(const RuntimeConfig &config) : log_payloads_(config.log_payloads) {
+ModelRegistry::ModelRegistry(const RuntimeConfig &config)
+    : log_payloads_(config.log_payloads), tokens_per_char_(config.tokens_per_char) {
     loadModel(config, defaultExecutorFactory);
 }
 
 ModelRegistry::ModelRegistry(const RuntimeConfig &config, ExecutorFactory factory)
-    : log_payloads_(config.log_payloads) {
+    : log_payloads_(config.log_payloads), tokens_per_char_(config.tokens_per_char) {
     loadModel(config, std::move(factory));
 }
 
 void ModelRegistry::loadModel(const RuntimeConfig &config, ExecutorFactory factory) {
     handle_.name = config.model_name;
     handle_.versions = {"1"};
-    handle_.state = ModelState::Loading;
+    handle_.transitionTo(ModelState::Loading);
 
     std::vector<std::unique_ptr<Executor>> executors;
     executors.reserve(config.instances);
@@ -57,7 +52,7 @@ void ModelRegistry::loadModel(const RuntimeConfig &config, ExecutorFactory facto
         (void)instance_index;
         auto executor = factory(config, error);
         if (!executor) {
-            handle_.state = ModelState::Failed;
+            handle_.transitionTo(ModelState::Failed);
             handle_.load_error = error.empty() ? "failed to create executor" : error;
             handle_.metadata.name = config.model_name;
             handle_.metadata.versions = handle_.versions;
@@ -71,17 +66,30 @@ void ModelRegistry::loadModel(const RuntimeConfig &config, ExecutorFactory facto
     handle_.name = handle_.metadata.name;
     handle_.versions = handle_.metadata.versions;
 
-    SchedulerConfig scheduler_config;
-    scheduler_config.max_queue_size = config.max_queue_size;
-    scheduler_config.request_timeout_ms = config.request_timeout_ms;
-    scheduler_config.instances = config.instances;
-    scheduler_config.dynamic_batching.enabled = config.dynamic_batching_enabled;
-    scheduler_config.dynamic_batching.max_batch_size = config.max_batch_size;
-    scheduler_config.dynamic_batching.max_queue_delay_us = config.max_queue_delay_us;
-    scheduler_config.dynamic_batching.preferred_batch_sizes = config.preferred_batch_sizes;
-    handle_.scheduler =
-        makeModelScheduler(std::move(executors), scheduler_config, config.model_name);
-    handle_.state = ModelState::Ready;
+    if (usesLlmScheduler(config.scheduler_strategy, config.backend)) {
+        LlmSchedulerConfig scheduler_config;
+        scheduler_config.max_queue_size = config.max_queue_size;
+        scheduler_config.request_timeout_ms = config.request_timeout_ms;
+        scheduler_config.instances = config.instances;
+        scheduler_config.context_length = config.context_length;
+        scheduler_config.kv_cache_slots = config.kv_cache_slots;
+        scheduler_config.max_tokens = config.max_tokens;
+        scheduler_config.tokens_per_char = config.tokens_per_char;
+        handle_.scheduler =
+            makeLlmScheduler(std::move(executors), scheduler_config, config.model_name);
+    } else {
+        SchedulerConfig scheduler_config;
+        scheduler_config.max_queue_size = config.max_queue_size;
+        scheduler_config.request_timeout_ms = config.request_timeout_ms;
+        scheduler_config.instances = config.instances;
+        scheduler_config.dynamic_batching.enabled = config.dynamic_batching_enabled;
+        scheduler_config.dynamic_batching.max_batch_size = config.max_batch_size;
+        scheduler_config.dynamic_batching.max_queue_delay_us = config.max_queue_delay_us;
+        scheduler_config.dynamic_batching.preferred_batch_sizes = config.preferred_batch_sizes;
+        handle_.scheduler =
+            makeModelScheduler(std::move(executors), scheduler_config, config.model_name);
+    }
+    handle_.transitionTo(ModelState::Ready);
 }
 
 std::optional<ModelMetadata> ModelRegistry::find(const std::string &model_name) const {
@@ -160,6 +168,9 @@ bool ModelRegistry::beginDrain(const std::string &model_name) {
     if (model_name != handle_.name || handle_.scheduler == nullptr) {
         return false;
     }
+    if (handle_.state == ModelState::Ready) {
+        handle_.transitionTo(ModelState::Unloading);
+    }
     handle_.scheduler->beginDrain();
     return true;
 }
@@ -178,4 +189,8 @@ std::string ModelRegistry::modelName() const {
 
 bool ModelRegistry::logPayloads() const {
     return log_payloads_;
+}
+
+double ModelRegistry::tokensPerChar() const {
+    return tokens_per_char_;
 }
