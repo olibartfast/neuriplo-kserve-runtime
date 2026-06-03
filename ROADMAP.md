@@ -128,6 +128,9 @@ Step 5: Scheduler And Autoscaling Behavior
 Step 6: Dynamic Batching
 Step 7: Observability And KServe Deployment Examples
 Step 8: LLM Backends (llama.cpp and Cactus)
+Step 9: Production Hardening — Tensor Path
+Step 10: LLM Path Completion
+Step 11: Deployment Validation
 ```
 
 Current architecture patterns are documented in `DESIGN_PATTERNS.md`. That file
@@ -1012,6 +1015,219 @@ Exit criteria:
 - Cancellation/deadline behavior is defined and tested.
 - LLM scheduling does not reuse tensor batch merge/split logic.
 
+### Step 9: Production Hardening — Tensor Path
+
+Step 9 closes the gaps blocking production tensor/CV serving. Each substep is
+atomic: independent to build, validate, and ship.
+
+#### Step 9.1: Multi-Datatype Neuriplo Adapter
+
+- Extend `NeuriploExecutor` beyond dense `FP32` to INT8, FP16, INT32, and
+  the datatypes used by the first target model.
+- Add dtype-conversion validation at the adapter boundary.
+- Reject unsupported datatypes with stable error codes.
+
+Exit criteria:
+
+- At least two non-FP32 datatypes convert correctly end-to-end through
+  `/v2/models/{model}/infer`.
+- Unsupported datatypes produce `INVALID_ARGUMENT` with a clear message.
+
+#### Step 9.2: Formal Model State Machine
+
+- Implement explicit `UNLOADED → LOADING → READY → UNLOADING → UNLOADED`
+  transitions in `ModelRegistry`/`ModelHandle`.
+- Replace scattered readiness checks with transition helpers.
+- Reject or log invalid state transitions.
+- Align drain behavior (`beginDrain()`) with `UNAVAILABLE` state.
+
+Exit criteria:
+
+- Readiness endpoints reflect state machine state deterministically.
+- Invalid transition attempts are logged.
+
+#### Step 9.3: Composable Request Pipeline
+
+- Refactor `KServeRuntime::handleInfer()` into a chain:
+  `decode → validate → admit → schedule → encode`.
+- Each stage is a plain function or small callable; no framework required.
+- Extension points: request ID injection, rate limits, auth hooks.
+
+Exit criteria:
+
+- New cross-cutting infer behavior can be added without editing every
+  route handler.
+- Existing route tests pass unchanged.
+
+#### Step 9.4: Collision-Resistant Request IDs
+
+- Replace counter-based request ID generation with UUID v4 or similar.
+- Preserve client-supplied `id` passthrough.
+- Propagate IDs consistently through all trace spans and structured logs.
+
+Exit criteria:
+
+- Two concurrent requests never share a generated ID.
+- Client-supplied IDs are unchanged.
+
+#### Step 9.5: Container Startup Probe Documentation
+
+- Document Kubernetes `startupProbe`, `initialDelaySeconds`, and
+  `readinessGates` integration for model load-and-ready window.
+- Validate liveness/readiness under load in a real or mock cluster.
+- Smoke-test the `ClusterServingRuntime` manifest end-to-end.
+
+Exit criteria:
+
+- Startup probe config is documented and known to work with a model
+  that takes >1s to load.
+- `/v2/health/ready` does not flip true until all configured models
+  are loaded.
+
+#### Step 9.6: Latency SLO Benchmarks
+
+- Add p50/p95/p99 latency benchmarks for tensor inference path.
+- Run under controlled concurrency; record queue, infer, and total
+  latencies.
+- Publish baseline numbers in CI or documentation.
+
+Exit criteria:
+
+- Baseline latencies are measurable and repeatable.
+- Regression is detectable from benchmark output.
+
+### Step 10: LLM Path Completion
+
+Step 10 addresses the remaining Step 8 gaps and closes the LLM production
+path. Each substep builds on Step 8 scaffolding to reach a working
+llama.cpp/Cactus decode with streaming, cancellation, and OpenAI endpoints.
+
+#### Step 10.1: Real LLM Backend Execution
+
+- Wire real llama.cpp and Cactus decode through `NeuriploExecutor`.
+- Pass generation parameters (`max_tokens`, `temperature`, `top_p`, `top_k`)
+  into backend calls.
+- Validate token-by-token decode loops and KV cache management against
+  real hardware.
+
+Exit criteria:
+
+- A real llama.cpp or Cactus model produces text through
+  `/v2/models/{model}/infer`.
+- Backend metadata (context length, tokenizer) comes from neuriplo.
+
+#### Step 10.2: Token-Accurate Context Enforcement
+
+- Replace the character-count proxy in `LlmScheduler` with real
+  tokenization.
+- Enforce context-length limits at admission time.
+- Reject requests exceeding available context window.
+
+Exit criteria:
+
+- Context enforcement is accurate for multi-byte and non-English text.
+- Admission rejects over-context requests with a stable error code.
+
+#### Step 10.3: Cancellation and Deadline Propagation
+
+- Propagate cancel/deadline through `LlmScheduler` into backend decode
+  loops.
+- Abandon slow decode when the client deadline expires.
+- Ensure cancelled work does not hold KV cache slots or executor threads.
+
+Exit criteria:
+
+- A deliberately slow decode loop is abandoned on client timeout.
+- KV cache slots and inflight counters are released correctly on cancel.
+
+#### Step 10.4: KV-Cache Memory Pressure Policy
+
+- Add admission control that ties KV cache slot occupancy to available
+  memory.
+- Reject or queue requests when context length × active slots exceeds
+  a configurable threshold.
+- Expose KV-cache slot utilization in metrics.
+
+Exit criteria:
+
+- Memory pressure blocks new requests before OOM.
+- KV-cache metrics are exported on `/metrics`.
+
+#### Step 10.5: Streaming Responses
+
+- Implement SSE or chunked transfer encoding for token-by-token output.
+- Keep KServe V2 response shape stable for non-streaming path.
+- Gate streaming per-request via `parameters.stream`.
+
+Exit criteria:
+
+- Streaming tokens are delivered progressively to the client.
+- Non-streaming path is unchanged.
+
+#### Step 10.6: OpenAI-Compatible Endpoints
+
+- Add `/v1/completions`, `/v1/chat/completions`, and `/v1/embeddings`
+  only for LLM models.
+- Share model lifecycle, metrics, timeouts, and cancellation with KServe
+  V2 path.
+- Map OpenAI request/response shapes to internal LLM execution types.
+
+Exit criteria:
+
+- A llama.cpp-backed model responds to `/v1/chat/completions` with
+  a valid OpenAI-shaped response.
+- Tensor-only models do not expose OpenAI endpoints.
+
+### Step 11: Deployment Validation
+
+Step 11 validates the runtime end-to-end in a KServe/Kubernetes context
+and documents behaviour for external consumers.
+
+#### Step 11.1: InferenceGraph Routing Validation
+
+- Integration test proving the runtime response shape survives InferenceGraph
+  `Sequence`, `Switch`, and `Splitter` routing.
+- Validate that metadata and error responses are compatible with graph
+  routing semantics.
+
+Exit criteria:
+
+- An InferenceGraph with the runtime as a node completes successfully.
+- Error responses from the runtime do not break graph routing.
+
+#### Step 11.2: Canary Rollout Validation
+
+- Test that `canaryTrafficPercent` works correctly with runtime-image
+  and model-artifact changes.
+- Validate metrics labels distinguish canary vs stable traffic.
+
+Exit criteria:
+
+- Canary traffic split produces distinguishable metrics.
+- Rollout does not cause spurious readiness flips.
+
+#### Step 11.3: Autoscaling Integration Tests
+
+- Validate HPA/KEDA/custom autoscaler behaviour with the runtime's
+  exposed metrics (queue depth, inflight, latency).
+- Document recommended autoscaling thresholds.
+
+Exit criteria:
+
+- Autoscaler scales up under load and down when idle.
+- Scaling events are visible in metrics/logs.
+
+#### Step 11.4: Structured Error Documentation
+
+- Document the full error taxonomy for external clients.
+- Include HTTP status codes, error body shapes, and recovery guidance.
+- Add examples for each error category.
+
+Exit criteria:
+
+- Client-facing error docs exist and cover every `KServeErrors` category.
+- Docs are kept in the repository.
+
 ## Validation Strategy
 
 Local checks first:
@@ -1083,86 +1299,42 @@ Performance checks:
 
 ## Production Readiness Gap Analysis
 
-All eight roadmap steps have snapshot documents (STEP1–STEP8.md), and the
-runtime passes its full test suite. This section records what remains before
-this is a production-facing serving runtime. Items are grouped by severity.
+Steps 0–8 are completed and have snapshot documents (STEP0–STEP8.md). Steps
+9–11 are planned to close remaining gaps. This section records what remains
+before this is a production-facing serving runtime, annotated with the step
+that addresses each gap.
 
-### Gaps Blocking Tensor / CV Production Use
+### Gaps Blocking Tensor / CV Production Use → Addressed by Step 9
 
-These reflect real-backend roughness or missing non-functional requirements on
-the tensor path:
+- **Dense FP32-only neuriplo adapter** → Step 9.1
+- **No formal model state machine** → Step 9.2
+- **Request pipeline not composable** → Step 9.3
+- **Request ID generation is weak** → Step 9.4
+- **No container readiness-gate health checks** → Step 9.5
+- **No latency SLO / performance baseline** → Step 9.6
+- **Thread-per-client HTTP server** → Explicitly deferred (scale trigger)
+- **gRPC V2 surface** → Explicitly deferred (client demand trigger)
 
-- **Dense FP32-only neuriplo adapter**: `NeuriploExecutor` only converts dense
-  `FP32` tensors. Other datatypes (INT8, FP16, INT32, etc.) are rejected.
-  Multi-input models that do not match the metadata input order exactly need
-  explicit ordering tests.
-- **Thread-per-client HTTP server**: The current `HttpServer` spawns one
-  detached thread per client connection. Under production concurrency this
-  creates unbounded thread pressure. An async reactor (epoll/io_uring) is
-  deferred to the long-term list (see Design Pattern Evolution) and is not a
-  first-launch blocker, but it must be addressed before sustained production
-  load.
-- **gRPC V2 surface**: Not implemented. KServe clients that require gRPC will
-  not work until this adapter layer is added (also deferred to long-term).
-- **No container readiness-gate health checks for model load**: The readiness
-  endpoint flips based on model state, but the startup load-and-ready window
-  does not yet integrate with Kubernetes `startupProbe` / `initialDelaySeconds`
-  documentation.
-- **No formal model state machine**: `ModelRegistry` readiness is still inside
-  scattered checks rather than explicit `UNLOADED → LOADING → READY` transition
-  helpers (planned in Step 3–7 design patterns).
-- **Request pipeline not composable**: The infer handler is monolithic rather
-  than a chain of `decode → validate → admit → schedule → encode` stages
-  (planned in Step 7 middleware). Adding new cross-cutting behavior requires
-  editing route handlers directly.
-- **Request ID generation is weak**: The runtime currently accepts a
-  client-supplied `id` or generates a counter-based ID. No UUID or
-  collision-resistant generation.
+### Gaps Blocking LLM Production Use → Addressed by Step 10
 
-### Gaps Blocking LLM Production Use
+- **No real LLM backend execution** → Step 10.1
+- **Token-accurate context enforcement** → Step 10.2
+- **No cancellation/deadline in backend decode** → Step 10.3
+- **No KV-cache memory pressure policy** → Step 10.4
+- **No streaming responses** → Step 10.5
+- **No OpenAI-compatible endpoints** → Step 10.6
 
-These are the items remaining from Step 8 (LLM Backends) that prevent any real
-LLM workload:
+### Gaps Common To Both Paths → Addressed by Step 11
 
-- **No real LLM backend execution**: `LlmScheduler` dispatches only to the
-  `StubExecutor`. Real llama.cpp and Cactus decode is not wired through
-  `NeuriploExecutor`. Token-by-token decode loops, KV cache management, and
-  generation parameter passthrough are not validated against real hardware.
-- **No streaming responses**: Only non-streaming (full-response) infer is
-  implemented. SSE or chunked transfer encoding for token-by-token output is
-  missing.
-- **No OpenAI-compatible endpoints**: `/v1/completions`,
-  `/v1/chat/completions`, and `/v1/embeddings` are not implemented (Step 8.6).
-- **Token-accurate context enforcement**: The current `LlmScheduler` uses a
-  character-count proxy for context-length checks. Real tokenization is not
-  performed, so context limits are approximate and will break for multi-byte or
-  non-English text.
-- **No cancellation or deadline propagation into backend decode loops**:
-  Cancellation is only at the client-timeout level (`PendingRequest::cancelled`).
-  A slow decode loop cannot be abandoned when the client deadline expires
-  (Step 8.7). This is a correctness requirement for LLM production.
-- **No KV-cache memory pressure policy**: Context length × KV cache slots can
-  silently exceed available memory. No admission control ties memory to slot
-  occupancy.
-
-### Gaps Common To Both Paths
-
-- **No `InferenceGraph` routing validation**: The example YAML exists, but no
-  integration test proves the runtime response shape survives sequence, switch,
-  or splitter routing.
-- **No canary rollout validation**: The canary YAML exists, but no test proves
-  the runtime behaves correctly under traffic-split semantics.
-- **No autoscaling integration tests**: HPA/KEDA/custom autoscaler behavior has
-  not been validated with the exposed metrics.
-- **No structured error documentation for clients**: Error taxonomy is
-  implemented in code but not documented for external consumers.
-- **No latency SLO / performance baseline**: No p50/p95/p99 benchmarks exist
-  in CI or documentation.
+- **No InferenceGraph routing validation** → Step 11.1
+- **No canary rollout validation** → Step 11.2
+- **No autoscaling integration tests** → Step 11.3
+- **No structured error documentation** → Step 11.4
 
 ### Explicitly Deferred (Long-Term / Scale-Only)
 
 These are recorded in the Design Pattern Evolution section and are NOT blockers
-for a first production launch:
+for a first production launch. They remain deferred even after Step 11 completion.
 
 | Item | Trigger |
 |------|---------|
@@ -1174,15 +1346,28 @@ for a first production launch:
 | Backend plugin registry (no central switch) | Backend count growth |
 | Control plane / data plane split | Multi-model + drain complexity |
 
+## Post-Step 11 Launch Readiness
+
+After Steps 9, 10, and 11 are completed, the runtime is production-ready for a
+**first launch** under these constraints:
+
+- Single model per runtime instance (tensor or LLM).
+- KServe V2 HTTP protocol surface.
+- Moderate connection concurrency (thread-per-client is sufficient).
+- For LLM: streaming, cancellation, and token-accurate context limits are in
+  place.
+- Kubernetes probes, autoscaling, canary, and InferenceGraph routing are
+  validated.
+
+The explicitly deferred items (async HTTP reactor, gRPC, multi-model, zero-copy
+buffers) become relevant only when the deployment outgrows single-model or
+moderate-concurrency workloads. They are not correctness blockers for launch.
+
 ### Recommended Next Actions
 
-1. **For tensor CV serving**: Harden the neuriplo adapter to cover the datatypes
-   used by the first target model, then validate end-to-end with a real ONNX
-   model (beyond the identity smoke test). Add a latency baseline.
-2. **For LLM serving**: Wire real llama.cpp decode through `NeuriploExecutor`,
-   implement token-accurate context enforcement, add cancellation propagation,
-   then add streaming. OpenAI-compatible endpoints should follow after the KServe
-   V2 LLM path is stable.
-3. **For Kubernetes deployment**: Add startup probe documentation, validate
-   liveness/readiness under load, and smoke-test the ClusterServingRuntime
-   manifest in a real cluster.
+1. **Step 9 (Tensor hardening)**: Start with 9.1 (multi-datatype adapter) and
+   9.2 (model state machine) as they are the highest-impact correctness items.
+2. **Step 10 (LLM completion)**: Start with 10.1 (real backend execution) and
+   10.3 (cancellation propagation) as they gate all other LLM substeps.
+3. **Step 11 (Deployment validation)**: Can run in parallel with Step 9 and 10;
+   requires a test Kubernetes cluster.
