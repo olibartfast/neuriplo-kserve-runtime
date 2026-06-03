@@ -66,15 +66,104 @@ uint64_t elapsedNs(const TimePoint &start, const TimePoint &end) {
         std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count());
 }
 
+class MetricsRecorder {
+  public:
+    void increment(uint64_t SchedulerMetricsSnapshot::*field) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        snapshot_.*field += 1;
+    }
+
+    void recordBatch(size_t batch_size, uint64_t formation_ns, uint64_t execution_ns) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        ++snapshot_.batches_formed;
+        snapshot_.batched_requests_total += batch_size;
+        snapshot_.batch_formation_ns_total += formation_ns;
+        snapshot_.batch_execution_ns_total += execution_ns;
+    }
+
+    void recordBatchExecution(uint64_t execution_ns) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        snapshot_.batch_execution_ns_total += execution_ns;
+    }
+
+    void recordLatencies(const TimePoint &enqueued_at, const TimePoint &execution_started,
+                         const TimePoint &execution_finished) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        snapshot_.queue_wait_ns_total += elapsedNs(enqueued_at, execution_started);
+        snapshot_.execution_ns_total += elapsedNs(execution_started, execution_finished);
+        snapshot_.total_ns_total += elapsedNs(enqueued_at, execution_finished);
+        ++snapshot_.completed_requests;
+    }
+
+    SchedulerMetricsSnapshot snapshot(size_t queue_depth, size_t in_flight) const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        SchedulerMetricsSnapshot result = snapshot_;
+        result.queue_depth = queue_depth;
+        result.in_flight = in_flight;
+        return result;
+    }
+
+  private:
+    mutable std::mutex mutex_;
+    SchedulerMetricsSnapshot snapshot_;
+};
+
+class ExecutorPool {
+  public:
+    explicit ExecutorPool(std::vector<std::unique_ptr<Executor>> &executors)
+        : executors_(executors) {
+        inflight_.assign(executors_.size(), 0);
+    }
+
+    size_t select() {
+        std::lock_guard<std::mutex> lock(mutex_);
+        size_t best_index = 0;
+        size_t best_inflight = inflight_[0];
+        for (size_t index = 1; index < inflight_.size(); ++index) {
+            if (inflight_[index] < best_inflight) {
+                best_index = index;
+                best_inflight = inflight_[index];
+            }
+        }
+        ++inflight_[best_index];
+        return best_index;
+    }
+
+    void release(size_t executor_index) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (inflight_[executor_index] > 0) {
+            --inflight_[executor_index];
+        }
+    }
+
+    size_t currentInFlight() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        size_t total = 0;
+        for (const auto count : inflight_) {
+            total += count;
+        }
+        return total;
+    }
+
+    Executor &executorAt(size_t index) {
+        return *executors_.at(index);
+    }
+
+  private:
+    std::vector<std::unique_ptr<Executor>> &executors_;
+    mutable std::mutex mutex_;
+    std::vector<size_t> inflight_;
+};
+
 class ModelScheduler final : public Scheduler {
   public:
     ModelScheduler(std::vector<std::unique_ptr<Executor>> executors, SchedulerConfig config,
                    std::string model_name)
-        : executors_(std::move(executors)), config_(config), model_name_(std::move(model_name)) {
+        : executors_(std::move(executors)), config_(config), model_name_(std::move(model_name)),
+          pool_(executors_) {
         if (executors_.empty()) {
             throw std::invalid_argument("scheduler requires at least one executor");
         }
-        inflight_.assign(executors_.size(), 0);
         workers_.reserve(config_.instances);
         for (size_t worker_index = 0; worker_index < config_.instances; ++worker_index) {
             (void)worker_index;
@@ -111,11 +200,11 @@ class ModelScheduler final : public Scheduler {
                 return makeDrainingResult();
             }
             if (queue_.size() >= config_.max_queue_size) {
-                incrementMetric(&SchedulerMetricsSnapshot::requests_rejected);
+                metrics_.increment(&SchedulerMetricsSnapshot::requests_rejected);
                 return makeOverloadedResult();
             }
             queue_.push_back(pending);
-            incrementMetric(&SchedulerMetricsSnapshot::requests_accepted);
+            metrics_.increment(&SchedulerMetricsSnapshot::requests_accepted);
         }
         queue_cv_.notify_one();
 
@@ -125,7 +214,7 @@ class ModelScheduler final : public Scheduler {
 
         cancel_token->store(true, std::memory_order_release);
         pending->cancelled.store(true, std::memory_order_release);
-        incrementMetric(&SchedulerMetricsSnapshot::requests_timed_out);
+        metrics_.increment(&SchedulerMetricsSnapshot::requests_timed_out);
         return makeTimeoutResult();
     }
 
@@ -139,8 +228,6 @@ class ModelScheduler final : public Scheduler {
 
     void beginDrain() override {
         {
-            // Flip draining_ under queue_mutex_ so a worker sitting between its
-            // predicate check and the internal cv wait cannot miss the wakeup.
             std::lock_guard<std::mutex> lock(queue_mutex_);
             if (draining_.exchange(true, std::memory_order_acq_rel)) {
                 return;
@@ -158,28 +245,13 @@ class ModelScheduler final : public Scheduler {
     }
 
     SchedulerMetricsSnapshot metrics() const override {
-        const size_t queue_depth = currentQueueDepth();
-        const size_t in_flight = currentInFlight();
-        std::lock_guard<std::mutex> lock(metrics_mutex_);
-        SchedulerMetricsSnapshot snapshot = metrics_;
-        snapshot.queue_depth = queue_depth;
-        snapshot.in_flight = in_flight;
-        return snapshot;
+        return metrics_.snapshot(currentQueueDepth(), pool_.currentInFlight());
     }
 
   private:
     size_t currentQueueDepth() const {
         std::lock_guard<std::mutex> lock(queue_mutex_);
         return queue_.size();
-    }
-
-    size_t currentInFlight() const {
-        std::lock_guard<std::mutex> lock(inflight_mutex_);
-        size_t total = 0;
-        for (const auto count : inflight_) {
-            total += count;
-        }
-        return total;
     }
 
     void rejectQueuedRequests() {
@@ -191,49 +263,6 @@ class ModelScheduler final : public Scheduler {
         for (const auto &request : pending) {
             request->promise->set_value(makeDrainingResult());
         }
-    }
-
-    size_t selectExecutorIndex() {
-        std::lock_guard<std::mutex> lock(inflight_mutex_);
-        size_t best_index = 0;
-        size_t best_inflight = inflight_[0];
-        for (size_t index = 1; index < inflight_.size(); ++index) {
-            if (inflight_[index] < best_inflight) {
-                best_index = index;
-                best_inflight = inflight_[index];
-            }
-        }
-        ++inflight_[best_index];
-        return best_index;
-    }
-
-    void decrementInflight(size_t executor_index) {
-        std::lock_guard<std::mutex> lock(inflight_mutex_);
-        if (inflight_[executor_index] > 0) {
-            --inflight_[executor_index];
-        }
-    }
-
-    void incrementMetric(uint64_t SchedulerMetricsSnapshot::*field) {
-        std::lock_guard<std::mutex> lock(metrics_mutex_);
-        metrics_.*field += 1;
-    }
-
-    void recordBatchMetrics(size_t batch_size, uint64_t formation_ns, uint64_t execution_ns) {
-        std::lock_guard<std::mutex> lock(metrics_mutex_);
-        ++metrics_.batches_formed;
-        metrics_.batched_requests_total += batch_size;
-        metrics_.batch_formation_ns_total += formation_ns;
-        metrics_.batch_execution_ns_total += execution_ns;
-    }
-
-    void recordLatencies(const TimePoint &enqueued_at, const TimePoint &execution_started,
-                         const TimePoint &execution_finished) {
-        std::lock_guard<std::mutex> lock(metrics_mutex_);
-        metrics_.queue_wait_ns_total += elapsedNs(enqueued_at, execution_started);
-        metrics_.execution_ns_total += elapsedNs(execution_started, execution_finished);
-        metrics_.total_ns_total += elapsedNs(enqueued_at, execution_finished);
-        ++metrics_.completed_requests;
     }
 
     std::shared_ptr<PendingRequest> popNextPending() {
@@ -261,7 +290,7 @@ class ModelScheduler final : public Scheduler {
         if (pending->request.cancel_token) {
             pending->request.cancel_token->store(true, std::memory_order_release);
         }
-        incrementMetric(&SchedulerMetricsSnapshot::requests_timed_out);
+        metrics_.increment(&SchedulerMetricsSnapshot::requests_timed_out);
         fulfillResult(pending, makeTimeoutResult());
     }
 
@@ -336,8 +365,8 @@ class ModelScheduler final : public Scheduler {
                                             Clock::now() >= formation_deadline) &&
                     batch.size() > 1) {
                     const auto formation_finished = Clock::now();
-                    recordBatchMetrics(batch.size(),
-                                       elapsedNs(formation_started, formation_finished), 0);
+                    metrics_.recordBatch(batch.size(),
+                                         elapsedNs(formation_started, formation_finished), 0);
                     return batch;
                 }
 
@@ -361,25 +390,15 @@ class ModelScheduler final : public Scheduler {
 
         const auto formation_finished = Clock::now();
         if (batch.size() > 1) {
-            recordBatchMetrics(batch.size(), elapsedNs(formation_started, formation_finished), 0);
+            metrics_.recordBatch(batch.size(), elapsedNs(formation_started, formation_finished), 0);
         }
         return batch;
     }
 
     bool runInference(Executor &executor, const ExecutionRequest &request,
-                      const TimePoint &deadline, ExecutionResponse &response) {
+                      const TimePoint & /*deadline*/, ExecutionResponse &response) {
         try {
-            if (config_.instances == 1) {
-                response = executor.infer(request);
-                return true;
-            }
-
-            auto infer_future = std::async(
-                std::launch::async, [&executor, request]() { return executor.infer(request); });
-            if (infer_future.wait_until(deadline) == std::future_status::timeout) {
-                return false;
-            }
-            response = infer_future.get();
+            response = executor.infer(request);
             return true;
         } catch (const std::exception &error) {
             response.ok = false;
@@ -419,7 +438,7 @@ class ModelScheduler final : public Scheduler {
                 if (pending->request.cancel_token) {
                     pending->request.cancel_token->store(true, std::memory_order_release);
                 }
-                incrementMetric(&SchedulerMetricsSnapshot::requests_timed_out);
+                metrics_.increment(&SchedulerMetricsSnapshot::requests_timed_out);
                 fulfillResult(pending, makeTimeoutResult());
             }
         }
@@ -458,31 +477,28 @@ class ModelScheduler final : public Scheduler {
             return;
         }
 
-        const auto executor_index = selectExecutorIndex();
-        auto &executor = executors_.at(executor_index);
+        const auto executor_index = pool_.select();
+        auto &executor = pool_.executorAt(executor_index);
         const auto execution_started = Clock::now();
         const auto deadline = batchDeadline(active_batch);
 
         ExecutionResponse batched_response;
-        const bool completed = runInference(*executor, merged.request, deadline, batched_response);
+        const bool completed = runInference(executor, merged.request, deadline, batched_response);
         const auto execution_finished = Clock::now();
-        decrementInflight(executor_index);
+        pool_.release(executor_index);
 
         if (!completed) {
             for (const auto &pending : active_batch) {
                 if (pending->request.cancel_token) {
                     pending->request.cancel_token->store(true, std::memory_order_release);
                 }
-                incrementMetric(&SchedulerMetricsSnapshot::requests_timed_out);
+                metrics_.increment(&SchedulerMetricsSnapshot::requests_timed_out);
                 fulfillResult(pending, makeTimeoutResult());
             }
             return;
         }
 
-        {
-            std::lock_guard<std::mutex> lock(metrics_mutex_);
-            metrics_.batch_execution_ns_total += elapsedNs(execution_started, execution_finished);
-        }
+        metrics_.recordBatchExecution(elapsedNs(execution_started, execution_finished));
 
         const auto split_responses =
             splitExecutionResponse(batched_response, merged.batch_sizes, source_requests);
@@ -492,12 +508,12 @@ class ModelScheduler final : public Scheduler {
                 if (pending->request.cancel_token) {
                     pending->request.cancel_token->store(true, std::memory_order_release);
                 }
-                incrementMetric(&SchedulerMetricsSnapshot::requests_timed_out);
+                metrics_.increment(&SchedulerMetricsSnapshot::requests_timed_out);
                 fulfillResult(pending, makeTimeoutResult());
                 continue;
             }
 
-            recordLatencies(pending->enqueued_at, execution_started, execution_finished);
+            metrics_.recordLatencies(pending->enqueued_at, execution_started, execution_finished);
             SchedulerResult result;
             result.queue_latency_ns = elapsedNs(pending->enqueued_at, execution_started);
             result.execution_latency_ns = elapsedNs(execution_started, execution_finished);
@@ -521,26 +537,26 @@ class ModelScheduler final : public Scheduler {
             if (pending->request.cancel_token) {
                 pending->request.cancel_token->store(true, std::memory_order_release);
             }
-            incrementMetric(&SchedulerMetricsSnapshot::requests_timed_out);
+            metrics_.increment(&SchedulerMetricsSnapshot::requests_timed_out);
             fulfillResult(pending, makeTimeoutResult());
             return;
         }
 
-        const auto executor_index = selectExecutorIndex();
-        auto &executor = executors_.at(executor_index);
+        const auto executor_index = pool_.select();
+        auto &executor = pool_.executorAt(executor_index);
         const auto execution_started = Clock::now();
 
         ExecutionResponse response;
         const bool completed =
-            runInference(*executor, pending->request, pending->deadline, response);
+            runInference(executor, pending->request, pending->deadline, response);
         const auto execution_finished = Clock::now();
-        decrementInflight(executor_index);
+        pool_.release(executor_index);
 
         if (!completed) {
             if (pending->request.cancel_token) {
                 pending->request.cancel_token->store(true, std::memory_order_release);
             }
-            incrementMetric(&SchedulerMetricsSnapshot::requests_timed_out);
+            metrics_.increment(&SchedulerMetricsSnapshot::requests_timed_out);
             fulfillResult(pending, makeTimeoutResult());
             return;
         }
@@ -552,12 +568,12 @@ class ModelScheduler final : public Scheduler {
             if (pending->request.cancel_token) {
                 pending->request.cancel_token->store(true, std::memory_order_release);
             }
-            incrementMetric(&SchedulerMetricsSnapshot::requests_timed_out);
+            metrics_.increment(&SchedulerMetricsSnapshot::requests_timed_out);
             fulfillResult(pending, makeTimeoutResult());
             return;
         }
 
-        recordLatencies(pending->enqueued_at, execution_started, execution_finished);
+        metrics_.recordLatencies(pending->enqueued_at, execution_started, execution_finished);
         SchedulerResult result;
         result.queue_latency_ns = elapsedNs(pending->enqueued_at, execution_started);
         result.execution_latency_ns = elapsedNs(execution_started, execution_finished);
@@ -592,11 +608,8 @@ class ModelScheduler final : public Scheduler {
     std::atomic<bool> draining_{false};
 
     std::vector<std::thread> workers_;
-    mutable std::mutex inflight_mutex_;
-    std::vector<size_t> inflight_;
-
-    mutable std::mutex metrics_mutex_;
-    SchedulerMetricsSnapshot metrics_;
+    ExecutorPool pool_;
+    MetricsRecorder metrics_;
 };
 
 } // namespace
