@@ -8,26 +8,30 @@ namespace {
 
 std::mutex registry_mutex;
 std::unordered_map<std::string, BackendCapability> capabilities;
+std::once_flag default_init_flag;
 
 void registerDefaultBackends() {
-    static bool registered = false;
-    if (registered) {
-        return;
-    }
-    registered = true;
+    std::call_once(default_init_flag, []() {
+        const std::vector<BackendCapability> defaults = {
+            {"stub", BackendKind::Tensor, false},
+            {"onnx_runtime", BackendKind::Tensor, true},
+            {"opencv_dnn", BackendKind::Tensor, true},
+            {"openvino", BackendKind::Tensor, true},
+            {"tensorrt", BackendKind::Tensor, true},
+            {"libtorch", BackendKind::Tensor, true},
+            {"libtensorflow", BackendKind::Tensor, true},
+            {"migraphx", BackendKind::Tensor, true},
+            {"executorch", BackendKind::Tensor, true},
+            {"ggml", BackendKind::Llm, true},
+            {"llamacpp", BackendKind::Llm, true},
+            {"cactus", BackendKind::Llm, true},
+        };
 
-    const std::vector<BackendCapability> defaults = {
-        {"stub", BackendKind::Tensor, false},         {"onnx_runtime", BackendKind::Tensor, true},
-        {"opencv_dnn", BackendKind::Tensor, true},    {"openvino", BackendKind::Tensor, true},
-        {"tensorrt", BackendKind::Tensor, true},      {"libtorch", BackendKind::Tensor, true},
-        {"libtensorflow", BackendKind::Tensor, true}, {"migraphx", BackendKind::Tensor, true},
-        {"executorch", BackendKind::Tensor, true},    {"ggml", BackendKind::Llm, true},
-        {"llamacpp", BackendKind::Llm, true},         {"cactus", BackendKind::Llm, true},
-    };
-
-    for (const auto &capability : defaults) {
-        capabilities.emplace(capability.id, capability);
-    }
+        std::lock_guard<std::mutex> lock(registry_mutex);
+        for (const auto &capability : defaults) {
+            capabilities.emplace(capability.id, capability);
+        }
+    });
 }
 
 } // namespace
