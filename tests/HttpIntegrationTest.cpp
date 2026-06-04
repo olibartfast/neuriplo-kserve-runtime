@@ -51,7 +51,7 @@ int findFreePort() {
 class TestServer {
   public:
     TestServer()
-        : port(findFreePort()), registry(config), metrics(), runtime(std::move(registry), metrics),
+        : port(findFreePort()), registry(config), metrics(), runtime(registry, metrics),
           server(
               "127.0.0.1", port,
               [this](const HttpRequest &request) { return runtime.handle(request); }, 1024) {

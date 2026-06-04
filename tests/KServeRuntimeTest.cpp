@@ -22,7 +22,8 @@ KServeRuntime makeRuntime() {
     config.model_name = "demo";
     config.backend = "stub";
     static MetricsRegistry metrics;
-    return KServeRuntime(ModelRegistry(config), metrics);
+    static ModelRegistry registry(config);
+    return KServeRuntime(registry, metrics);
 }
 
 HttpResponse request(const KServeRuntime &runtime, std::string method, std::string path) {
@@ -221,7 +222,7 @@ TEST_CASE(kserve_runtime_unversioned_infer_uses_default_executor_version) {
         return std::make_unique<VersionedExecutor>(std::move(metadata));
     });
     MetricsRegistry metrics4a;
-    const KServeRuntime runtime(std::move(registry), metrics4a);
+    const KServeRuntime runtime(registry, metrics4a);
     const auto response = request(runtime, "POST", "/v2/models/demo/infer", validInferBody());
     REQUIRE_EQ(response.status, 200);
     REQUIRE(response.body.find(R"("model_version":"42")") != std::string::npos);
@@ -237,7 +238,7 @@ TEST_CASE(kserve_runtime_reports_not_ready_when_model_load_failed) {
         return nullptr;
     });
     MetricsRegistry metrics4b;
-    const KServeRuntime runtime(std::move(registry), metrics4b);
+    const KServeRuntime runtime(registry, metrics4b);
     REQUIRE_EQ(request(runtime, "GET", "/v2/health/ready").status, 503);
     REQUIRE_EQ(request(runtime, "GET", "/v2/models/demo/ready").status, 503);
 }
@@ -275,7 +276,7 @@ TEST_CASE(kserve_runtime_uses_injected_executor_without_route_changes) {
         return std::make_unique<MarkerExecutor>(std::move(metadata));
     });
     MetricsRegistry metrics4c;
-    const KServeRuntime runtime(std::move(registry), metrics4c);
+    const KServeRuntime runtime(registry, metrics4c);
     const auto response = request(runtime, "POST", "/v2/models/demo/infer", validInferBody());
     REQUIRE_EQ(response.status, 200);
     REQUIRE(response.body.find(R"("data":[42.0])") != std::string::npos);
@@ -314,7 +315,7 @@ TEST_CASE(kserve_runtime_passes_input_tensors_to_executor) {
         return std::make_unique<InputEchoExecutor>(std::move(metadata));
     });
     MetricsRegistry metrics4d;
-    const KServeRuntime runtime(std::move(registry), metrics4d);
+    const KServeRuntime runtime(registry, metrics4d);
     const auto response = request(
         runtime, "POST", "/v2/models/demo/infer",
         R"({"inputs":[{"name":"input","shape":[1,3],"datatype":"FP32","data":[4.0,5.5,6.0]}]})");
@@ -375,7 +376,7 @@ TEST_CASE(kserve_runtime_returns_overload_when_queue_is_full) {
         return executor;
     });
     MetricsRegistry metrics4e;
-    const KServeRuntime runtime(std::move(registry), metrics4e);
+    const KServeRuntime runtime(registry, metrics4e);
 
     std::thread first([&]() {
         (void)request(runtime, "POST", "/v2/models/demo/infer", validInferBody("first"));
@@ -403,7 +404,7 @@ TEST_CASE(kserve_runtime_reports_not_ready_while_draining) {
     ModelRegistry registry(config);
     REQUIRE(registry.beginDrain("demo"));
     MetricsRegistry metrics4f;
-    const KServeRuntime runtime(std::move(registry), metrics4f);
+    const KServeRuntime runtime(registry, metrics4f);
     REQUIRE_EQ(request(runtime, "GET", "/v2/health/ready").status, 503);
     REQUIRE_EQ(request(runtime, "GET", "/v2/models/demo/ready").status, 503);
 }
@@ -424,8 +425,9 @@ TEST_CASE(kserve_runtime_observability_details) {
     config.backend = "stub";
     config.log_payloads = true;
 
+    ModelRegistry registry(config);
     MetricsRegistry metrics;
-    KServeRuntime runtime(ModelRegistry(config), metrics);
+    KServeRuntime runtime(registry, metrics);
 
     // Call infer once to populate metrics and trace logs
     const auto response = request(runtime, "POST", "/v2/models/observability-demo/infer",
@@ -496,7 +498,7 @@ TEST_CASE(kserve_runtime_handles_openai_completions) {
         return std::make_unique<LlmExecutor>(std::move(metadata));
     });
     MetricsRegistry metrics4e;
-    const KServeRuntime runtime(std::move(registry), metrics4e);
+    const KServeRuntime runtime(registry, metrics4e);
 
     const std::string completions_body = R"({
         "model": "llm-model",
@@ -522,7 +524,7 @@ TEST_CASE(kserve_runtime_completions_rejects_missing_model) {
     config.backend = "stub";
     ModelRegistry registry(config);
     MetricsRegistry metrics4f;
-    const KServeRuntime runtime(std::move(registry), metrics4f);
+    const KServeRuntime runtime(registry, metrics4f);
 
     const std::string body = R"({"prompt": "Hello"})";
     const auto response = request(runtime, "POST", "/v1/completions", body);
@@ -536,7 +538,7 @@ TEST_CASE(kserve_runtime_completions_rejects_missing_prompt) {
     config.backend = "stub";
     ModelRegistry registry(config);
     MetricsRegistry metrics4g;
-    const KServeRuntime runtime(std::move(registry), metrics4g);
+    const KServeRuntime runtime(registry, metrics4g);
 
     const std::string body = R"({"model": "demo"})";
     const auto response = request(runtime, "POST", "/v1/completions", body);

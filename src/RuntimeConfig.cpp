@@ -160,6 +160,8 @@ RuntimeConfig parseRuntimeConfig(int argc, char **argv, const RuntimeEnvironment
             config.host = requireValue(i, argc, argv, arg);
         } else if (arg == "--port") {
             config.port = std::stoi(requireValue(i, argc, argv, arg));
+        } else if (arg == "--grpc-port") {
+            config.grpc_port = std::stoi(requireValue(i, argc, argv, arg));
         } else if (arg == "--max-request-bytes") {
             config.max_request_bytes =
                 static_cast<size_t>(std::stoull(requireValue(i, argc, argv, arg)));
@@ -220,6 +222,7 @@ RuntimeConfig parseRuntimeConfig(int argc, char **argv, const RuntimeEnvironment
         } else if (arg == "--help" || arg == "-h") {
             throw std::invalid_argument(
                 "usage: neuriplo-kserve-runtime [--host 0.0.0.0] [--port 8080] "
+                "[--grpc-port 9000] "
                 "[--max-request-bytes 67108864] [--model-name demo] [--model-version 1] "
                 "[--model-path path] [--backend stub] [--deployment stable] "
                 "[--max-queue-size 64] [--request-timeout-ms 30000] "
@@ -237,6 +240,9 @@ RuntimeConfig parseRuntimeConfig(int argc, char **argv, const RuntimeEnvironment
 
     if (config.port <= 0 || config.port > 65535) {
         throw std::invalid_argument("port must be in range 1..65535");
+    }
+    if (config.grpc_port < 0 || config.grpc_port > 65535) {
+        throw std::invalid_argument("gRPC port must be in range 0..65535");
     }
     if (config.model_name.empty()) {
         throw std::invalid_argument("model name must not be empty");

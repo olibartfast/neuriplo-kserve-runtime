@@ -20,14 +20,16 @@ KServeRuntime makeRuntime() {
     config.model_name = "demo";
     config.backend = "stub";
     static MetricsRegistry metrics;
-    return KServeRuntime(ModelRegistry(config), metrics);
+    static ModelRegistry registry(config);
+    return KServeRuntime(registry, metrics);
 }
 
 KServeRuntime makeRuntimeWithVersion(const std::string &version) {
     RuntimeConfig config;
     config.model_name = "demo";
     config.backend = "stub";
-    ModelRegistry registry(config, [&version](const RuntimeConfig &cfg, std::string &error) {
+    static MetricsRegistry metrics;
+    static ModelRegistry registry(config, [&version](const RuntimeConfig &cfg, std::string &error) {
         (void)error;
         ModelMetadata metadata;
         metadata.name = cfg.model_name;
@@ -55,8 +57,7 @@ KServeRuntime makeRuntimeWithVersion(const std::string &version) {
         };
         return std::make_unique<SequenceExecutor>(std::move(metadata));
     });
-    static MetricsRegistry metrics;
-    return KServeRuntime(std::move(registry), metrics);
+    return KServeRuntime(registry, metrics);
 }
 
 HttpResponse request(const KServeRuntime &runtime, std::string method, std::string path) {
@@ -210,7 +211,7 @@ TEST_CASE(inference_graph_overload_returns_stable_error) {
         return executor;
     });
     MetricsRegistry metrics;
-    const KServeRuntime runtime(std::move(registry), metrics);
+    const KServeRuntime runtime(registry, metrics);
 
     std::thread first(
         [&]() { (void)request(runtime, "POST", "/v2/models/demo/infer", validInferBody()); });
@@ -254,9 +255,10 @@ TEST_CASE(canary_metrics_include_version_label) {
     RuntimeConfig config;
     config.model_name = "canary-test";
     config.backend = "stub";
+    ModelRegistry registry(config);
     MetricsRegistry metrics;
     metrics.setModelVersion("2");
-    KServeRuntime runtime(ModelRegistry(config), metrics);
+    KServeRuntime runtime(registry, metrics);
 
     const auto infer_response =
         request(runtime, "POST", "/v2/models/canary-test/infer", validInferBody());
@@ -272,10 +274,11 @@ TEST_CASE(canary_metrics_include_deployment_label) {
     RuntimeConfig config;
     config.model_name = "canary-test";
     config.backend = "stub";
+    ModelRegistry registry(config);
     MetricsRegistry metrics;
     metrics.setModelVersion("2");
     metrics.setDeployment("canary");
-    KServeRuntime runtime(ModelRegistry(config), metrics);
+    KServeRuntime runtime(registry, metrics);
 
     const auto infer_response =
         request(runtime, "POST", "/v2/models/canary-test/infer", validInferBody());
@@ -291,9 +294,10 @@ TEST_CASE(canary_metrics_default_deployment_label_absent) {
     RuntimeConfig config;
     config.model_name = "stable-test";
     config.backend = "stub";
+    ModelRegistry registry(config);
     MetricsRegistry metrics;
     metrics.setModelVersion("1");
-    KServeRuntime runtime(ModelRegistry(config), metrics);
+    KServeRuntime runtime(registry, metrics);
 
     const auto metrics_response = request(runtime, "GET", "/metrics");
     REQUIRE_EQ(metrics_response.status, 200);
@@ -305,8 +309,9 @@ TEST_CASE(autoscaling_metrics_include_queue_and_inflight) {
     RuntimeConfig config;
     config.model_name = "autoscale-test";
     config.backend = "stub";
+    ModelRegistry registry(config);
     MetricsRegistry metrics;
-    KServeRuntime runtime(ModelRegistry(config), metrics);
+    KServeRuntime runtime(registry, metrics);
 
     const auto metrics_response = request(runtime, "GET", "/metrics");
     REQUIRE_EQ(metrics_response.status, 200);

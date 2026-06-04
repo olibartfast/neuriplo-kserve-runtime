@@ -17,6 +17,7 @@ FetchContent_MakeAvailable(nlohmann_json)
 
 option(NEURIPLO_ENABLE_CLANG_TIDY "Run clang-tidy during builds" OFF)
 option(NEURIPLO_RUNTIME_ENABLE_REAL_NEURIPLO "Build the real neuriplo adapter" OFF)
+option(NEURIPLO_RUNTIME_ENABLE_GRPC "Build gRPC V2 support" OFF)
 set(NEURIPLO_RUNTIME_NEURIPLO_SOURCE_DIR "../neuriplo" CACHE PATH
     "Path to a local neuriplo checkout when real neuriplo support is enabled")
 set(NEURIPLO_SANITIZER "" CACHE STRING "Enable sanitizer instrumentation: address, thread, or undefined")
@@ -53,6 +54,45 @@ if(NEURIPLO_RUNTIME_ENABLE_REAL_NEURIPLO)
     add_subdirectory("${NEURIPLO_RUNTIME_NEURIPLO_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/neuriplo")
 endif()
 
+if(NEURIPLO_RUNTIME_ENABLE_GRPC)
+    find_package(Protobuf REQUIRED)
+    find_package(gRPC CONFIG REQUIRED)
+
+    set(PROTO_FILE "${CMAKE_CURRENT_SOURCE_DIR}/proto/kserve_grpc.proto")
+    get_filename_component(PROTO_DIR "${PROTO_FILE}" DIRECTORY)
+
+    set(PROTO_GEN_DIR "${CMAKE_CURRENT_BINARY_DIR}/proto")
+    file(MAKE_DIRECTORY "${PROTO_GEN_DIR}")
+
+    set(PROTO_SRCS "${PROTO_GEN_DIR}/kserve_grpc.pb.cc")
+    set(PROTO_HDRS "${PROTO_GEN_DIR}/kserve_grpc.pb.h")
+    set(GRPC_SRCS "${PROTO_GEN_DIR}/kserve_grpc.grpc.pb.cc")
+    set(GRPC_HDRS "${PROTO_GEN_DIR}/kserve_grpc.grpc.pb.h")
+
+    get_target_property(GRPC_CPP_PLUGIN gRPC::grpc_cpp_plugin IMPORTED_LOCATION)
+    if(NOT GRPC_CPP_PLUGIN)
+        message(FATAL_ERROR "gRPC C++ plugin not found")
+    endif()
+
+    add_custom_command(
+        OUTPUT "${PROTO_SRCS}" "${PROTO_HDRS}" "${GRPC_SRCS}" "${GRPC_HDRS}"
+        COMMAND protobuf::protoc
+            "--proto_path=${PROTO_DIR}"
+            "--cpp_out=${PROTO_GEN_DIR}"
+            "--grpc_out=${PROTO_GEN_DIR}"
+            "--plugin=protoc-gen-grpc=${GRPC_CPP_PLUGIN}"
+            "${PROTO_FILE}"
+        DEPENDS "${PROTO_FILE}"
+        COMMENT "Generating gRPC sources from ${PROTO_FILE}"
+    )
+
+    list(APPEND NEURIPLO_RUNTIME_SOURCES
+        "${PROTO_SRCS}" "${GRPC_SRCS}"
+        src/GrpcServer.cpp
+        src/GrpcV2Codec.cpp
+    )
+endif()
+
 add_library(neuriplo-kserve-runtime-core STATIC ${NEURIPLO_RUNTIME_SOURCES})
 target_include_directories(neuriplo-kserve-runtime-core PUBLIC src)
 target_link_libraries(neuriplo-kserve-runtime-core PUBLIC nlohmann_json::nlohmann_json)
@@ -64,6 +104,15 @@ if(NEURIPLO_RUNTIME_ENABLE_REAL_NEURIPLO)
         ${OpenCV_INCLUDE_DIRS}
     )
     target_link_libraries(neuriplo-kserve-runtime-core PRIVATE neuriplo glog::glog)
+endif()
+
+if(NEURIPLO_RUNTIME_ENABLE_GRPC)
+    target_compile_definitions(neuriplo-kserve-runtime-core PRIVATE NEURIPLO_RUNTIME_WITH_GRPC)
+    target_include_directories(neuriplo-kserve-runtime-core PRIVATE "${PROTO_GEN_DIR}")
+    target_link_libraries(neuriplo-kserve-runtime-core PUBLIC
+        protobuf::libprotobuf
+        gRPC::grpc++
+    )
 endif()
 
 add_executable(neuriplo-kserve-runtime src/main.cpp)
@@ -143,6 +192,16 @@ target_compile_options(neuriplo-kserve-runtime-tests PRIVATE
 if(NEURIPLO_RUNTIME_ENABLE_REAL_NEURIPLO)
     target_sources(neuriplo-kserve-runtime-tests PRIVATE tests/RealNeuriploSmokeTest.cpp)
     target_compile_definitions(neuriplo-kserve-runtime-tests PRIVATE NEURIPLO_RUNTIME_WITH_REAL_NEURIPLO)
+endif()
+
+if(NEURIPLO_RUNTIME_ENABLE_GRPC)
+    target_sources(neuriplo-kserve-runtime-tests PRIVATE tests/GrpcV2CodecTest.cpp)
+    target_compile_definitions(neuriplo-kserve-runtime-tests PRIVATE NEURIPLO_RUNTIME_WITH_GRPC)
+    target_include_directories(neuriplo-kserve-runtime-tests PRIVATE "${PROTO_GEN_DIR}")
+    target_link_libraries(neuriplo-kserve-runtime-tests PRIVATE
+        protobuf::libprotobuf
+        gRPC::grpc++
+    )
 endif()
 
 if(NEURIPLO_ENABLE_CLANG_TIDY)

@@ -55,7 +55,7 @@ KServeRuntime makeLlmRuntime() {
     config.scheduler_strategy = "llm";
     config.max_tokens = 128;
     static MetricsRegistry metrics;
-    ModelRegistry registry(config, [](const RuntimeConfig &cfg, std::string &error) {
+    static ModelRegistry registry(config, [](const RuntimeConfig &cfg, std::string &error) {
         (void)error;
         ModelMetadata metadata;
         metadata.name = cfg.model_name;
@@ -65,7 +65,7 @@ KServeRuntime makeLlmRuntime() {
         metadata.outputs.push_back({"text", "BYTES", {1}});
         return std::make_unique<LlmEchoExecutor>(std::move(metadata));
     });
-    return KServeRuntime(std::move(registry), metrics);
+    return KServeRuntime(registry, metrics);
 }
 
 HttpResponse request(const KServeRuntime &runtime, std::string method, std::string path,
@@ -182,7 +182,7 @@ TEST_CASE(llm_path_kserve_infer_rejects_over_context) {
         metadata.outputs.push_back({"text", "BYTES", {1}});
         return std::make_unique<LlmEchoExecutor>(std::move(metadata));
     });
-    const KServeRuntime runtime(std::move(registry), metrics);
+    const KServeRuntime runtime(registry, metrics);
 
     const auto response = request(
         runtime, "POST", "/v2/models/tiny-llm/infer",

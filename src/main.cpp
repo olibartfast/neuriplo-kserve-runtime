@@ -5,6 +5,10 @@
 #include "ModelRegistry.hpp"
 #include "RuntimeConfig.hpp"
 
+#ifdef NEURIPLO_RUNTIME_WITH_GRPC
+#include "GrpcServer.hpp"
+#endif
+
 #include <chrono>
 #include <exception>
 #include <iostream>
@@ -24,7 +28,7 @@ bool hasFlag(int argc, char **argv, const std::string &flag) {
 
 void printUsage(std::ostream &out) {
     out << "usage: neuriplo-kserve-runtime [--host 0.0.0.0] [--port 8080] "
-           "[--max-request-bytes 67108864] [--model-name demo] [--model-path path] "
+           "[--grpc-port 9000] [--max-request-bytes 67108864] [--model-name demo] [--model-path path] "
            "[--backend stub] [--max-queue-size 64] [--request-timeout-ms 30000] "
            "[--instances 1] [--dynamic-batching-enabled false] [--max-batch-size 1] "
            "[--max-queue-delay-us 0] [--preferred-batch-sizes 2,4,8] "
@@ -52,7 +56,7 @@ int main(int argc, char **argv) {
             metrics.setDeployment(config.deployment);
         }
         ModelRegistry registry(config);
-        KServeRuntime runtime(std::move(registry), metrics);
+        KServeRuntime runtime(registry, metrics);
 
         auto &logger = defaultLogger();
         LogEvent startup;
@@ -73,6 +77,23 @@ int main(int argc, char **argv) {
             config.max_request_bytes);
 
         server.run();
+
+#ifdef NEURIPLO_RUNTIME_WITH_GRPC
+        if (config.grpc_port > 0) {
+            std::thread grpc_thread([&registry, &metrics, &config]() {
+                grpc_v2::GrpcServer grpc_server(config.host, config.grpc_port, registry, metrics);
+                grpc_server.run();
+            });
+            grpc_thread.detach();
+        }
+#else
+        if (config.grpc_port > 0) {
+            std::cerr
+                << "warning: --grpc-port specified but gRPC support is not compiled in; ignoring"
+                << '\n';
+        }
+#endif
+
     } catch (const std::exception &error) {
         std::cerr << "fatal: " << error.what() << '\n';
         return 1;
