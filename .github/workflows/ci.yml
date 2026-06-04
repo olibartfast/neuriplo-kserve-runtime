@@ -73,3 +73,17 @@ jobs:
         run: valgrind --leak-check=full --error-exitcode=1 ./build/debug/neuriplo-kserve-runtime-tests
       - name: Run version command under valgrind
         run: valgrind --leak-check=full --error-exitcode=1 ./build/debug/neuriplo-kserve-runtime --version
+
+  grpc:
+    name: gRPC V2 build and test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build tools and gRPC
+        run: sudo apt-get update && sudo apt-get install -y build-essential cmake libgrpc++-dev protobuf-compiler-grpc
+      - name: Configure
+        run: cmake --preset grpc
+      - name: Build
+        run: cmake --build --preset grpc --parallel
+      - name: Unit tests
+        run: ctest --preset grpc

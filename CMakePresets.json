@@ -73,6 +73,15 @@
         "DEFAULT_BACKEND": "ONNX_RUNTIME",
         "BUILD_INFERENCE_ENGINE_TESTS": "OFF"
       }
+    },
+    {
+      "name": "grpc",
+      "inherits": "debug",
+      "displayName": "gRPC V2 support",
+      "binaryDir": "${sourceDir}/build/grpc",
+      "cacheVariables": {
+        "NEURIPLO_RUNTIME_ENABLE_GRPC": "ON"
+      }
     }
   ],
   "buildPresets": [
@@ -82,7 +91,8 @@
     { "name": "asan", "configurePreset": "asan" },
     { "name": "tsan", "configurePreset": "tsan" },
     { "name": "ubsan", "configurePreset": "ubsan" },
-    { "name": "real-onnx", "configurePreset": "real-onnx" }
+    { "name": "real-onnx", "configurePreset": "real-onnx" },
+    { "name": "grpc", "configurePreset": "grpc" }
   ],
   "testPresets": [
     {
@@ -108,6 +118,11 @@
     {
       "name": "real-onnx",
       "configurePreset": "real-onnx",
+      "output": { "outputOnFailure": true }
+    },
+    {
+      "name": "grpc",
+      "configurePreset": "grpc",
       "output": { "outputOnFailure": true }
     }
   ]
