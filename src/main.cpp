@@ -47,6 +47,10 @@ int main(int argc, char **argv) {
     try {
         const auto config = parseRuntimeConfig(argc, argv);
         MetricsRegistry metrics;
+        metrics.setModelVersion(config.model_version);
+        if (!config.deployment.empty()) {
+            metrics.setDeployment(config.deployment);
+        }
         ModelRegistry registry(config);
         KServeRuntime runtime(std::move(registry), metrics);
 

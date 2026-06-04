@@ -1,0 +1,32 @@
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: neuriplo-demo-scaler
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: neuriplo-demo-predictor
+  pollingInterval: 10
+  cooldownPeriod: 300
+  minReplicaCount: 1
+  maxReplicaCount: 10
+  triggers:
+    - type: prometheus
+      metadata:
+        serverAddress: http://prometheus-operated.monitoring.svc:9090
+        metricName: neuriplo_scheduler_queue_depth
+        threshold: "5"
+        query: neuriplo_scheduler_queue_depth{model="neuriplo-demo"}
+    - type: prometheus
+      metadata:
+        serverAddress: http://prometheus-operated.monitoring.svc:9090
+        metricName: neuriplo_scheduler_in_flight_requests
+        threshold: "8"
+        query: neuriplo_scheduler_in_flight_requests{model="neuriplo-demo"}
+    - type: prometheus
+      metadata:
+        serverAddress: http://prometheus-operated.monitoring.svc:9090
+        metricName: neuriplo_scheduler_total_latency_seconds
+        threshold: "2"
+        query: neuriplo_scheduler_total_latency_seconds_sum{model="neuriplo-demo"} / neuriplo_scheduler_total_latency_seconds_count{model="neuriplo-demo"}

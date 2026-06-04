@@ -11,9 +11,11 @@ struct RuntimeConfig {
     int port = 8080;
     size_t max_request_bytes = 67108864;
     std::string model_name = "demo";
+    std::string model_version = "1";
     std::string model_path;
     std::string backend = "stub";
     std::string storage_uri;
+    std::string deployment;
     size_t max_queue_size = 64;
     int64_t request_timeout_ms = 30000;
     size_t instances = 1;

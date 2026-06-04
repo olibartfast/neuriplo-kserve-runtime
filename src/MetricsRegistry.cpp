@@ -168,11 +168,25 @@ void MetricsRegistry::recordProcessMemory() {
     // Process-wide, handled in renderMetrics
 }
 
+void MetricsRegistry::setModelVersion(const std::string &version) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    model_version_ = version;
+}
+
+void MetricsRegistry::setDeployment(const std::string &deployment) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    deployment_ = deployment;
+}
+
 std::string MetricsRegistry::renderMetrics() const {
     std::lock_guard<std::mutex> lock(mutex_);
 
     std::string out;
-    const auto modelLabel = std::map<std::string, std::string>{{"model", active_model_name_}};
+    auto modelLabel = std::map<std::string, std::string>{{"model", active_model_name_},
+                                                         {"version", model_version_}};
+    if (!deployment_.empty()) {
+        modelLabel["deployment"] = deployment_;
+    }
 
     // 1. Scheduler Metrics
     out += "# HELP neuriplo_scheduler_queue_depth Current scheduler queue depth\n";
@@ -280,13 +294,16 @@ std::string MetricsRegistry::renderMetrics() const {
     }
     appendCounterLine(out, "neuriplo_http_infer_requests_failure_total", modelLabel, tot_failure);
 
-    // 3. Roadmap: Request count by model, method, and status
+    // 3. Request count by model, version, and status
     out += "# HELP neuriplo_http_requests_total Total HTTP requests with method/status labels\n";
     out += "# TYPE neuriplo_http_requests_total counter\n";
     for (const auto &[model, statuses] : requests_by_status_) {
         for (const auto &[status, count] : statuses) {
-            std::map<std::string, std::string> labels = {{"model", model}, {"status", status}};
-            // Cross-reference with methods if available, otherwise general
+            std::map<std::string, std::string> labels = {
+                {"model", model}, {"version", model_version_}, {"status", status}};
+            if (!deployment_.empty()) {
+                labels["deployment"] = deployment_;
+            }
             appendCounterLine(out, "neuriplo_http_requests_total", labels, count);
         }
     }

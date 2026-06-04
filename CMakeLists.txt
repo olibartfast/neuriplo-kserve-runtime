@@ -117,6 +117,7 @@ add_executable(neuriplo-kserve-runtime-tests
     tests/BackendRegistryTest.cpp
     tests/BatchCompatibilityTest.cpp
     tests/BenchmarkTest.cpp
+    tests/DeploymentValidationTest.cpp
     tests/DynamicBatcherTest.cpp
     tests/HttpIntegrationTest.cpp
     tests/KServeRuntimeTest.cpp
