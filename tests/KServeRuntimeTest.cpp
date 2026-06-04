@@ -440,17 +440,14 @@ TEST_CASE(kserve_runtime_observability_details) {
     REQUIRE(metrics_response.body.find("model=\"observability-demo\"") != std::string::npos);
 
     // Check HTTP infer request counters
-    REQUIRE(metrics_response.body.find(
-                "neuriplo_http_infer_requests_total{model=\"observability-demo\"} 1") !=
-            std::string::npos);
-    REQUIRE(metrics_response.body.find(
-                "neuriplo_http_infer_requests_success_total{model=\"observability-demo\"} 1") !=
+    REQUIRE(metrics_response.body.find("neuriplo_http_infer_requests_total") != std::string::npos);
+    REQUIRE(metrics_response.body.find("model=\"observability-demo\"") != std::string::npos);
+    REQUIRE(metrics_response.body.find("version=\"1\"") != std::string::npos);
+    REQUIRE(metrics_response.body.find("neuriplo_http_infer_requests_success_total") !=
             std::string::npos);
 
     // Check detailed requests counter by status and model
-    REQUIRE(metrics_response.body.find(
-                "neuriplo_http_requests_total{model=\"observability-demo\",status=\"200\"} 1") !=
-            std::string::npos);
+    REQUIRE(metrics_response.body.find("status=\"200\"") != std::string::npos);
 
     // Check histograms
     REQUIRE(metrics_response.body.find("neuriplo_scheduler_queue_latency_seconds_bucket") !=

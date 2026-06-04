@@ -53,11 +53,16 @@ class MetricsRegistry {
 
     void recordProcessMemory();
 
+    void setModelVersion(const std::string &version);
+    void setDeployment(const std::string &deployment);
+
   private:
     mutable std::mutex mutex_;
 
     SchedulerMetricsSnapshot scheduler_metrics_;
     std::string active_model_name_ = "demo";
+    std::string model_version_ = "1";
+    std::string deployment_;
 
     // Request metrics maps
     std::map<std::string, std::map<std::string, uint64_t>>

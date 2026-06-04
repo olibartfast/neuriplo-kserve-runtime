@@ -143,9 +143,11 @@ RuntimeConfig parseRuntimeConfig(int argc, char **argv, const RuntimeEnvironment
     RuntimeConfig config;
 
     applyStringEnvironmentDefault(config.model_name, environment, "MODEL_NAME");
+    applyStringEnvironmentDefault(config.model_version, environment, "MODEL_VERSION");
     applyStringEnvironmentDefault(config.model_path, environment, "MODEL_PATH");
     applyStringEnvironmentDefault(config.backend, environment, "BACKEND");
     applyStringEnvironmentDefault(config.storage_uri, environment, "STORAGE_URI");
+    applyStringEnvironmentDefault(config.deployment, environment, "DEPLOYMENT");
     applySizeEnvironmentDefault(config.max_request_bytes, environment, "MAX_REQUEST_BYTES");
     applyDoubleEnvironmentDefault(config.tokens_per_char, environment, "TOKENS_PER_CHAR");
     if (config.model_path.empty() && environment.pathExists("/mnt/models")) {
@@ -163,10 +165,14 @@ RuntimeConfig parseRuntimeConfig(int argc, char **argv, const RuntimeEnvironment
                 static_cast<size_t>(std::stoull(requireValue(i, argc, argv, arg)));
         } else if (arg == "--model-name") {
             config.model_name = requireValue(i, argc, argv, arg);
+        } else if (arg == "--model-version") {
+            config.model_version = requireValue(i, argc, argv, arg);
         } else if (arg == "--model-path") {
             config.model_path = requireValue(i, argc, argv, arg);
         } else if (arg == "--backend") {
             config.backend = requireValue(i, argc, argv, arg);
+        } else if (arg == "--deployment") {
+            config.deployment = requireValue(i, argc, argv, arg);
         } else if (arg == "--max-queue-size") {
             config.max_queue_size =
                 static_cast<size_t>(std::stoull(requireValue(i, argc, argv, arg)));
@@ -214,8 +220,9 @@ RuntimeConfig parseRuntimeConfig(int argc, char **argv, const RuntimeEnvironment
         } else if (arg == "--help" || arg == "-h") {
             throw std::invalid_argument(
                 "usage: neuriplo-kserve-runtime [--host 0.0.0.0] [--port 8080] "
-                "[--max-request-bytes 67108864] [--model-name demo] [--model-path path] "
-                "[--backend stub] [--max-queue-size 64] [--request-timeout-ms 30000] "
+                "[--max-request-bytes 67108864] [--model-name demo] [--model-version 1] "
+                "[--model-path path] [--backend stub] [--deployment stable] "
+                "[--max-queue-size 64] [--request-timeout-ms 30000] "
                 "[--instances 1] [--dynamic-batching-enabled false] [--max-batch-size 1] "
                 "[--max-queue-delay-us 0] [--preferred-batch-sizes 2,4,8] "
                 "[--log-payloads false] [--scheduler-strategy tensor] "

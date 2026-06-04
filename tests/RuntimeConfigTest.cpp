@@ -44,9 +44,11 @@ TEST_CASE(parse_runtime_config_uses_defaults) {
     REQUIRE_EQ(config.port, 8080);
     REQUIRE_EQ(config.max_request_bytes, static_cast<size_t>(67108864));
     REQUIRE_EQ(config.model_name, "demo");
+    REQUIRE_EQ(config.model_version, "1");
     REQUIRE_EQ(config.backend, "stub");
     REQUIRE_EQ(config.model_path, "");
     REQUIRE_EQ(config.storage_uri, "");
+    REQUIRE_EQ(config.deployment, "");
     REQUIRE_EQ(config.max_queue_size, static_cast<size_t>(64));
     REQUIRE_EQ(config.request_timeout_ms, static_cast<int64_t>(30000));
     REQUIRE_EQ(config.instances, static_cast<size_t>(1));
@@ -221,4 +223,18 @@ TEST_CASE(parse_runtime_config_rejects_invalid_top_p) {
         threw = true;
     }
     REQUIRE(threw);
+}
+
+TEST_CASE(parse_runtime_config_accepts_model_version_and_deployment) {
+    const auto config =
+        parse({"neuriplo-kserve-runtime", "--model-version", "v2", "--deployment", "canary"});
+    REQUIRE_EQ(config.model_version, "v2");
+    REQUIRE_EQ(config.deployment, "canary");
+}
+
+TEST_CASE(parse_runtime_config_model_version_env) {
+    const auto config = parse({"neuriplo-kserve-runtime"},
+                              testEnvironment({{"MODEL_VERSION", "3"}, {"DEPLOYMENT", "prod"}}));
+    REQUIRE_EQ(config.model_version, "3");
+    REQUIRE_EQ(config.deployment, "prod");
 }

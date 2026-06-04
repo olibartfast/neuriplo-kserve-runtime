@@ -20,6 +20,8 @@ spec:
         - "8080"
         - --model-name
         - "{{.Name}}"
+        - --model-version
+        - "1"
       env:
         - name: MODEL_PATH
           value: /mnt/models
@@ -27,9 +29,34 @@ spec:
           value: stub
         - name: PROTOCOL
           value: v2
+        - name: DEPLOYMENT
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.labels['app.kubernetes.io/component']
       ports:
         - containerPort: 8080
           protocol: TCP
+      readinessProbe:
+        httpGet:
+          path: /v2/health/ready
+          port: 8080
+        initialDelaySeconds: 5
+        periodSeconds: 10
+        failureThreshold: 3
+      livenessProbe:
+        httpGet:
+          path: /v2/health/live
+          port: 8080
+        initialDelaySeconds: 10
+        periodSeconds: 30
+        failureThreshold: 3
+      startupProbe:
+        httpGet:
+          path: /v2/health/live
+          port: 8080
+        initialDelaySeconds: 0
+        periodSeconds: 2
+        failureThreshold: 30
       resources:
         requests:
           cpu: 100m

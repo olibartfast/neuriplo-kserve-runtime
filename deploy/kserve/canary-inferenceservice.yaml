@@ -10,7 +10,10 @@ spec:
         name: neuriplo
       protocolVersion: v2
       runtime: neuriplo-kserve-runtime
-      storageUri: pvc://your-model-pvc/path/to/model
+      storageUri: pvc://your-model-pvc/path/to/model-v2
+      env:
+        - name: DEPLOYMENT
+          value: canary
       resources:
         requests:
           cpu: 100m
