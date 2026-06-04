@@ -187,6 +187,38 @@ class RealNeuriploAdapter final : public NeuriploAdapter {
         return result;
     }
 
+    LlmInferenceResult llmInfer(const LlmInferenceParams &params) override {
+        if (!engine_) {
+            LlmInferenceResult result;
+            result.ok = false;
+            result.error_message = "neuriplo engine is not loaded";
+            return result;
+        }
+
+        InputTensor prompt_tensor;
+        prompt_tensor.name = "prompt";
+        prompt_tensor.datatype = "BYTES";
+        prompt_tensor.shape = {1};
+        prompt_tensor.string_data = {params.prompt};
+        std::vector<InputTensor> inputs = {prompt_tensor};
+
+        auto neural_result = infer(inputs);
+
+        LlmInferenceResult result;
+        result.ok = neural_result.ok;
+        if (!neural_result.ok) {
+            result.error_message = neural_result.error_message.empty()
+                                       ? "neuriplo LLM inference failed"
+                                       : neural_result.error_message;
+            return result;
+        }
+        result.outputs = std::move(neural_result.outputs);
+        result.prompt_tokens = 0;
+        result.completion_tokens = 0;
+        result.finish_reason = "stop";
+        return result;
+    }
+
   private:
     std::unique_ptr<InferenceInterface> engine_;
     std::vector<TensorMetadata> output_metadata_;

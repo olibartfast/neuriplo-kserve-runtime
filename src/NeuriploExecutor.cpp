@@ -200,6 +200,62 @@ ExecutionResponse NeuriploExecutor::infer(const ExecutionRequest &request) {
     return response;
 }
 
+ExecutionResponse NeuriploExecutor::inferStreaming(const ExecutionRequest &request,
+                                                   StreamingTokenCallback callback) {
+    if (request.cancel_token && request.cancel_token->load(std::memory_order_acquire)) {
+        ExecutionResponse cancelled;
+        cancelled.ok = false;
+        cancelled.error_code = "DEADLINE_EXCEEDED";
+        cancelled.error_message = "request cancelled before inference";
+        return cancelled;
+    }
+
+    if (request.llm_params) {
+        LlmInferenceParams params;
+        params.prompt = extractPrompt(request);
+        params.max_tokens = request.llm_params->max_tokens.value_or(256);
+        params.temperature = request.llm_params->temperature.value_or(0.8);
+        params.top_p = request.llm_params->top_p.value_or(0.95);
+        params.top_k = request.llm_params->top_k.value_or(40);
+        params.cancel_token = request.cancel_token;
+        params.streaming_callback = callback;
+
+        LlmInferenceResult result;
+        try {
+            result = adapter_->llmInfer(params);
+        } catch (const std::exception &ex) {
+            return backendError(ex.what());
+        }
+
+        if (!result.ok) {
+            return backendError(result.error_message.empty() ? "neuriplo LLM inference failed"
+                                                             : result.error_message);
+        }
+
+        ExecutionResponse response;
+        response.ok = true;
+        response.outputs = std::move(result.outputs);
+
+        LlmResultMetadata llm_meta;
+        llm_meta.prompt_tokens = result.prompt_tokens;
+        llm_meta.completion_tokens = result.completion_tokens;
+        llm_meta.finish_reason = result.finish_reason;
+        response.llm_metadata = llm_meta;
+        return response;
+    }
+
+    return infer(request);
+}
+
+std::string NeuriploExecutor::extractPrompt(const ExecutionRequest &request) const {
+    for (const auto &input : request.inputs) {
+        if (isBytesDatatype(input.datatype) && !input.string_data.empty()) {
+            return input.string_data.front();
+        }
+    }
+    return "";
+}
+
 std::unique_ptr<Executor> makeNeuriploExecutor(const RuntimeConfig &config, std::string &error,
                                                std::unique_ptr<NeuriploAdapter> adapter) {
     try {

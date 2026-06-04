@@ -1,4 +1,5 @@
 #include "Scheduler.hpp"
+#include "Tokenizer.hpp"
 
 #include <atomic>
 #include <condition_variable>
@@ -55,6 +56,11 @@ SchedulerResult makeInvalidArgumentResult(std::string message) {
     return result;
 }
 
+SchedulerResult makeMemoryPressureResult() {
+    return makeSchedulerError(SchedulerError::Overloaded, "QUEUE_FULL",
+                              "request rejected due to KV cache memory pressure");
+}
+
 uint64_t elapsedNs(const TimePoint &start, const TimePoint &end) {
     return static_cast<uint64_t>(
         std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count());
@@ -77,7 +83,8 @@ size_t effectiveMaxTokens(const ExecutionRequest &request, const LlmSchedulerCon
 }
 
 std::optional<std::string> validateLlmRequest(const ExecutionRequest &request,
-                                              const LlmSchedulerConfig &config) {
+                                              const LlmSchedulerConfig &config,
+                                              size_t estimated_tokens) {
     const auto *prompt = findBytesPrompt(request);
     if (prompt == nullptr) {
         return "LLM request requires a BYTES prompt input";
@@ -86,12 +93,6 @@ std::optional<std::string> validateLlmRequest(const ExecutionRequest &request,
         return "LLM prompt must not be empty";
     }
 
-    size_t prompt_chars = 0;
-    for (const auto &value : prompt->string_data) {
-        prompt_chars += value.size();
-    }
-    const auto estimated_tokens =
-        static_cast<size_t>(static_cast<double>(prompt_chars) * config.tokens_per_char);
     if (estimated_tokens > config.context_length) {
         return "prompt exceeds context length (estimated " + std::to_string(estimated_tokens) +
                " tokens)";
@@ -100,6 +101,10 @@ std::optional<std::string> validateLlmRequest(const ExecutionRequest &request,
     const auto max_tokens = effectiveMaxTokens(request, config);
     if (max_tokens == 0 || max_tokens > config.max_tokens) {
         return "max_tokens exceeds configured limit";
+    }
+
+    if (estimated_tokens + max_tokens > config.context_length) {
+        return "prompt + max_tokens exceeds context length";
     }
 
     if (request.llm_params) {
@@ -118,8 +123,9 @@ std::optional<std::string> validateLlmRequest(const ExecutionRequest &request,
 class LlmScheduler final : public Scheduler {
   public:
     LlmScheduler(std::vector<std::unique_ptr<Executor>> executors, LlmSchedulerConfig config,
-                 std::string model_name)
-        : executors_(std::move(executors)), config_(config), model_name_(std::move(model_name)) {
+                 std::string model_name, std::unique_ptr<Tokenizer> tokenizer)
+        : executors_(std::move(executors)), config_(config), model_name_(std::move(model_name)),
+          tokenizer_(std::move(tokenizer)) {
         if (executors_.empty()) {
             throw std::invalid_argument("scheduler requires at least one executor");
         }
@@ -139,12 +145,30 @@ class LlmScheduler final : public Scheduler {
     }
 
     SchedulerResult submit(ExecutionRequest request) override {
-        if (const auto validation_error = validateLlmRequest(request, config_)) {
+        std::string prompt_text;
+        const auto *prompt = findBytesPrompt(request);
+        if (prompt && !prompt->string_data.empty()) {
+            prompt_text = prompt->string_data.front();
+        }
+
+        const size_t estimated_tokens = tokenizer_->countTokens(prompt_text);
+
+        if (const auto validation_error = validateLlmRequest(request, config_, estimated_tokens)) {
             return makeInvalidArgumentResult(*validation_error);
         }
 
         if (isDraining()) {
             return makeDrainingResult();
+        }
+
+        if (config_.memory_budget_bytes > 0) {
+            const size_t estimated_context_bytes = estimated_tokens * memory_per_token_bytes;
+            const size_t active_context_bytes =
+                active_decodes_.load(std::memory_order_acquire) * estimated_context_bytes;
+            if (active_context_bytes + estimated_context_bytes > config_.memory_budget_bytes) {
+                incrementMetric(&SchedulerMetricsSnapshot::requests_memory_pressure_rejected);
+                return makeMemoryPressureResult();
+            }
         }
 
         const auto enqueued_at = Clock::now();
@@ -219,10 +243,14 @@ class LlmScheduler final : public Scheduler {
         SchedulerMetricsSnapshot snapshot = metrics_;
         snapshot.queue_depth = queue_depth;
         snapshot.in_flight = in_flight;
+        snapshot.kv_cache_slots_total = config_.kv_cache_slots;
+        snapshot.kv_cache_slots_active = in_flight;
         return snapshot;
     }
 
   private:
+    static constexpr size_t memory_per_token_bytes = 2;
+
     size_t currentQueueDepth() const {
         std::lock_guard<std::mutex> lock(queue_mutex_);
         return queue_.size();
@@ -319,17 +347,16 @@ class LlmScheduler final : public Scheduler {
     bool runInference(Executor &executor, const ExecutionRequest &request,
                       const TimePoint &deadline, ExecutionResponse &response) {
         try {
-            if (config_.instances == 1) {
+            if (request.llm_params && request.llm_params->streaming) {
+                response = executor.inferStreaming(
+                    request, [](const std::string &) { /* no-op for blocking path */ });
+            } else {
                 response = executor.infer(request);
-                return true;
             }
 
-            auto infer_future = std::async(
-                std::launch::async, [&executor, request]() { return executor.infer(request); });
-            if (infer_future.wait_until(deadline) == std::future_status::timeout) {
+            if (request.cancel_token && request.cancel_token->load(std::memory_order_acquire)) {
                 return false;
             }
-            response = infer_future.get();
             return true;
         } catch (const std::exception &error) {
             response.ok = false;
@@ -444,6 +471,7 @@ class LlmScheduler final : public Scheduler {
     std::vector<std::unique_ptr<Executor>> executors_;
     LlmSchedulerConfig config_;
     std::string model_name_;
+    std::unique_ptr<Tokenizer> tokenizer_;
 
     mutable std::mutex queue_mutex_;
     std::condition_variable queue_cv_;
@@ -467,5 +495,14 @@ class LlmScheduler final : public Scheduler {
 
 std::unique_ptr<Scheduler> makeLlmScheduler(std::vector<std::unique_ptr<Executor>> executors,
                                             LlmSchedulerConfig config, std::string model_name) {
-    return std::make_unique<LlmScheduler>(std::move(executors), config, std::move(model_name));
+    auto tokenizer = std::make_unique<CharRatioTokenizer>(config.tokens_per_char);
+    return std::make_unique<LlmScheduler>(std::move(executors), std::move(config),
+                                          std::move(model_name), std::move(tokenizer));
+}
+
+std::unique_ptr<Scheduler> makeLlmScheduler(std::vector<std::unique_ptr<Executor>> executors,
+                                            LlmSchedulerConfig config, std::string model_name,
+                                            std::unique_ptr<Tokenizer> tokenizer) {
+    return std::make_unique<LlmScheduler>(std::move(executors), std::move(config),
+                                          std::move(model_name), std::move(tokenizer));
 }

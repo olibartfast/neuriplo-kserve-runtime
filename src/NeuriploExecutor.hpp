@@ -13,10 +13,13 @@ class NeuriploExecutor final : public Executor {
 
     const ModelMetadata &metadata() const override;
     ExecutionResponse infer(const ExecutionRequest &request) override;
+    ExecutionResponse inferStreaming(const ExecutionRequest &request,
+                                     StreamingTokenCallback callback) override;
 
   private:
     ModelMetadata metadata_;
     std::unique_ptr<NeuriploAdapter> adapter_;
+    std::string extractPrompt(const ExecutionRequest &request) const;
 };
 
 std::unique_ptr<Executor> makeNeuriploExecutor(const RuntimeConfig &config, std::string &error);

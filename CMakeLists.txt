@@ -26,6 +26,7 @@ set(NEURIPLO_RUNTIME_SOURCES
     src/BackendRegistry.cpp
     src/BatchCompatibility.cpp
     src/DynamicBatcher.cpp
+    src/ExecutorDefault.cpp
     src/HttpServer.cpp
     src/KServeRuntime.cpp
     src/KServeV2Codec.cpp
@@ -34,7 +35,9 @@ set(NEURIPLO_RUNTIME_SOURCES
     src/MetricsRegistry.cpp
     src/ModelRegistry.cpp
     src/ModelScheduler.cpp
+    src/NeuriploAdapterDefault.cpp
     src/NeuriploExecutor.cpp
+    src/OpenAiCodec.cpp
     src/RealNeuriploAdapter.cpp
     src/RuntimeConfig.cpp
     src/StubExecutor.cpp
@@ -118,13 +121,16 @@ add_executable(neuriplo-kserve-runtime-tests
     tests/HttpIntegrationTest.cpp
     tests/KServeRuntimeTest.cpp
     tests/KServeV2CodecTest.cpp
+    tests/LlmPathTest.cpp
     tests/LlmSchedulerTest.cpp
     tests/ModelRegistryTest.cpp
     tests/ModelStateMachineTest.cpp
     tests/NeuriploExecutorTest.cpp
+    tests/OpenAiCodecTest.cpp
     tests/RuntimeConfigTest.cpp
     tests/SchedulerTest.cpp
     tests/StubExecutorTest.cpp
+    tests/TokenizerTest.cpp
     tests/TestMain.cpp
 )
 target_link_libraries(neuriplo-kserve-runtime-tests PRIVATE neuriplo-kserve-runtime-core)

@@ -3,6 +3,7 @@
 #include "ModelMetadata.hpp"
 
 #include <atomic>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -42,6 +43,12 @@ struct LlmGenerationParams {
     bool streaming = false;
 };
 
+struct LlmResultMetadata {
+    size_t prompt_tokens = 0;
+    size_t completion_tokens = 0;
+    std::string finish_reason;
+};
+
 struct ExecutionRequest {
     std::optional<std::string> id;
     std::vector<InputTensor> inputs;
@@ -55,11 +62,16 @@ struct ExecutionResponse {
     std::string error_code;
     std::string error_message;
     std::vector<OutputTensor> outputs;
+    std::optional<LlmResultMetadata> llm_metadata;
 };
+
+using StreamingTokenCallback = std::function<void(const std::string &token)>;
 
 class Executor {
   public:
     virtual ~Executor() = default;
     virtual const ModelMetadata &metadata() const = 0;
     virtual ExecutionResponse infer(const ExecutionRequest &request) = 0;
+    virtual ExecutionResponse inferStreaming(const ExecutionRequest &request,
+                                             StreamingTokenCallback callback);
 };
