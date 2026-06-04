@@ -33,7 +33,7 @@ inference::ModelMetadataResponse buildModelMetadataResponse(const ModelMetadata 
 namespace {
 
 void fillContents(inference::InferTensorContents *contents, const std::string &datatype,
-                   const std::vector<double> &data, const std::vector<std::string> &string_data) {
+                  const std::vector<double> &data, const std::vector<std::string> &string_data) {
     if (isBytesDatatype(datatype)) {
         for (const auto &s : string_data) {
             contents->add_bytes_contents(s);
@@ -121,10 +121,10 @@ ExecutionRequest convertInferRequest(const inference::ModelInferRequest &proto_r
     return request;
 }
 
-inference::ModelInferResponse
-buildInferResponse(const ExecutionResponse &exec_response, const std::string &model_name,
-                   const std::string &model_version,
-                   const std::optional<std::string> &request_id) {
+inference::ModelInferResponse buildInferResponse(const ExecutionResponse &exec_response,
+                                                 const std::string &model_name,
+                                                 const std::string &model_version,
+                                                 const std::optional<std::string> &request_id) {
     inference::ModelInferResponse proto;
     proto.set_model_name(model_name);
     proto.set_model_version(model_version);

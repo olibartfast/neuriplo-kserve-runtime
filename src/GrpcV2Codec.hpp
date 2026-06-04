@@ -14,9 +14,10 @@ inference::ModelMetadataResponse buildModelMetadataResponse(const ModelMetadata 
 
 ExecutionRequest convertInferRequest(const inference::ModelInferRequest &proto_request);
 
-inference::ModelInferResponse
-buildInferResponse(const ExecutionResponse &exec_response, const std::string &model_name,
-                   const std::string &model_version, const std::optional<std::string> &request_id);
+inference::ModelInferResponse buildInferResponse(const ExecutionResponse &exec_response,
+                                                 const std::string &model_name,
+                                                 const std::string &model_version,
+                                                 const std::optional<std::string> &request_id);
 
 } // namespace grpc_v2
 

@@ -62,9 +62,8 @@ class GrpcServiceImpl final : public inference::GRPCInferenceService::Service {
                          const inference::ModelMetadataRequest *request,
                          inference::ModelMetadataResponse *reply) override {
         const auto &version = request->version();
-        const auto metadata = version.empty()
-                                  ? registry_.find(request->name())
-                                  : registry_.findVersion(request->name(), version);
+        const auto metadata = version.empty() ? registry_.find(request->name())
+                                              : registry_.findVersion(request->name(), version);
         if (!metadata.has_value()) {
             return Status(StatusCode::NOT_FOUND, "model not found: " + request->name());
         }
@@ -76,8 +75,8 @@ class GrpcServiceImpl final : public inference::GRPCInferenceService::Service {
                       inference::ModelInferResponse *reply) override {
         const auto model_name = request->model_name();
         const auto model_version = request->model_version();
-        const auto request_id =
-            request->id().empty() ? std::optional<std::string>{} : std::make_optional(request->id());
+        const auto request_id = request->id().empty() ? std::optional<std::string>{}
+                                                      : std::make_optional(request->id());
 
         const auto *handle = model_version.empty()
                                  ? registry_.findHandle(model_name)
@@ -151,9 +150,8 @@ class GrpcServiceImpl final : public inference::GRPCInferenceService::Service {
         }
 
         if (!scheduled.ok) {
-            const auto &code = scheduled.error_code.empty()
-                                   ? std::string(KServeErrors::Internal)
-                                   : scheduled.error_code;
+            const auto &code = scheduled.error_code.empty() ? std::string(KServeErrors::Internal)
+                                                            : scheduled.error_code;
             metrics_.recordInferRequest(model_name, "GRPC", gRpcStatusForCode(code), 0, 0, 0);
 
             {

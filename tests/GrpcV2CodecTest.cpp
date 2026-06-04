@@ -95,7 +95,7 @@ TEST_CASE(grpc_codec_builds_infer_response) {
     exec_response.outputs.push_back(output);
 
     const auto proto = grpc_v2::buildInferResponse(exec_response, "demo", "1",
-                                                    std::make_optional(std::string("resp-1")));
+                                                   std::make_optional(std::string("resp-1")));
 
     REQUIRE_EQ(proto.model_name(), "demo");
     REQUIRE_EQ(proto.model_version(), "1");
