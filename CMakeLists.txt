@@ -69,22 +69,44 @@ if(NEURIPLO_RUNTIME_ENABLE_GRPC)
     set(GRPC_SRCS "${PROTO_GEN_DIR}/kserve_grpc.grpc.pb.cc")
     set(GRPC_HDRS "${PROTO_GEN_DIR}/kserve_grpc.grpc.pb.h")
 
-    get_target_property(GRPC_CPP_PLUGIN gRPC::grpc_cpp_plugin IMPORTED_LOCATION)
-    if(NOT GRPC_CPP_PLUGIN)
-        message(FATAL_ERROR "gRPC C++ plugin not found")
+    get_target_property(_GRPC_PLUGIN_BIN gRPC::grpc_cpp_plugin IMPORTED_LOCATION)
+    if(NOT _GRPC_PLUGIN_BIN)
+        set(_GRPC_PLUGIN_BIN "$<TARGET_FILE:gRPC::grpc_cpp_plugin>")
+    endif()
+    get_target_property(_GRPC_PLUGIN_SUPPORT_LOC gRPC::grpc_plugin_support IMPORTED_LOCATION)
+    if(_GRPC_PLUGIN_SUPPORT_LOC)
+        get_filename_component(_GRPC_LIBRARY_DIR "${_GRPC_PLUGIN_SUPPORT_LOC}" DIRECTORY)
+    else()
+        set(_GRPC_LIBRARY_DIR "")
     endif()
 
-    add_custom_command(
-        OUTPUT "${PROTO_SRCS}" "${PROTO_HDRS}" "${GRPC_SRCS}" "${GRPC_HDRS}"
-        COMMAND protobuf::protoc
-            "--proto_path=${PROTO_DIR}"
-            "--cpp_out=${PROTO_GEN_DIR}"
-            "--grpc_out=${PROTO_GEN_DIR}"
-            "--plugin=protoc-gen-grpc=${GRPC_CPP_PLUGIN}"
-            "${PROTO_FILE}"
-        DEPENDS "${PROTO_FILE}"
-        COMMENT "Generating gRPC sources from ${PROTO_FILE}"
-    )
+    if(_GRPC_LIBRARY_DIR)
+        add_custom_command(
+            OUTPUT "${PROTO_SRCS}" "${PROTO_HDRS}" "${GRPC_SRCS}" "${GRPC_HDRS}"
+            COMMAND ${CMAKE_COMMAND} -E env
+                "LD_LIBRARY_PATH=${_GRPC_LIBRARY_DIR}"
+                "${PROTOBUF_PROTOC_EXECUTABLE}"
+                "--proto_path=${PROTO_DIR}"
+                "--cpp_out=${PROTO_GEN_DIR}"
+                "--grpc_out=${PROTO_GEN_DIR}"
+                "--plugin=protoc-gen-grpc=$<TARGET_FILE:gRPC::grpc_cpp_plugin>"
+                "${PROTO_FILE}"
+            DEPENDS "${PROTO_FILE}"
+            COMMENT "Generating gRPC sources from ${PROTO_FILE}"
+        )
+    else()
+        add_custom_command(
+            OUTPUT "${PROTO_SRCS}" "${PROTO_HDRS}" "${GRPC_SRCS}" "${GRPC_HDRS}"
+            COMMAND "${PROTOBUF_PROTOC_EXECUTABLE}"
+                "--proto_path=${PROTO_DIR}"
+                "--cpp_out=${PROTO_GEN_DIR}"
+                "--grpc_out=${PROTO_GEN_DIR}"
+                "--plugin=protoc-gen-grpc=$<TARGET_FILE:gRPC::grpc_cpp_plugin>"
+                "${PROTO_FILE}"
+            DEPENDS "${PROTO_FILE}"
+            COMMENT "Generating gRPC sources from ${PROTO_FILE}"
+        )
+    endif()
 
     list(APPEND NEURIPLO_RUNTIME_SOURCES
         "${PROTO_SRCS}" "${GRPC_SRCS}"
@@ -117,50 +139,6 @@ endif()
 
 add_executable(neuriplo-kserve-runtime src/main.cpp)
 target_link_libraries(neuriplo-kserve-runtime PRIVATE neuriplo-kserve-runtime-core)
-
-if(UNIX AND NOT APPLE)
-    target_link_libraries(neuriplo-kserve-runtime-core PUBLIC pthread)
-endif()
-
-foreach(target neuriplo-kserve-runtime-core neuriplo-kserve-runtime)
-    target_compile_options(${target} PRIVATE
-        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic>
-    )
-endforeach()
-
-if(NEURIPLO_ENABLE_CLANG_TIDY)
-    find_program(CLANG_TIDY_EXE NAMES clang-tidy REQUIRED)
-    foreach(target neuriplo-kserve-runtime-core neuriplo-kserve-runtime)
-        set_target_properties(${target} PROPERTIES CXX_CLANG_TIDY "${CLANG_TIDY_EXE}")
-    endforeach()
-endif()
-
-if(NEURIPLO_SANITIZER)
-    if(NOT NEURIPLO_SANITIZER MATCHES "^(address|thread|undefined)$")
-        message(FATAL_ERROR "NEURIPLO_SANITIZER must be one of: address, thread, undefined")
-    endif()
-    if(NOT CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-        message(FATAL_ERROR "NEURIPLO_SANITIZER requires GCC or Clang")
-    endif()
-
-    if(NEURIPLO_SANITIZER STREQUAL "thread")
-        set(NEURIPLO_SANITIZER_FLAGS -fsanitize=thread -fno-omit-frame-pointer)
-        set(NEURIPLO_SANITIZER_LINK_FLAGS -fsanitize=thread)
-    elseif(NEURIPLO_SANITIZER STREQUAL "address")
-        set(NEURIPLO_SANITIZER_FLAGS -fsanitize=address,undefined -fno-omit-frame-pointer)
-        set(NEURIPLO_SANITIZER_LINK_FLAGS -fsanitize=address,undefined)
-    elseif(NEURIPLO_SANITIZER STREQUAL "undefined")
-        set(NEURIPLO_SANITIZER_FLAGS -fsanitize=undefined -fno-omit-frame-pointer)
-        set(NEURIPLO_SANITIZER_LINK_FLAGS -fsanitize=undefined)
-    endif()
-
-    foreach(target neuriplo-kserve-runtime-core neuriplo-kserve-runtime)
-        target_compile_options(${target} PRIVATE ${NEURIPLO_SANITIZER_FLAGS})
-        target_link_options(${target} PRIVATE ${NEURIPLO_SANITIZER_LINK_FLAGS})
-    endforeach()
-endif()
-
-enable_testing()
 
 add_executable(neuriplo-kserve-runtime-tests
     tests/BackendRegistryTest.cpp
