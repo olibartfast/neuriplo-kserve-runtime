@@ -113,12 +113,14 @@ enable_testing()
 add_executable(neuriplo-kserve-runtime-tests
     tests/BackendRegistryTest.cpp
     tests/BatchCompatibilityTest.cpp
+    tests/BenchmarkTest.cpp
     tests/DynamicBatcherTest.cpp
     tests/HttpIntegrationTest.cpp
     tests/KServeRuntimeTest.cpp
     tests/KServeV2CodecTest.cpp
     tests/LlmSchedulerTest.cpp
     tests/ModelRegistryTest.cpp
+    tests/ModelStateMachineTest.cpp
     tests/NeuriploExecutorTest.cpp
     tests/RuntimeConfigTest.cpp
     tests/SchedulerTest.cpp

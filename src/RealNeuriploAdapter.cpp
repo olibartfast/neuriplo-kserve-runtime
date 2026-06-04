@@ -55,12 +55,71 @@ std::vector<uint8_t> tensorToBytes(const InputTensor &tensor) {
     throw std::runtime_error("unsupported input datatype: " + dt);
 }
 
+template <typename T> std::vector<double> numericFromBytes(const std::vector<uint8_t> &bytes) {
+    const size_t count = bytes.size() / sizeof(T);
+    std::vector<double> data(count);
+    for (size_t i = 0; i < count; ++i) {
+        T value;
+        std::memcpy(&value, bytes.data() + (i * sizeof(T)), sizeof(T));
+        data[i] = static_cast<double>(value);
+    }
+    return data;
+}
+
+std::vector<double> bytesToTensor(const std::vector<uint8_t> &bytes, const std::string &datatype) {
+    if (bytes.empty()) {
+        return {};
+    }
+    const auto &dt = datatype;
+    if (dt == "BOOL" || dt == "INT8")
+        return numericFromBytes<int8_t>(bytes);
+    if (dt == "INT16")
+        return numericFromBytes<int16_t>(bytes);
+    if (dt == "INT32")
+        return numericFromBytes<int32_t>(bytes);
+    if (dt == "INT64")
+        return numericFromBytes<int64_t>(bytes);
+    if (dt == "UINT8")
+        return numericFromBytes<uint8_t>(bytes);
+    if (dt == "UINT16")
+        return numericFromBytes<uint16_t>(bytes);
+    if (dt == "UINT32")
+        return numericFromBytes<uint32_t>(bytes);
+    if (dt == "UINT64")
+        return numericFromBytes<uint64_t>(bytes);
+    if (dt == "FP32")
+        return numericFromBytes<float>(bytes);
+    if (dt == "FP64")
+        return numericFromBytes<double>(bytes);
+    throw std::runtime_error("unsupported output datatype: " + dt);
+}
+
+std::vector<std::string> extractDatatypes(const std::vector<LayerInfo> &layers) {
+    std::vector<std::string> datatypes;
+    datatypes.reserve(layers.size());
+    for (size_t i = 0; i < layers.size(); ++i) {
+        datatypes.push_back("FP32");
+    }
+    return datatypes;
+}
+
 std::vector<TensorMetadata> convertLayers(const std::vector<LayerInfo> &layers,
-                                          const std::string &datatype) {
+                                          const std::string &default_datatype) {
     std::vector<TensorMetadata> tensors;
     tensors.reserve(layers.size());
     for (const auto &layer : layers) {
-        tensors.push_back({layer.name, datatype, layer.shape});
+        tensors.push_back({layer.name, default_datatype, layer.shape});
+    }
+    return tensors;
+}
+
+std::vector<TensorMetadata> convertLayers(const std::vector<LayerInfo> &layers,
+                                          const std::vector<std::string> &datatypes) {
+    std::vector<TensorMetadata> tensors;
+    tensors.reserve(layers.size());
+    for (size_t i = 0; i < layers.size(); ++i) {
+        const auto &dt = i < datatypes.size() ? datatypes[i] : "FP32";
+        tensors.push_back({layers[i].name, dt, layers[i].shape});
     }
     return tensors;
 }
@@ -82,12 +141,14 @@ class RealNeuriploAdapter final : public NeuriploAdapter {
         metadata.name = config.model_name;
         metadata.versions = {"1"};
         metadata.platform = "neuriplo_" + config.backend;
-        metadata.inputs = convertLayers(backend_metadata.getInputs(), "FP32");
-        metadata.outputs = convertLayers(backend_metadata.getOutputs(), "FP32");
-        output_names_.clear();
-        output_names_.reserve(metadata.outputs.size());
+        metadata.inputs = convertLayers(backend_metadata.getInputs(),
+                                        extractDatatypes(backend_metadata.getInputs()));
+        metadata.outputs = convertLayers(backend_metadata.getOutputs(),
+                                         extractDatatypes(backend_metadata.getOutputs()));
+        output_metadata_.clear();
+        output_metadata_.reserve(metadata.outputs.size());
         for (const auto &output : metadata.outputs) {
-            output_names_.push_back(output.name);
+            output_metadata_.push_back(output);
         }
         return metadata;
     }
@@ -109,9 +170,13 @@ class RealNeuriploAdapter final : public NeuriploAdapter {
         result.outputs.reserve(values.size());
         for (size_t i = 0; i < values.size(); ++i) {
             OutputTensor output;
-            output.name =
-                i < output_names_.size() ? output_names_[i] : "output_" + std::to_string(i);
-            output.datatype = "FP32";
+            if (i < output_metadata_.size()) {
+                output.name = output_metadata_[i].name;
+                output.datatype = output_metadata_[i].datatype;
+            } else {
+                output.name = "output_" + std::to_string(i);
+                output.datatype = "FP32";
+            }
             output.shape = i < shapes.size() ? shapes[i] : std::vector<int64_t>{};
             output.data.reserve(values[i].size());
             for (const auto &value : values[i]) {
@@ -124,7 +189,7 @@ class RealNeuriploAdapter final : public NeuriploAdapter {
 
   private:
     std::unique_ptr<InferenceInterface> engine_;
-    std::vector<std::string> output_names_;
+    std::vector<TensorMetadata> output_metadata_;
 };
 
 } // namespace

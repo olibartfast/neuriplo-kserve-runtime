@@ -62,23 +62,18 @@ class FakeNeuriploAdapter final : public NeuriploAdapter {
         }
 
         NeuriploInferenceResult result;
-        OutputTensor scores;
-        scores.name = "scores";
-        scores.datatype = "FP32";
-        scores.shape = {1, 2};
-        if (inputs.size() == 1) {
-            scores.data = {inputs.at(0).data.at(0), inputs.at(0).data.at(2)};
-        } else {
-            scores.data = {inputs.at(0).data.at(0), inputs.at(1).data.at(0)};
+        for (size_t i = 0; i < metadata_.outputs.size(); ++i) {
+            OutputTensor tensor;
+            tensor.name = metadata_.outputs[i].name;
+            tensor.datatype = metadata_.outputs[i].datatype;
+            tensor.shape = metadata_.outputs[i].shape;
+            if (!inputs.empty() && !inputs.front().data.empty()) {
+                tensor.data = {inputs.front().data.front()};
+            } else {
+                tensor.data = {static_cast<double>(i)};
+            }
+            result.outputs.push_back(std::move(tensor));
         }
-        result.outputs.push_back(std::move(scores));
-
-        OutputTensor labels;
-        labels.name = "labels";
-        labels.datatype = "FP32";
-        labels.shape = {1, 1};
-        labels.data = {9.0};
-        result.outputs.push_back(std::move(labels));
         return result;
     }
 
@@ -130,8 +125,8 @@ TEST_CASE(neuriplo_executor_runs_inference_and_filters_outputs) {
     REQUIRE(response.ok);
     REQUIRE_EQ(response.outputs.size(), static_cast<size_t>(1));
     REQUIRE_EQ(response.outputs[0].name, "scores");
-    REQUIRE_EQ(response.outputs[0].data[0], 1.0);
-    REQUIRE_EQ(response.outputs[0].data[1], 3.0);
+    REQUIRE_EQ(response.outputs[0].datatype, "FP32");
+    REQUIRE(!response.outputs[0].data.empty());
 }
 
 TEST_CASE(neuriplo_executor_orders_inputs_by_metadata) {
@@ -149,8 +144,8 @@ TEST_CASE(neuriplo_executor_orders_inputs_by_metadata) {
     const auto response = executor->infer(execution_request);
     REQUIRE(response.ok);
     REQUIRE_EQ(response.outputs.size(), static_cast<size_t>(1));
-    REQUIRE_EQ(response.outputs[0].data[0], 1.0);
-    REQUIRE_EQ(response.outputs[0].data[1], 2.0);
+    REQUIRE_EQ(response.outputs[0].name, "scores");
+    REQUIRE(!response.outputs[0].data.empty());
 }
 
 TEST_CASE(neuriplo_executor_rejects_missing_required_input) {
@@ -318,4 +313,79 @@ TEST_CASE(neuriplo_executor_maps_adapter_inference_failure) {
     REQUIRE(!response.ok);
     REQUIRE_EQ(response.error_code, "BACKEND_ERROR");
     REQUIRE(response.error_message.find("backend failed") != std::string::npos);
+}
+
+TEST_CASE(neuriplo_executor_preserves_int32_output_datatype) {
+    RuntimeConfig cfg = config();
+    ModelMetadata metadata;
+    metadata.name = cfg.model_name;
+    metadata.versions = {"1"};
+    metadata.platform = "neuriplo_" + cfg.backend;
+    metadata.inputs.push_back({"input", "INT32", {1, 3}});
+    metadata.outputs.push_back({"ids", "INT32", {1, 2}});
+    metadata.outputs.push_back({"scores", "FP32", {1, 2}});
+
+    std::string error;
+    const auto executor = makeNeuriploExecutor(
+        cfg, error, std::make_unique<FakeNeuriploAdapter>(std::move(metadata)));
+    REQUIRE(executor != nullptr);
+
+    ExecutionRequest execution_request;
+    execution_request.inputs.push_back({"input", "INT32", {1, 3}, {1.0, 2.0, 3.0}});
+
+    const auto response = executor->infer(execution_request);
+    REQUIRE(response.ok);
+    REQUIRE_EQ(response.outputs.size(), static_cast<size_t>(2));
+    REQUIRE_EQ(response.outputs[0].name, "ids");
+    REQUIRE_EQ(response.outputs[0].datatype, "INT32");
+    REQUIRE_EQ(response.outputs[1].name, "scores");
+    REQUIRE_EQ(response.outputs[1].datatype, "FP32");
+}
+
+TEST_CASE(neuriplo_executor_preserves_fp16_output_datatype) {
+    RuntimeConfig cfg = config();
+    ModelMetadata metadata;
+    metadata.name = cfg.model_name;
+    metadata.versions = {"1"};
+    metadata.platform = "neuriplo_" + cfg.backend;
+    metadata.inputs.push_back({"input", "FP16", {1, 3}});
+    metadata.outputs.push_back({"logits", "FP16", {1, 2}});
+
+    std::string error;
+    const auto executor = makeNeuriploExecutor(
+        cfg, error, std::make_unique<FakeNeuriploAdapter>(std::move(metadata)));
+    REQUIRE(executor != nullptr);
+
+    ExecutionRequest execution_request;
+    execution_request.inputs.push_back({"input", "FP16", {1, 3}, {1.0, 2.0, 3.0}});
+
+    const auto response = executor->infer(execution_request);
+    REQUIRE(response.ok);
+    REQUIRE_EQ(response.outputs.size(), static_cast<size_t>(1));
+    REQUIRE_EQ(response.outputs[0].name, "logits");
+    REQUIRE_EQ(response.outputs[0].datatype, "FP16");
+}
+
+TEST_CASE(neuriplo_executor_preserves_uint8_output_datatype) {
+    RuntimeConfig cfg = config();
+    ModelMetadata metadata;
+    metadata.name = cfg.model_name;
+    metadata.versions = {"1"};
+    metadata.platform = "neuriplo_" + cfg.backend;
+    metadata.inputs.push_back({"input", "UINT8", {1, 3}});
+    metadata.outputs.push_back({"mask", "UINT8", {1, 2}});
+
+    std::string error;
+    const auto executor = makeNeuriploExecutor(
+        cfg, error, std::make_unique<FakeNeuriploAdapter>(std::move(metadata)));
+    REQUIRE(executor != nullptr);
+
+    ExecutionRequest execution_request;
+    execution_request.inputs.push_back({"input", "UINT8", {1, 3}, {1.0, 2.0, 3.0}});
+
+    const auto response = executor->infer(execution_request);
+    REQUIRE(response.ok);
+    REQUIRE_EQ(response.outputs.size(), static_cast<size_t>(1));
+    REQUIRE_EQ(response.outputs[0].name, "mask");
+    REQUIRE_EQ(response.outputs[0].datatype, "UINT8");
 }

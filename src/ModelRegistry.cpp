@@ -43,7 +43,7 @@ ModelRegistry::ModelRegistry(const RuntimeConfig &config, ExecutorFactory factor
 void ModelRegistry::loadModel(const RuntimeConfig &config, ExecutorFactory factory) {
     handle_.name = config.model_name;
     handle_.versions = {"1"};
-    handle_.transitionTo(ModelState::Loading);
+    handle_.state.startLoad();
 
     std::vector<std::unique_ptr<Executor>> executors;
     executors.reserve(config.instances);
@@ -52,7 +52,7 @@ void ModelRegistry::loadModel(const RuntimeConfig &config, ExecutorFactory facto
         (void)instance_index;
         auto executor = factory(config, error);
         if (!executor) {
-            handle_.transitionTo(ModelState::Failed);
+            handle_.state.markFailed();
             handle_.load_error = error.empty() ? "failed to create executor" : error;
             handle_.metadata.name = config.model_name;
             handle_.metadata.versions = handle_.versions;
@@ -89,7 +89,7 @@ void ModelRegistry::loadModel(const RuntimeConfig &config, ExecutorFactory facto
         handle_.scheduler =
             makeModelScheduler(std::move(executors), scheduler_config, config.model_name);
     }
-    handle_.transitionTo(ModelState::Ready);
+    handle_.state.markReady();
 }
 
 std::optional<ModelMetadata> ModelRegistry::find(const std::string &model_name) const {
@@ -168,8 +168,8 @@ bool ModelRegistry::beginDrain(const std::string &model_name) {
     if (model_name != handle_.name || handle_.scheduler == nullptr) {
         return false;
     }
-    if (handle_.state == ModelState::Ready) {
-        handle_.transitionTo(ModelState::Unloading);
+    if (handle_.state.current() == ModelState::Ready) {
+        handle_.state.beginUnload();
     }
     handle_.scheduler->beginDrain();
     return true;

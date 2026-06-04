@@ -3,14 +3,14 @@
 #include "KServeErrors.hpp"
 #include "KServeV2Codec.hpp"
 #include "Logging.hpp"
+#include "RequestPipeline.hpp"
 #include "Scheduler.hpp"
 
 #include <chrono>
 #include <cstdint>
-#include <iomanip>
+#include <cstdio>
 #include <nlohmann/json.hpp>
 #include <random>
-#include <sstream>
 #include <string>
 #include <utility>
 
@@ -63,19 +63,20 @@ VersionedRoute parseVersionedRoute(const std::string &suffix) {
 }
 
 HttpResponse modelStateError(const ModelHandle &handle) {
-    if (handle.state == ModelState::Failed) {
+    switch (handle.state.current()) {
+    case ModelState::Failed: {
         const auto message =
             handle.load_error.has_value() ? *handle.load_error : "model failed to load";
         return error(503, KServeErrors::Unavailable, message);
     }
-    if (handle.state == ModelState::Unloaded) {
+    case ModelState::Unloaded:
         return error(503, KServeErrors::Unavailable, "model has been unloaded");
-    }
-    if (handle.state == ModelState::Loading) {
+    case ModelState::Loading:
         return error(503, KServeErrors::Unavailable, "model is still loading");
-    }
-    if (handle.state == ModelState::Unavailable) {
+    case ModelState::Unavailable:
         return error(503, KServeErrors::Unavailable, "model is unavailable");
+    default:
+        break;
     }
     return error(409, KServeErrors::ModelNotReady, "model is not ready: " + handle.name);
 }
@@ -112,15 +113,22 @@ std::string errorMessageFor(SchedulerError err) {
 
 std::string generateRequestId() {
     static thread_local std::mt19937_64 rng(std::random_device{}());
-    static thread_local std::uniform_int_distribution<uint32_t> dist(0, 0xFFFFFFFFu);
-    std::ostringstream id;
-    id << std::hex << std::setfill('0');
-    for (int i = 0; i < 8; ++i) {
-        if (i > 0)
-            id << '-';
-        id << std::setw(8) << dist(rng);
+    static thread_local std::uniform_int_distribution<uint8_t> dist(0, 255);
+
+    uint8_t bytes[16];
+    for (int i = 0; i < 16; ++i) {
+        bytes[i] = dist(rng);
     }
-    return id.str();
+
+    bytes[6] = (bytes[6] & 0x0fu) | 0x40u;
+    bytes[8] = (bytes[8] & 0x3fu) | 0x80u;
+
+    char buf[37];
+    snprintf(buf, sizeof(buf),
+             "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x", bytes[0],
+             bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7], bytes[8],
+             bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15]);
+    return buf;
 }
 
 } // namespace
@@ -248,19 +256,39 @@ HttpResponse KServeRuntime::modelReady(const std::string &model_name,
 
 HttpResponse KServeRuntime::infer(const std::string &model_name, const std::string &model_version,
                                   const HttpRequest &request) const {
-    const ModelHandle *handle = nullptr;
-    if (auto error_response = validateInferModel(model_name, model_version, handle)) {
-        return *error_response;
-    }
+    InferContext ctx;
+    ctx.request = &request;
+    ctx.model_name = model_name;
+    ctx.model_version = model_version;
 
-    InferenceParseResult parsed;
-    if (auto error_response = decodeAndAdmit(request, model_name, model_version, *handle, parsed)) {
-        return *error_response;
-    }
+    RequestPipeline pipeline;
+    pipeline
+        .addStage([this](InferContext &ctx) {
+            auto result = validateInferModel(ctx.model_name, ctx.model_version, ctx.handle);
+            if (result) {
+                return result;
+            }
+            return std::optional<HttpResponse>{};
+        })
+        .addStage([this](InferContext &ctx) {
+            auto result = decodeAndAdmit(*ctx.request, ctx.model_name, ctx.model_version,
+                                         *ctx.handle, ctx.parsed);
+            if (result) {
+                return result;
+            }
+            return std::optional<HttpResponse>{};
+        })
+        .addStage([this](InferContext &ctx) {
+            ctx.scheduled =
+                scheduleInfer(ctx.model_name, ctx.model_version, ctx.parsed, *ctx.handle);
+            return std::optional<HttpResponse>{};
+        })
+        .addStage([this](InferContext &ctx) {
+            return std::optional(encodeInferResponse(ctx.model_name, ctx.model_version,
+                                                     *ctx.request, ctx.parsed, ctx.scheduled));
+        });
 
-    auto scheduled = scheduleInfer(model_name, model_version, parsed, *handle);
-
-    return encodeInferResponse(model_name, model_version, request, parsed, scheduled);
+    return pipeline.run(ctx);
 }
 
 std::optional<HttpResponse>
