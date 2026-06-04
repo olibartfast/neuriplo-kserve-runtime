@@ -12,7 +12,7 @@
 
 class KServeRuntime {
   public:
-    explicit KServeRuntime(ModelRegistry registry, MetricsRegistry &metrics);
+    explicit KServeRuntime(ModelRegistry &registry, MetricsRegistry &metrics);
 
     HttpResponse handle(const HttpRequest &request) const;
 
@@ -53,6 +53,6 @@ class KServeRuntime {
                                      const InferenceParseResult &parsed,
                                      const SchedulerResult &scheduled) const;
 
-    ModelRegistry registry_;
+    ModelRegistry &registry_;
     MetricsRegistry &metrics_;
 };

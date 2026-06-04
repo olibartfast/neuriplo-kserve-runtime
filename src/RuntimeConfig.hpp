@@ -9,6 +9,7 @@
 struct RuntimeConfig {
     std::string host = "0.0.0.0";
     int port = 8080;
+    int grpc_port = 0;
     size_t max_request_bytes = 67108864;
     std::string model_name = "demo";
     std::string model_version = "1";

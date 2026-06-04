@@ -154,8 +154,8 @@ size_t estimateTokens(const std::string &text, double tokens_per_char) {
 
 } // namespace
 
-KServeRuntime::KServeRuntime(ModelRegistry registry, MetricsRegistry &metrics)
-    : registry_(std::move(registry)), metrics_(metrics) {}
+KServeRuntime::KServeRuntime(ModelRegistry &registry, MetricsRegistry &metrics)
+    : registry_(registry), metrics_(metrics) {}
 
 HttpResponse KServeRuntime::handle(const HttpRequest &request) const {
     if (request.method.empty()) {
