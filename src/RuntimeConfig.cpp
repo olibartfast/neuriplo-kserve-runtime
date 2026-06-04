@@ -206,6 +206,9 @@ RuntimeConfig parseRuntimeConfig(int argc, char **argv, const RuntimeEnvironment
             config.top_k = parseNonNegativeSize(requireValue(i, argc, argv, arg), "top-k");
         } else if (arg == "--streaming-enabled") {
             config.streaming_enabled = parseBoolFlag(requireValue(i, argc, argv, arg), arg);
+        } else if (arg == "--memory-budget-bytes") {
+            config.memory_budget_bytes =
+                static_cast<size_t>(std::stoull(requireValue(i, argc, argv, arg)));
         } else if (arg == "--tokens-per-char") {
             config.tokens_per_char = parseTokensPerChar(requireValue(i, argc, argv, arg));
         } else if (arg == "--help" || arg == "-h") {
@@ -218,7 +221,8 @@ RuntimeConfig parseRuntimeConfig(int argc, char **argv, const RuntimeEnvironment
                 "[--log-payloads false] [--scheduler-strategy tensor] "
                 "[--context-length 4096] [--kv-cache-slots 1] [--max-tokens 256] "
                 "[--temperature 0.8] [--top-p 0.95] [--top-k 40] "
-                "[--streaming-enabled false] [--tokens-per-char 0.25]");
+                "[--streaming-enabled false] [--tokens-per-char 0.25] "
+                "[--memory-budget-bytes 0]");
         } else {
             throw std::invalid_argument("unknown argument: " + arg);
         }

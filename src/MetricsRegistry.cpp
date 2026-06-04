@@ -237,6 +237,23 @@ std::string MetricsRegistry::renderMetrics() const {
     appendLine(out, "neuriplo_scheduler_batch_execution_seconds", modelLabel,
                nsToSeconds(scheduler_metrics_.batch_execution_ns_total));
 
+    // KV Cache Metrics
+    out += "# HELP neuriplo_kv_cache_slots_total Total KV cache slots\n";
+    out += "# TYPE neuriplo_kv_cache_slots_total gauge\n";
+    appendLine(out, "neuriplo_kv_cache_slots_total", modelLabel,
+               static_cast<double>(scheduler_metrics_.kv_cache_slots_total));
+
+    out += "# HELP neuriplo_kv_cache_slots_active Active KV cache slots\n";
+    out += "# TYPE neuriplo_kv_cache_slots_active gauge\n";
+    appendLine(out, "neuriplo_kv_cache_slots_active", modelLabel,
+               static_cast<double>(scheduler_metrics_.kv_cache_slots_active));
+
+    out += "# HELP neuriplo_scheduler_requests_memory_pressure_rejected_total "
+           "Requests rejected due to memory pressure\n";
+    out += "# TYPE neuriplo_scheduler_requests_memory_pressure_rejected_total counter\n";
+    appendCounterLine(out, "neuriplo_scheduler_requests_memory_pressure_rejected_total", modelLabel,
+                      scheduler_metrics_.requests_memory_pressure_rejected);
+
     // 2. HTTP Interface Stats
     out += "# HELP neuriplo_http_infer_requests_total Total infer requests\n";
     out += "# TYPE neuriplo_http_infer_requests_total counter\n";

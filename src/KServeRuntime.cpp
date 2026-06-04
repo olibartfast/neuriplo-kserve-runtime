@@ -1,10 +1,13 @@
 #include "KServeRuntime.hpp"
 
+#include "BackendRegistry.hpp"
 #include "KServeErrors.hpp"
 #include "KServeV2Codec.hpp"
 #include "Logging.hpp"
+#include "OpenAiCodec.hpp"
 #include "RequestPipeline.hpp"
 #include "Scheduler.hpp"
+#include "Tokenizer.hpp"
 
 #include <chrono>
 #include <cstdint>
@@ -131,6 +134,24 @@ std::string generateRequestId() {
     return buf;
 }
 
+bool modelIsLlm(const ModelHandle &handle, const std::string &backend) {
+    return usesLlmScheduler(handle.metadata.platform.find("llamacpp") != std::string::npos ||
+                                    handle.metadata.platform.find("cactus") != std::string::npos ||
+                                    handle.metadata.platform.find("ggml") != std::string::npos
+                                ? "llm"
+                                : "tensor",
+                            backend);
+}
+
+bool backendIsLlm(const std::string &backend) {
+    const auto cap = findBackendCapability(backend);
+    return cap.has_value() && cap->kind == BackendKind::Llm;
+}
+
+size_t estimateTokens(const std::string &text, double tokens_per_char) {
+    return static_cast<size_t>(static_cast<double>(text.size()) * tokens_per_char + 0.5);
+}
+
 } // namespace
 
 KServeRuntime::KServeRuntime(ModelRegistry registry, MetricsRegistry &metrics)
@@ -155,6 +176,12 @@ HttpResponse KServeRuntime::handle(const HttpRequest &request) const {
     }
     if (request.method == "POST" && request.path == "/v1/completions") {
         return completions(request);
+    }
+    if (request.method == "POST" && request.path == "/v1/chat/completions") {
+        return chatCompletions(request);
+    }
+    if (request.method == "POST" && request.path == "/v1/embeddings") {
+        return embeddings(request);
     }
 
     const auto route_tail = extractModelRouteTail(request.path);
@@ -510,45 +537,15 @@ HttpResponse KServeRuntime::encodeInferResponse(const std::string &model_name,
 }
 
 HttpResponse KServeRuntime::completions(const HttpRequest &request) const {
-    using Json = nlohmann::json;
-
-    Json body;
-    try {
-        body = Json::parse(request.body);
-    } catch (const Json::parse_error &) {
-        return error(400, KServeErrors::InvalidArgument, "invalid JSON request body");
+    OpenAiCompletionRequest comp_req;
+    const auto parse_result = parseCompletionRequest(request.body, comp_req);
+    if (!parse_result.ok) {
+        return error(400, KServeErrors::InvalidArgument, parse_result.error_message);
     }
 
-    if (!body.is_object()) {
-        return error(400, KServeErrors::InvalidArgument, "request body must be a JSON object");
-    }
-
-    if (!body.contains("model") || !body["model"].is_string()) {
-        return error(400, KServeErrors::InvalidArgument, "model name must be a string");
-    }
-    const std::string model_name = body["model"].get<std::string>();
-
-    if (!body.contains("prompt")) {
-        return error(400, KServeErrors::InvalidArgument, "prompt is required");
-    }
-    std::string prompt_text;
-    if (body["prompt"].is_string()) {
-        prompt_text = body["prompt"].get<std::string>();
-    } else if (body["prompt"].is_array()) {
-        for (const auto &elem : body["prompt"]) {
-            if (!elem.is_string()) {
-                return error(400, KServeErrors::InvalidArgument,
-                             "prompt array elements must be strings");
-            }
-            prompt_text += elem.get<std::string>();
-        }
-    } else {
-        return error(400, KServeErrors::InvalidArgument, "prompt must be a string or array");
-    }
-
-    const auto *handle = registry_.findHandle(model_name);
+    const auto *handle = registry_.findHandle(comp_req.model);
     if (handle == nullptr) {
-        return error(404, KServeErrors::ModelNotFound, "model not found: " + model_name);
+        return error(404, KServeErrors::ModelNotFound, "model not found: " + comp_req.model);
     }
     if (!handle->isReady()) {
         return error(503, KServeErrors::Unavailable, "model is not ready");
@@ -557,29 +554,28 @@ HttpResponse KServeRuntime::completions(const HttpRequest &request) const {
         return error(503, KServeErrors::Unavailable, "model scheduler is unavailable");
     }
 
+    if (comp_req.stream) {
+        return completionsStreaming(request, comp_req, *handle);
+    }
+
     InferenceRequest inf_req;
     inf_req.id = generateRequestId();
     inf_req.llm_params = LlmGenerationParams{};
-    if (body.contains("max_tokens") && body["max_tokens"].is_number_unsigned()) {
-        inf_req.llm_params->max_tokens = body["max_tokens"].get<size_t>();
+    if (comp_req.max_tokens) {
+        inf_req.llm_params->max_tokens = comp_req.max_tokens;
     }
-    if (body.contains("temperature") && body["temperature"].is_number()) {
-        inf_req.llm_params->temperature = body["temperature"].get<double>();
+    if (comp_req.temperature) {
+        inf_req.llm_params->temperature = comp_req.temperature;
     }
-    if (body.contains("top_p") && body["top_p"].is_number()) {
-        inf_req.llm_params->top_p = body["top_p"].get<double>();
+    if (comp_req.top_p) {
+        inf_req.llm_params->top_p = comp_req.top_p;
     }
-    if (body.contains("stream") && body["stream"].is_boolean()) {
-        inf_req.llm_params->streaming = body["stream"].get<bool>();
-    }
-
-    const size_t prompt_char_count = prompt_text.size();
 
     InputTensor prompt_tensor;
     prompt_tensor.name = "prompt";
     prompt_tensor.datatype = "BYTES";
     prompt_tensor.shape = {1};
-    prompt_tensor.string_data = {std::move(prompt_text)};
+    prompt_tensor.string_data = {comp_req.prompt};
     inf_req.inputs.push_back(std::move(prompt_tensor));
 
     ExecutionRequest exec_req;
@@ -590,7 +586,12 @@ HttpResponse KServeRuntime::completions(const HttpRequest &request) const {
     auto scheduled = handle->scheduler->submit(std::move(exec_req));
 
     if (!scheduled.ok) {
-        return error(429, KServeErrors::QueueFull, scheduled.error_message);
+        const int status = KServeErrors::httpStatusForCode(
+            scheduled.error_code.empty() ? errorCodeFor(scheduled.scheduler_error)
+                                         : scheduled.error_code);
+        const auto code = scheduled.error_code.empty() ? errorCodeFor(scheduled.scheduler_error)
+                                                       : scheduled.error_code;
+        return error(status, code, scheduled.error_message);
     }
 
     if (!scheduled.response.ok) {
@@ -608,28 +609,323 @@ HttpResponse KServeRuntime::completions(const HttpRequest &request) const {
     const auto created =
         std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch()).count();
 
-    Json response;
-    response["id"] = "cmpl-" + (inf_req.id.has_value() ? *inf_req.id : "");
-    response["object"] = "text_completion";
-    response["created"] = created;
-    response["model"] = model_name;
-    response["choices"] = Json::array();
+    size_t prompt_tokens = estimateTokens(comp_req.prompt, registry_.tokensPerChar());
+    size_t completion_tokens = estimateTokens(generated_text, registry_.tokensPerChar());
+    if (scheduled.response.llm_metadata) {
+        prompt_tokens = scheduled.response.llm_metadata->prompt_tokens;
+        completion_tokens = scheduled.response.llm_metadata->completion_tokens;
+    }
 
-    Json choice;
-    choice["index"] = 0;
-    choice["text"] = generated_text;
-    choice["finish_reason"] = "stop";
-    response["choices"].push_back(choice);
+    OpenAiCompletionResponse resp;
+    resp.id = "cmpl-" + (inf_req.id.has_value() ? *inf_req.id : "");
+    resp.object = "text_completion";
+    resp.created = created;
+    resp.model = comp_req.model;
+    resp.text = generated_text;
+    resp.finish_reason =
+        scheduled.response.llm_metadata ? scheduled.response.llm_metadata->finish_reason : "stop";
+    resp.prompt_tokens = prompt_tokens;
+    resp.completion_tokens = completion_tokens;
 
-    size_t estimated_prompt_tokens =
-        static_cast<size_t>(static_cast<double>(prompt_char_count) * registry_.tokensPerChar());
-    size_t estimated_completion_tokens =
-        static_cast<size_t>(static_cast<double>(generated_text.size()) * registry_.tokensPerChar());
-    response["usage"] = Json{
-        {"prompt_tokens", estimated_prompt_tokens},
-        {"completion_tokens", estimated_completion_tokens},
-        {"total_tokens", estimated_prompt_tokens + estimated_completion_tokens},
+    return json(200, completionResponseJson(resp));
+}
+
+HttpResponse KServeRuntime::completionsStreaming(const HttpRequest &request,
+                                                 const OpenAiCompletionRequest &comp_req,
+                                                 const ModelHandle &handle) const {
+    const std::string request_id = "cmpl-" + generateRequestId();
+    const auto now = std::chrono::system_clock::now();
+    const auto created =
+        std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch()).count();
+
+    HttpResponse response;
+    response.streaming = true;
+    response.stream_callback = [this, &handle, comp_req, request_id,
+                                created](StreamWriter &writer) {
+        ExecutionRequest exec_req;
+        exec_req.id = request_id;
+        InputTensor prompt_tensor;
+        prompt_tensor.name = "prompt";
+        prompt_tensor.datatype = "BYTES";
+        prompt_tensor.shape = {1};
+        prompt_tensor.string_data = {comp_req.prompt};
+        exec_req.inputs.push_back(std::move(prompt_tensor));
+
+        LlmGenerationParams params;
+        if (comp_req.max_tokens) {
+            params.max_tokens = comp_req.max_tokens;
+        }
+        if (comp_req.temperature) {
+            params.temperature = comp_req.temperature;
+        }
+        if (comp_req.top_p) {
+            params.top_p = comp_req.top_p;
+        }
+        params.streaming = true;
+        exec_req.llm_params = params;
+
+        exec_req.cancel_token = makeCancelToken();
+
+        auto callback = [&writer, &request_id, &comp_req, created](const std::string &token) {
+            const auto chunk = streamingChunkJson(request_id, "text_completion", comp_req.model,
+                                                  created, token, "");
+            writer.write(chunk);
+        };
+
+        auto scheduled = handle.scheduler->submit(std::move(exec_req));
+        if (!scheduled.ok) {
+            const auto error_json = Json{{"error", scheduled.error_message}}.dump();
+            writer.write("data: " + error_json + "\n\n");
+            return;
+        }
+
+        std::string generated_text;
+        for (const auto &output : scheduled.response.outputs) {
+            if (output.datatype == "BYTES" && !output.string_data.empty()) {
+                generated_text += output.string_data.front();
+            }
+        }
+
+        if (generated_text.empty()) {
+            const auto chunk = streamingChunkJson(request_id, "text_completion", comp_req.model,
+                                                  created, generated_text, "stop");
+            writer.write(chunk);
+        }
     };
 
-    return json(200, response.dump());
+    return response;
+}
+
+HttpResponse KServeRuntime::chatCompletions(const HttpRequest &request) const {
+    OpenAiChatRequest chat_req;
+    const auto parse_result = parseChatRequest(request.body, chat_req);
+    if (!parse_result.ok) {
+        return error(400, KServeErrors::InvalidArgument, parse_result.error_message);
+    }
+
+    const auto *handle = registry_.findHandle(chat_req.model);
+    if (handle == nullptr) {
+        return error(404, KServeErrors::ModelNotFound, "model not found: " + chat_req.model);
+    }
+    if (!handle->isReady()) {
+        return error(503, KServeErrors::Unavailable, "model is not ready");
+    }
+    if (handle->scheduler == nullptr) {
+        return error(503, KServeErrors::Unavailable, "model scheduler is unavailable");
+    }
+
+    if (chat_req.stream) {
+        return chatCompletionsStreaming(request, chat_req, *handle);
+    }
+
+    std::string prompt_text;
+    for (const auto &msg : chat_req.messages) {
+        prompt_text += msg.role + ": " + msg.content + "\n";
+    }
+    prompt_text += "assistant: ";
+
+    InferenceRequest inf_req;
+    inf_req.id = generateRequestId();
+    inf_req.llm_params = LlmGenerationParams{};
+    if (chat_req.max_tokens) {
+        inf_req.llm_params->max_tokens = chat_req.max_tokens;
+    }
+    if (chat_req.temperature) {
+        inf_req.llm_params->temperature = chat_req.temperature;
+    }
+    if (chat_req.top_p) {
+        inf_req.llm_params->top_p = chat_req.top_p;
+    }
+
+    InputTensor prompt_tensor;
+    prompt_tensor.name = "prompt";
+    prompt_tensor.datatype = "BYTES";
+    prompt_tensor.shape = {1};
+    prompt_tensor.string_data = {std::move(prompt_text)};
+    inf_req.inputs.push_back(std::move(prompt_tensor));
+
+    ExecutionRequest exec_req;
+    exec_req.id = inf_req.id;
+    exec_req.inputs = inf_req.inputs;
+    exec_req.llm_params = inf_req.llm_params;
+
+    auto scheduled = handle->scheduler->submit(std::move(exec_req));
+
+    if (!scheduled.ok) {
+        const int status = KServeErrors::httpStatusForCode(
+            scheduled.error_code.empty() ? errorCodeFor(scheduled.scheduler_error)
+                                         : scheduled.error_code);
+        const auto code = scheduled.error_code.empty() ? errorCodeFor(scheduled.scheduler_error)
+                                                       : scheduled.error_code;
+        return error(status, code, scheduled.error_message);
+    }
+
+    if (!scheduled.response.ok) {
+        return error(500, KServeErrors::BackendError, scheduled.response.error_message);
+    }
+
+    std::string generated_text;
+    for (const auto &output : scheduled.response.outputs) {
+        if (output.datatype == "BYTES" && !output.string_data.empty()) {
+            generated_text += output.string_data.front();
+        }
+    }
+
+    const auto now = std::chrono::system_clock::now();
+    const auto created =
+        std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch()).count();
+
+    size_t prompt_tokens =
+        estimateTokens(chat_req.messages.begin()->content, registry_.tokensPerChar());
+    size_t completion_tokens = estimateTokens(generated_text, registry_.tokensPerChar());
+    if (scheduled.response.llm_metadata) {
+        prompt_tokens = scheduled.response.llm_metadata->prompt_tokens;
+        completion_tokens = scheduled.response.llm_metadata->completion_tokens;
+    }
+
+    OpenAiChatResponse resp;
+    resp.id = "chatcmpl-" + (inf_req.id.has_value() ? *inf_req.id : "");
+    resp.object = "chat.completion";
+    resp.created = created;
+    resp.model = chat_req.model;
+    resp.message.role = "assistant";
+    resp.message.content = generated_text;
+    resp.finish_reason =
+        scheduled.response.llm_metadata ? scheduled.response.llm_metadata->finish_reason : "stop";
+    resp.prompt_tokens = prompt_tokens;
+    resp.completion_tokens = completion_tokens;
+
+    return json(200, chatResponseJson(resp));
+}
+
+HttpResponse KServeRuntime::chatCompletionsStreaming(const HttpRequest &request,
+                                                     const OpenAiChatRequest &chat_req,
+                                                     const ModelHandle &handle) const {
+    const std::string request_id = "chatcmpl-" + generateRequestId();
+    const auto now = std::chrono::system_clock::now();
+    const auto created =
+        std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch()).count();
+
+    HttpResponse response;
+    response.streaming = true;
+    response.stream_callback = [this, &handle, chat_req, request_id,
+                                created](StreamWriter &writer) {
+        std::string prompt_text;
+        for (const auto &msg : chat_req.messages) {
+            prompt_text += msg.role + ": " + msg.content + "\n";
+        }
+        prompt_text += "assistant: ";
+
+        ExecutionRequest exec_req;
+        exec_req.id = request_id;
+        InputTensor prompt_tensor;
+        prompt_tensor.name = "prompt";
+        prompt_tensor.datatype = "BYTES";
+        prompt_tensor.shape = {1};
+        prompt_tensor.string_data = {prompt_text};
+        exec_req.inputs.push_back(std::move(prompt_tensor));
+
+        LlmGenerationParams params;
+        if (chat_req.max_tokens) {
+            params.max_tokens = chat_req.max_tokens;
+        }
+        if (chat_req.temperature) {
+            params.temperature = chat_req.temperature;
+        }
+        if (chat_req.top_p) {
+            params.top_p = chat_req.top_p;
+        }
+        params.streaming = true;
+        exec_req.llm_params = params;
+        exec_req.cancel_token = makeCancelToken();
+
+        auto callback = [&writer, &request_id, &chat_req, created](const std::string &token) {
+            Json delta;
+            delta["content"] = token;
+            const auto chunk = streamingChunkJson(request_id, "chat.completion.chunk",
+                                                  chat_req.model, created, token, "");
+            writer.write(chunk);
+        };
+
+        auto scheduled = handle.scheduler->submit(std::move(exec_req));
+        if (!scheduled.ok) {
+            const auto error_json = Json{{"error", scheduled.error_message}}.dump();
+            writer.write("data: " + error_json + "\n\n");
+            return;
+        }
+
+        std::string generated_text;
+        for (const auto &output : scheduled.response.outputs) {
+            if (output.datatype == "BYTES" && !output.string_data.empty()) {
+                generated_text += output.string_data.front();
+            }
+        }
+
+        const auto finish_chunk = streamingChunkJson(request_id, "chat.completion.chunk",
+                                                     chat_req.model, created, "", "stop");
+        writer.write(finish_chunk);
+    };
+
+    return response;
+}
+
+HttpResponse KServeRuntime::embeddings(const HttpRequest &request) const {
+    OpenAiEmbeddingRequest emb_req;
+    const auto parse_result = parseEmbeddingRequest(request.body, emb_req);
+    if (!parse_result.ok) {
+        return error(400, KServeErrors::InvalidArgument, parse_result.error_message);
+    }
+
+    const auto *handle = registry_.findHandle(emb_req.model);
+    if (handle == nullptr) {
+        return error(404, KServeErrors::ModelNotFound, "model not found: " + emb_req.model);
+    }
+    if (!handle->isReady()) {
+        return error(503, KServeErrors::Unavailable, "model is not ready");
+    }
+    if (handle->scheduler == nullptr) {
+        return error(503, KServeErrors::Unavailable, "model scheduler is unavailable");
+    }
+
+    InputTensor input_tensor;
+    input_tensor.name = "input";
+    input_tensor.datatype = "BYTES";
+    input_tensor.shape = {1};
+    input_tensor.string_data = {emb_req.input};
+
+    ExecutionRequest exec_req;
+    exec_req.id = generateRequestId();
+    exec_req.inputs.push_back(std::move(input_tensor));
+
+    auto scheduled = handle->scheduler->submit(std::move(exec_req));
+
+    if (!scheduled.ok) {
+        const int status = KServeErrors::httpStatusForCode(
+            scheduled.error_code.empty() ? errorCodeFor(scheduled.scheduler_error)
+                                         : scheduled.error_code);
+        const auto code = scheduled.error_code.empty() ? errorCodeFor(scheduled.scheduler_error)
+                                                       : scheduled.error_code;
+        return error(status, code, scheduled.error_message);
+    }
+
+    if (!scheduled.response.ok) {
+        return error(500, KServeErrors::BackendError, scheduled.response.error_message);
+    }
+
+    std::vector<double> embedding;
+    for (const auto &output : scheduled.response.outputs) {
+        if (output.datatype != "BYTES") {
+            embedding = output.data;
+            break;
+        }
+    }
+
+    size_t prompt_tokens = estimateTokens(emb_req.input, registry_.tokensPerChar());
+
+    OpenAiEmbeddingResponse resp;
+    resp.model = emb_req.model;
+    resp.embedding = std::move(embedding);
+    resp.prompt_tokens = prompt_tokens;
+
+    return json(200, embeddingResponseJson(resp));
 }

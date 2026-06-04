@@ -119,6 +119,32 @@ std::string serializeResponse(const HttpResponse &response) {
     return out.str();
 }
 
+std::string serializeStreamingHeaders(const HttpResponse &response) {
+    std::ostringstream out;
+    out << "HTTP/1.1 200 OK\r\n";
+    out << "Content-Type: text/event-stream\r\n";
+    out << "Cache-Control: no-cache\r\n";
+    out << "Connection: keep-alive\r\n";
+    for (const auto &[name, value] : response.headers) {
+        out << name << ": " << value << "\r\n";
+    }
+    out << "\r\n";
+    return out.str();
+}
+
+class SocketWriter final : public StreamWriter {
+  public:
+    explicit SocketWriter(int fd) : fd_(fd) {}
+
+    bool write(const std::string &data) override {
+        const auto sent = ::send(fd_, data.data(), data.size(), 0);
+        return sent > 0;
+    }
+
+  private:
+    int fd_;
+};
+
 } // namespace
 
 HttpServer::HttpServer(std::string host, int port, Handler handler, size_t max_request_bytes)
@@ -266,8 +292,17 @@ void HttpServer::handleClient(int client_fd) const {
         response.body = Json{{"error", error.what()}}.dump();
     }
 
-    const auto serialized = serializeResponse(response);
-    ::send(client_fd, serialized.data(), serialized.size(), 0);
+    if (response.streaming && response.stream_callback) {
+        const auto headers = serializeStreamingHeaders(response);
+        ::send(client_fd, headers.data(), headers.size(), 0);
+        SocketWriter writer(client_fd);
+        response.stream_callback(writer);
+        const auto done = "data: [DONE]\n\n";
+        ::send(client_fd, done, std::strlen(done), 0);
+    } else {
+        const auto serialized = serializeResponse(response);
+        ::send(client_fd, serialized.data(), serialized.size(), 0);
+    }
     ::shutdown(client_fd, SHUT_RDWR);
     ::close(client_fd);
 }

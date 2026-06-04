@@ -1,6 +1,7 @@
 #include "KServeRuntime.hpp"
 #include "Executor.hpp"
 #include "MetricsRegistry.hpp"
+#include "ModelHandle.hpp"
 #include "ModelRegistry.hpp"
 #include "RuntimeConfig.hpp"
 #include "Test.hpp"

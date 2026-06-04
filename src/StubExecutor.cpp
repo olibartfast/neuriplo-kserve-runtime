@@ -57,6 +57,24 @@ class StubExecutor final : public Executor {
         return response;
     }
 
+    ExecutionResponse inferStreaming(const ExecutionRequest &request,
+                                     StreamingTokenCallback callback) override {
+        ExecutionResponse response = infer(request);
+        if (response.ok && llm_mode_ && callback) {
+            for (const auto &output : response.outputs) {
+                if (output.datatype == "BYTES" && !output.string_data.empty()) {
+                    const auto &text = output.string_data.front();
+                    const size_t chunk_size = 2;
+                    for (size_t i = 0; i < text.size(); i += chunk_size) {
+                        callback(text.substr(i, chunk_size));
+                    }
+                }
+            }
+        }
+        return response;
+    }
+
+  private:
     ExecutionResponse inferLlm(const ExecutionRequest &request) {
         const InputTensor *prompt = nullptr;
         for (const auto &input : request.inputs) {
@@ -83,6 +101,13 @@ class StubExecutor final : public Executor {
         const size_t append_chars = std::min(max_tokens, prompt_text.size());
         generated.append(prompt_text.data(), append_chars);
 
+        size_t prompt_token_estimate = prompt_text.size() / 4;
+        if (prompt_token_estimate == 0)
+            prompt_token_estimate = 1;
+        size_t completion_token_estimate = append_chars / 4;
+        if (completion_token_estimate == 0)
+            completion_token_estimate = 1;
+
         std::vector<std::string> output_names;
         if (request.requested_outputs.empty()) {
             output_names.reserve(metadata_.outputs.size());
@@ -107,10 +132,16 @@ class StubExecutor final : public Executor {
             output.string_data = {generated};
             response.outputs.push_back(std::move(output));
         }
+
+        LlmResultMetadata llm_meta;
+        llm_meta.prompt_tokens = prompt_token_estimate;
+        llm_meta.completion_tokens = completion_token_estimate;
+        llm_meta.finish_reason = "stop";
+        response.llm_metadata = llm_meta;
+
         return response;
     }
 
-  private:
     const TensorMetadata *findOutput(const std::string &name) const {
         const auto found =
             std::find_if(metadata_.outputs.begin(), metadata_.outputs.end(),

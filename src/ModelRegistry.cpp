@@ -75,6 +75,7 @@ void ModelRegistry::loadModel(const RuntimeConfig &config, ExecutorFactory facto
         scheduler_config.kv_cache_slots = config.kv_cache_slots;
         scheduler_config.max_tokens = config.max_tokens;
         scheduler_config.tokens_per_char = config.tokens_per_char;
+        scheduler_config.memory_budget_bytes = config.memory_budget_bytes;
         handle_.scheduler =
             makeLlmScheduler(std::move(executors), scheduler_config, config.model_name);
     } else {

@@ -5,9 +5,12 @@
 #include "SchedulerMetrics.hpp"
 
 #include <chrono>
+#include <cstddef>
 #include <memory>
 #include <string>
 #include <vector>
+
+class Tokenizer;
 
 enum class SchedulerError {
     None,
@@ -32,6 +35,7 @@ struct LlmSchedulerConfig {
     size_t kv_cache_slots = 1;
     size_t max_tokens = 256;
     double tokens_per_char = 0.25;
+    size_t memory_budget_bytes = 0;
 };
 
 struct SchedulerResult {
@@ -62,3 +66,7 @@ std::unique_ptr<Scheduler> makeModelScheduler(std::vector<std::unique_ptr<Execut
 
 std::unique_ptr<Scheduler> makeLlmScheduler(std::vector<std::unique_ptr<Executor>> executors,
                                             LlmSchedulerConfig config, std::string model_name = {});
+
+std::unique_ptr<Scheduler> makeLlmScheduler(std::vector<std::unique_ptr<Executor>> executors,
+                                            LlmSchedulerConfig config, std::string model_name,
+                                            std::unique_ptr<Tokenizer> tokenizer);

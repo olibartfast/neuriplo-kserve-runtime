@@ -4,6 +4,7 @@
 #include "KServeV2Codec.hpp"
 #include "MetricsRegistry.hpp"
 #include "ModelRegistry.hpp"
+#include "OpenAiCodec.hpp"
 #include "Scheduler.hpp"
 
 #include <optional>
@@ -27,6 +28,14 @@ class KServeRuntime {
     HttpResponse infer(const std::string &model_name, const std::string &model_version,
                        const HttpRequest &request) const;
     HttpResponse completions(const HttpRequest &request) const;
+    HttpResponse completionsStreaming(const HttpRequest &request,
+                                      const OpenAiCompletionRequest &comp_req,
+                                      const ModelHandle &handle) const;
+    HttpResponse chatCompletions(const HttpRequest &request) const;
+    HttpResponse chatCompletionsStreaming(const HttpRequest &request,
+                                          const OpenAiChatRequest &chat_req,
+                                          const ModelHandle &handle) const;
+    HttpResponse embeddings(const HttpRequest &request) const;
 
     std::optional<HttpResponse> validateInferModel(const std::string &model_name,
                                                    const std::string &model_version,

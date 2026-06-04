@@ -31,6 +31,7 @@ struct RuntimeConfig {
     double top_p = 0.95;
     size_t top_k = 40;
     bool streaming_enabled = false;
+    size_t memory_budget_bytes = 0;
 };
 
 struct RuntimeEnvironment {
