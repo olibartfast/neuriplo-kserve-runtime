@@ -9,7 +9,7 @@ and operational endpoints. The actual backend execution remains owned by
 
 ## Initial Scope
 
-- HTTP KServe V2 health and metadata endpoints.
+- HTTP and gRPC KServe V2 health and metadata endpoints.
 - Single-model runtime process.
 - Bounded request handling.
 - Raw tensor inference through the stub executor by default, with optional
@@ -70,6 +70,30 @@ cmake --build --preset debug
 ctest --preset debug
 ```
 
+### gRPC support (optional)
+
+gRPC V2 support is disabled by default. Enable it with the CMake option:
+
+```bash
+cmake -S . -B build/grpc -DNEURIPLO_RUNTIME_ENABLE_GRPC=ON
+cmake --build build/grpc
+```
+
+Requires `libgrpc++-dev` and `protobuf-compiler-grpc` system packages:
+
+```bash
+sudo apt-get install -y libgrpc++-dev protobuf-compiler-grpc
+```
+
+When compiled with gRPC support, run both HTTP and gRPC on separate ports:
+
+```bash
+./build/grpc/neuriplo-kserve-runtime --port 8080 --grpc-port 9000
+```
+
+If `--grpc-port` is set but gRPC was not compiled in, the runtime prints a
+warning and ignores it.
+
 ### Lint and format
 
 ```bash
@@ -103,7 +127,8 @@ valgrind --leak-check=full --error-exitcode=1 ./build/debug/neuriplo-kserve-runt
   --max-queue-size 64 \
   --request-timeout-ms 30000 \
   --instances 1 \
-  --port 8080
+  --port 8080 \
+  --grpc-port 9000
 ```
 
 The runtime also reads KServe-friendly environment defaults. CLI flags override
@@ -152,6 +177,8 @@ mount conventions.
 
 ## Endpoints
 
+### HTTP
+
 ```text
 GET  /v2
 GET  /v2/health/live
@@ -164,6 +191,26 @@ GET  /v2/models/{model_name}/versions/{version}/ready
 POST /v2/models/{model_name}/versions/{version}/infer
 GET  /metrics
 ```
+
+### gRPC
+
+When compiled with `NEURIPLO_RUNTIME_ENABLE_GRPC=ON`, the `GRPCInferenceService`
+(KServe V2 gRPC protocol) is available on the configured `--grpc-port`:
+
+```
+service GRPCInferenceService {
+  rpc ServerLive(ServerLiveRequest) returns (ServerLiveResponse);
+  rpc ServerReady(ServerReadyRequest) returns (ServerReadyResponse);
+  rpc ModelReady(ModelReadyRequest) returns (ModelReadyResponse);
+  rpc ServerMetadata(ServerMetadataRequest) returns (ServerMetadataResponse);
+  rpc ModelMetadata(ModelMetadataRequest) returns (ModelMetadataResponse);
+  rpc ModelInfer(ModelInferRequest) returns (ModelInferResponse);
+}
+```
+
+The gRPC server reuses the same `ModelRegistry`, scheduler, and executor
+pipeline as the HTTP path. Request admission, batching, timeouts, and error
+mapping behave identically across both transports.
 
 The stub model exposes static version `1`. Stub inference validates the V2 JSON
 request shape and returns a deterministic placeholder output:
