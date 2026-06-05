@@ -1,6 +1,0 @@
-Log file created at: 2026/06/05 21:08:40
-Running on machine: G5-KD
-Running duration (h:mm:ss): 0:00:00
-Log line format: [IWEF]yyyymmdd hh:mm:ss.uuuuuu threadid file:line] msg
-E20260605 21:08:40.637482 1616677 VisionApp.cpp:29] Error: Input sizes vector is empty
-E20260605 21:08:40.637827 1616677 main.cpp:9] Error: Input sizes vector is empty
