@@ -73,7 +73,10 @@ if(NEURIPLO_RUNTIME_ENABLE_GRPC)
     if(NOT _GRPC_PLUGIN_BIN)
         set(_GRPC_PLUGIN_BIN "$<TARGET_FILE:gRPC::grpc_cpp_plugin>")
     endif()
-    get_target_property(_GRPC_PLUGIN_SUPPORT_LOC gRPC::grpc_plugin_support IMPORTED_LOCATION)
+    get_target_property(_GRPC_PLUGIN_SUPPORT_LOC gRPC::grpc_plugin_support IMPORTED_LOCATION_NONE)
+    if(NOT _GRPC_PLUGIN_SUPPORT_LOC)
+        get_target_property(_GRPC_PLUGIN_SUPPORT_LOC gRPC::grpc_plugin_support IMPORTED_LOCATION)
+    endif()
     if(_GRPC_PLUGIN_SUPPORT_LOC)
         get_filename_component(_GRPC_LIBRARY_DIR "${_GRPC_PLUGIN_SUPPORT_LOC}" DIRECTORY)
     else()
@@ -140,6 +143,10 @@ endif()
 add_executable(neuriplo-kserve-runtime src/main.cpp)
 target_link_libraries(neuriplo-kserve-runtime PRIVATE neuriplo-kserve-runtime-core)
 
+if(NEURIPLO_RUNTIME_ENABLE_GRPC AND _GRPC_LIBRARY_DIR)
+    target_link_directories(neuriplo-kserve-runtime PRIVATE "${_GRPC_LIBRARY_DIR}")
+endif()
+
 add_executable(neuriplo-kserve-runtime-tests
     tests/BackendRegistryTest.cpp
     tests/BatchCompatibilityTest.cpp
@@ -163,6 +170,10 @@ add_executable(neuriplo-kserve-runtime-tests
 )
 target_link_libraries(neuriplo-kserve-runtime-tests PRIVATE neuriplo-kserve-runtime-core)
 
+if(NEURIPLO_RUNTIME_ENABLE_GRPC AND _GRPC_LIBRARY_DIR)
+    target_link_directories(neuriplo-kserve-runtime-tests PRIVATE "${_GRPC_LIBRARY_DIR}")
+endif()
+
 target_compile_options(neuriplo-kserve-runtime-tests PRIVATE
     $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic>
 )
@@ -173,7 +184,7 @@ if(NEURIPLO_RUNTIME_ENABLE_REAL_NEURIPLO)
 endif()
 
 if(NEURIPLO_RUNTIME_ENABLE_GRPC)
-    target_sources(neuriplo-kserve-runtime-tests PRIVATE tests/GrpcV2CodecTest.cpp)
+    target_sources(neuriplo-kserve-runtime-tests PRIVATE tests/GrpcV2CodecTest.cpp tests/GrpcIntegrationTest.cpp)
     target_compile_definitions(neuriplo-kserve-runtime-tests PRIVATE NEURIPLO_RUNTIME_WITH_GRPC)
     target_include_directories(neuriplo-kserve-runtime-tests PRIVATE "${PROTO_GEN_DIR}")
     target_link_libraries(neuriplo-kserve-runtime-tests PRIVATE
