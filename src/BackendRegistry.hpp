@@ -30,5 +30,4 @@ bool isKnownBackend(const std::string &backend_id);
 bool usesLlmScheduler(const std::string &scheduler_strategy, const std::string &backend_id);
 
 std::unique_ptr<Executor> createExecutorFor(const std::string &backend_id,
-                                            const class RuntimeConfig &config,
-                                            std::string &error);
+                                            const class RuntimeConfig &config, std::string &error);
