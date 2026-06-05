@@ -84,7 +84,7 @@ int main(int argc, char **argv) {
         std::thread grpc_thread;
         if (config.grpc_port > 0) {
             grpc_server = std::make_unique<grpc_v2::GrpcServer>(config.host, config.grpc_port,
-                                                                 registry, metrics);
+                                                                registry, metrics);
             grpc_thread = std::thread([&grpc_server]() { grpc_server->run(); });
         }
 #endif
