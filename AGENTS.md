@@ -8,14 +8,14 @@ server. Unit tests live in `tests/` and are registered through CTest. Build pres
 defined in `CMakePresets.json`; CI is defined in `.github/workflows/ci.yml`. Local editor
 debug tasks are under `.vscode/`.
 
-Read `STEP0.md` before assuming integration readiness. It documents the current
+Read `plan/STEP0.md` before assuming integration readiness. It documents the current
 implemented scaffold and the missing pieces that still block real `neuriplo`,
 `vision-core`, and `vision-inference` integration. Completed step snapshots live in
-`STEP1.md` through `STEP6.md`; use `STEP<N>_WIP.md` only for in-progress step work.
+`plan/STEP1.md` through `plan/STEP6.md`; use `plan/STEP<N>_WIP.md` only for in-progress step work.
 
-Treat `ROADMAP.md` as the target roadmap and step snapshots as the current-state
-record. For architecture work, read `DESIGN_PATTERNS.md` for patterns in use today and
-the "Architecture And Design Pattern Evolution" section in `ROADMAP.md` for planned
+Treat `plan/ROADMAP.md` as the target roadmap and step snapshots as the current-state
+record. For architecture work, read `plan/DESIGN_PATTERNS.md` for patterns in use today and
+the "Architecture And Design Pattern Evolution" section in `plan/ROADMAP.md` for planned
 patterns. Prefer extending existing Strategy/factory/adapter boundaries over adding new
 frameworks unless the roadmap calls for them.
 
@@ -69,6 +69,6 @@ issues when available. Include API examples or endpoint output when behavior cha
 
 Do not commit model files, secrets, tokens, or generated `build*/` directories. Keep
 runtime defaults safe for local development, and document any new network-facing options
-in `README.md` and tests. Update `DESIGN_PATTERNS.md` when introducing a new
-cross-cutting architectural pattern, and update `ROADMAP.md` when changing planned
+in `README.md` and tests. Update `plan/DESIGN_PATTERNS.md` when introducing a new
+cross-cutting architectural pattern, and update `plan/ROADMAP.md` when changing planned
 architecture direction.
