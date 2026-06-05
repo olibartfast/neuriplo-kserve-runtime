@@ -117,6 +117,9 @@ The roadmap is organized as implementation steps. Each completed step should
 have a matching `STEP<N>.md` snapshot that records what was actually built and
 validated. Work-in-progress step planning should use `STEP<N>_WIP.md`.
 
+Steps 12+ and the E2E integration plan are in `plan/NEXT_STEPS.md` and
+`plan/E2E_YOLO.md`.
+
 ```text
 Step 0: Scaffold
 Step 1: KServe Packaging
