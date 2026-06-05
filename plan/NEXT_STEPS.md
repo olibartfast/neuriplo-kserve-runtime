@@ -17,17 +17,17 @@
 **Goal**: Smoke-test the full neuriplo platform: `vision-inference` → KServe V2 →
 `neuriplo-kserve-runtime` → `neuriplo` (ONNX Runtime) → YOLO model.
 
-See `plan/E2E_YOLO.md` for the detailed plan.
+See `plan/E2E_YOLO.md` for the detailed plan and `plan/STEP12.md` for the snapshot.
 
-| # | Item | Depends On |
-|---|------|-----------|
-| 12.1 | Verify YOLO task contract in vision-core (input shape, output format) | vision-core dev branch |
-| 12.2 | Build runtime with `NEURIPLO_RUNTIME_ENABLE_REAL_NEURIPLO=ON` | neuriplo dev branch |
-| 12.3 | Load real ONNX model, validate metadata from neuriplo | 12.2 |
-| 12.4 | Run inference, compare output shapes against direct neuriplo | 12.3 |
-| 12.5 | vision-inference KServe client (HTTP) → runtime → response | vision-inference dev branch |
-| 12.6 | gRPC path parity test | 12.4 + gRPC build |
-| 12.7 | `scripts/e2e-yolo.sh` automated smoke script | 12.5 |
+| # | Item | Status |
+|---|------|--------|
+| 12.2 | Build runtime with `NEURIPLO_RUNTIME_ENABLE_REAL_NEURIPLO=ON` | ✅ Done |
+| 12.3 | Load real ONNX model, validate metadata from neuriplo | ✅ Done |
+| 12.4 | Run inference, compare output shapes | ✅ Done |
+| 12.7 | `scripts/e2e-yolo.sh` automated smoke script | ✅ Done |
+| 12.1 | Verify YOLO task contract in vision-core | Pending (requires vision-core dev branch) |
+| 12.5 | vision-inference KServe client (HTTP) → runtime → response | Pending (requires vision-inference dev branch) |
+| 12.6 | gRPC path parity test | Pending |
 
 ## Production Track (Priority: Medium)
 
