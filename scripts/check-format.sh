@@ -7,3 +7,5 @@ if ((${#files[@]} == 0)); then
 fi
 
 clang-format --dry-run --Werror "${files[@]}"
+
+# CMakeLists.txt and *.cmake files are not C++ — keep them out of clang-format.
