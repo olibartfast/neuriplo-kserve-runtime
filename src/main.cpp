@@ -80,12 +80,24 @@ int main(int argc, char **argv) {
         server.run();
 
 #ifdef NEURIPLO_RUNTIME_WITH_GRPC
+        std::unique_ptr<grpc_v2::GrpcServer> grpc_server;
+        std::thread grpc_thread;
         if (config.grpc_port > 0) {
-            std::thread grpc_thread([&registry, &metrics, &config]() {
-                grpc_v2::GrpcServer grpc_server(config.host, config.grpc_port, registry, metrics);
-                grpc_server.run();
-            });
-            grpc_thread.detach();
+            grpc_server = std::make_unique<grpc_v2::GrpcServer>(config.host, config.grpc_port,
+                                                                 registry, metrics);
+            grpc_thread = std::thread([&grpc_server]() { grpc_server->run(); });
+        }
+#endif
+        // server.run() blocks until stopped; signal handling or explicit stop
+        // would unblock it in a production setup.
+        (void)server;
+
+#ifdef NEURIPLO_RUNTIME_WITH_GRPC
+        if (grpc_server) {
+            grpc_server->stop();
+        }
+        if (grpc_thread.joinable()) {
+            grpc_thread.join();
         }
 #else
         if (config.grpc_port > 0) {
@@ -94,7 +106,6 @@ int main(int argc, char **argv) {
                 << '\n';
         }
 #endif
-
     } catch (const std::exception &error) {
         std::cerr << "fatal: " << error.what() << '\n';
         return 1;
