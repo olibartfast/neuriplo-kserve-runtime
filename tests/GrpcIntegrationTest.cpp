@@ -52,7 +52,8 @@ int findFreePort() {
 }
 
 struct TestGrpcContext {
-    TestGrpcContext() : config(), registry(config), grpc_server("127.0.0.1", port, registry, metrics) {
+    TestGrpcContext()
+        : config(), registry(config), grpc_server("127.0.0.1", port, registry, metrics) {
         grpc_thread = std::thread([this]() { grpc_server.run(); });
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
