@@ -132,8 +132,8 @@ if(NEURIPLO_RUNTIME_ENABLE_REAL_NEURIPLO)
 endif()
 
 if(NEURIPLO_RUNTIME_ENABLE_GRPC)
-    target_compile_definitions(neuriplo-kserve-runtime-core PRIVATE NEURIPLO_RUNTIME_WITH_GRPC)
-    target_include_directories(neuriplo-kserve-runtime-core PRIVATE "${PROTO_GEN_DIR}")
+    target_compile_definitions(neuriplo-kserve-runtime-core PUBLIC NEURIPLO_RUNTIME_WITH_GRPC)
+    target_include_directories(neuriplo-kserve-runtime-core PUBLIC "${PROTO_GEN_DIR}")
     target_link_libraries(neuriplo-kserve-runtime-core PUBLIC
         protobuf::libprotobuf
         gRPC::grpc++

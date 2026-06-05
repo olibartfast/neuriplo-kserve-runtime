@@ -77,8 +77,6 @@ int main(int argc, char **argv) {
             },
             config.max_request_bytes);
 
-        server.run();
-
 #ifdef NEURIPLO_RUNTIME_WITH_GRPC
         std::unique_ptr<grpc_v2::GrpcServer> grpc_server;
         std::thread grpc_thread;
@@ -88,9 +86,8 @@ int main(int argc, char **argv) {
             grpc_thread = std::thread([&grpc_server]() { grpc_server->run(); });
         }
 #endif
-        // server.run() blocks until stopped; signal handling or explicit stop
-        // would unblock it in a production setup.
-        (void)server;
+
+        server.run();
 
 #ifdef NEURIPLO_RUNTIME_WITH_GRPC
         if (grpc_server) {
