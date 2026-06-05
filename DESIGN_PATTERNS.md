@@ -117,13 +117,14 @@ Translates between external protocol/library and internal domain types.
 
 ```
 src/KServeV2Codec.hpp/cpp  — HTTP/JSON ↔ ExecutionRequest/ExecutionResponse
+src/GrpcV2Codec.hpp/cpp    — gRPC/protobuf ↔ ExecutionRequest/ExecutionResponse
 src/NeuriploExecutor.cpp   — NeuriploAdapter ↔ Executor
 src/RealNeuriploAdapter.cpp — real neuriplo library ↔ NeuriploAdapter
 src/DynamicBatcher.hpp/cpp — N requests ↔ merged request + split responses
 ```
 
 KServe protocol types never leak into `Executor` or `Scheduler`. `neuriplo` types never
-leak into HTTP/routing.
+leak into HTTP/routing or gRPC.
 
 ---
 
@@ -281,6 +282,7 @@ slicing per-request responses.
 | Module | Responsibility | Boundary |
 |--------|---------------|----------|
 | `KServeRuntime` | HTTP routing, error mapping | RPC protocol |
+| `GrpcServer`/`GrpcV2Codec` | gRPC routing, protobuf conversion | RPC protocol |
 | `KServeV2Codec` | JSON ↔ tensor types | Serialization |
 | `ModelRegistry` | Model lifecycle, executor factory | State machine |
 | `ModelHandle` | Model identity + scheduler ref | Aggregate root |

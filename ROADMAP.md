@@ -27,8 +27,7 @@ dynamic batching path.
 
 ### This Repository Owns
 
-- KServe/Open Inference Protocol V2 HTTP surface.
-- Optional gRPC V2 surface later.
+- KServe/Open Inference Protocol V2 HTTP and gRPC surface.
 - Runtime process lifecycle.
 - Model registry and model state.
 - Request admission and backpressure.
@@ -270,7 +269,7 @@ Add these only when profiling or deployment pressure justifies the complexity:
 | Zero-copy / borrowed tensor buffers | Copy overhead in hot path | Reduce `vector<double>` copies; consider external buffer lifetime rules |
 | Arena / PMR allocators | Allocation churn under load | Per-request or per-batch memory pools for tensor staging |
 | Structured result types (`std::expected` / typed `Result`) | Error-handling bugs | Gradual adoption at executor/scheduler boundaries |
-| gRPC V2 surface | Client demand | Parallel adapter layer; reuse scheduler and executor boundaries |
+| gRPC V2 surface | Client demand | ✅ Implemented — parallel adapter reusing scheduler and executor boundaries |
 
 ### Explicit Non-Goals
 
@@ -1313,7 +1312,7 @@ that addresses each gap.
 - **No container readiness-gate health checks** → Step 9.5
 - **No latency SLO / performance baseline** → Step 9.6
 - **Thread-per-client HTTP server** → Explicitly deferred (scale trigger)
-- **gRPC V2 surface** → Explicitly deferred (client demand trigger)
+- **gRPC V2 surface** → ✅ Implemented (see proto/kserve_grpc.proto, src/GrpcServer.*)
 
 ### Gaps Blocking LLM Production Use → Addressed by Step 10
 
@@ -1341,7 +1340,7 @@ for a first production launch. They remain deferred even after Step 11 completio
 | Async HTTP reactor (epoll/io_uring) | High connection concurrency |
 | Zero-copy / borrowed tensor buffers | Copy overhead in hot path |
 | Arena / PMR allocators | Allocation churn under load |
-| gRPC V2 surface | Client demand |
+| gRPC V2 surface | ✅ Implemented |
 | Multi-model hot reload | Deployment need |
 | Backend plugin registry (no central switch) | Backend count growth |
 | Control plane / data plane split | Multi-model + drain complexity |
