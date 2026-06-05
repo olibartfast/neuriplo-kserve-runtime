@@ -1,9 +1,7 @@
 #include "ModelRegistry.hpp"
 
 #include "BackendRegistry.hpp"
-#include "NeuriploExecutor.hpp"
 #include "Scheduler.hpp"
-#include "StubExecutor.hpp"
 
 #include <stdexcept>
 #include <utility>
@@ -12,20 +10,7 @@
 namespace {
 
 std::unique_ptr<Executor> defaultExecutorFactory(const RuntimeConfig &config, std::string &error) {
-    if (config.backend == "stub") {
-        return makeStubExecutor(config, error);
-    }
-
-    const auto capability = findBackendCapability(config.backend);
-    if (!capability) {
-        error = "unsupported backend: " + config.backend;
-        return nullptr;
-    }
-    if (!capability->uses_neuriplo) {
-        error = "unsupported backend: " + config.backend;
-        return nullptr;
-    }
-    return makeNeuriploExecutor(config, error);
+    return createExecutorFor(config.backend, config, error);
 }
 
 } // namespace

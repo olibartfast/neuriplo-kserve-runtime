@@ -1,8 +1,8 @@
 # Design Patterns in neuriplo-kserve-runtime
 
 Architecture cheat sheet for the runtime. Prefer symbol names over line numbers when
-navigating — line refs drift quickly. Step snapshots live in `STEP0.md` through
-`STEP6.md`.
+navigating — line refs drift quickly. Step snapshots live in `plan/STEP0.md` through
+`plan/STEP6.md`.
 
 ## Strategy / Interface
 
@@ -161,7 +161,7 @@ Batch formation (`formBatch`) scans the queue (not front-only):
 - fulfills expired entries immediately with timeout
 - waits until formation deadline or next queued deadline
 
-See `STEP6.md` for dynamic batching behavior.
+See `plan/STEP6.md` for dynamic batching behavior.
 
 ---
 
@@ -296,5 +296,5 @@ slicing per-request responses.
 
 Each module depends only on interfaces below it. No cyclical dependencies.
 
-Related docs: `STEP5.md` (scheduler), `STEP6.md` (dynamic batching), `AGENTS.md`
+Related docs: `plan/STEP5.md` (scheduler), `plan/STEP6.md` (dynamic batching), `AGENTS.md`
 (build/test conventions).

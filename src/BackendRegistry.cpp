@@ -1,5 +1,8 @@
 #include "BackendRegistry.hpp"
 
+#include "NeuriploExecutor.hpp"
+#include "StubExecutor.hpp"
+
 #include <mutex>
 #include <unordered_map>
 #include <vector>
@@ -13,18 +16,54 @@ std::once_flag default_init_flag;
 void registerDefaultBackends() {
     std::call_once(default_init_flag, []() {
         const std::vector<BackendCapability> defaults = {
-            {"stub", BackendKind::Tensor, false},
-            {"onnx_runtime", BackendKind::Tensor, true},
-            {"opencv_dnn", BackendKind::Tensor, true},
-            {"openvino", BackendKind::Tensor, true},
-            {"tensorrt", BackendKind::Tensor, true},
-            {"libtorch", BackendKind::Tensor, true},
-            {"libtensorflow", BackendKind::Tensor, true},
-            {"migraphx", BackendKind::Tensor, true},
-            {"executorch", BackendKind::Tensor, true},
-            {"ggml", BackendKind::Llm, true},
-            {"llamacpp", BackendKind::Llm, true},
-            {"cactus", BackendKind::Llm, true},
+            {"stub", BackendKind::Tensor, false,
+             [](const RuntimeConfig &config, std::string &error) {
+                 return makeStubExecutor(config, error);
+             }},
+            {"onnx_runtime", BackendKind::Tensor, true,
+             [](const RuntimeConfig &config, std::string &error) {
+                 return makeNeuriploExecutor(config, error);
+             }},
+            {"opencv_dnn", BackendKind::Tensor, true,
+             [](const RuntimeConfig &config, std::string &error) {
+                 return makeNeuriploExecutor(config, error);
+             }},
+            {"openvino", BackendKind::Tensor, true,
+             [](const RuntimeConfig &config, std::string &error) {
+                 return makeNeuriploExecutor(config, error);
+             }},
+            {"tensorrt", BackendKind::Tensor, true,
+             [](const RuntimeConfig &config, std::string &error) {
+                 return makeNeuriploExecutor(config, error);
+             }},
+            {"libtorch", BackendKind::Tensor, true,
+             [](const RuntimeConfig &config, std::string &error) {
+                 return makeNeuriploExecutor(config, error);
+             }},
+            {"libtensorflow", BackendKind::Tensor, true,
+             [](const RuntimeConfig &config, std::string &error) {
+                 return makeNeuriploExecutor(config, error);
+             }},
+            {"migraphx", BackendKind::Tensor, true,
+             [](const RuntimeConfig &config, std::string &error) {
+                 return makeNeuriploExecutor(config, error);
+             }},
+            {"executorch", BackendKind::Tensor, true,
+             [](const RuntimeConfig &config, std::string &error) {
+                 return makeNeuriploExecutor(config, error);
+             }},
+            {"ggml", BackendKind::Llm, true,
+             [](const RuntimeConfig &config, std::string &error) {
+                 return makeNeuriploExecutor(config, error);
+             }},
+            {"llamacpp", BackendKind::Llm, true,
+             [](const RuntimeConfig &config, std::string &error) {
+                 return makeNeuriploExecutor(config, error);
+             }},
+            {"cactus", BackendKind::Llm, true,
+             [](const RuntimeConfig &config, std::string &error) {
+                 return makeNeuriploExecutor(config, error);
+             }},
         };
 
         std::lock_guard<std::mutex> lock(registry_mutex);
@@ -77,4 +116,18 @@ bool usesLlmScheduler(const std::string &scheduler_strategy, const std::string &
         return false;
     }
     return backendKind(backend_id) == BackendKind::Llm;
+}
+
+std::unique_ptr<Executor> createExecutorFor(const std::string &backend_id,
+                                            const RuntimeConfig &config, std::string &error) {
+    const auto capability = findBackendCapability(backend_id);
+    if (!capability) {
+        error = "unsupported backend: " + backend_id;
+        return nullptr;
+    }
+    if (!capability->factory) {
+        error = "no executor factory registered for backend: " + backend_id;
+        return nullptr;
+    }
+    return capability->factory(config, error);
 }

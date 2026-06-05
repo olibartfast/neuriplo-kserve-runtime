@@ -132,7 +132,7 @@ Step 10: LLM Path Completion
 Step 11: Deployment Validation
 ```
 
-Current architecture patterns are documented in `DESIGN_PATTERNS.md`. That file
+Current architecture patterns are documented in `plan/DESIGN_PATTERNS.md`. That file
 records what exists today; this section records what to grow into and when.
 
 ## Architecture And Design Pattern Evolution
@@ -1293,12 +1293,12 @@ Performance checks:
 7. Add llama.cpp and Cactus LLM support as a dedicated scheduling policy, not
    as ordinary dynamic batching.
 8. Prefer correctness and stable protocol behavior before optimizing transport.
-9. Evolve architecture using `DESIGN_PATTERNS.md` for current patterns and the
+9. Evolve architecture using `plan/DESIGN_PATTERNS.md` for current patterns and the
    "Architecture And Design Pattern Evolution" section for target patterns.
 
 ## Production Readiness Gap Analysis
 
-Steps 0–8 are completed and have snapshot documents (STEP0–STEP8.md). Steps
+Steps 0–8 are completed and have snapshot documents (plan/STEP0–plan/STEP8.md). Steps
 9–11 are planned to close remaining gaps. This section records what remains
 before this is a production-facing serving runtime, annotated with the step
 that addresses each gap.
