@@ -13,9 +13,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install build tools
-        run: sudo apt-get update && sudo apt-get install -y build-essential cmake
+        run: sudo apt-get update && sudo apt-get install -y build-essential cmake ninja-build ccache
+      - name: Set up ccache
+        uses: hendrikmuhs/ccache-action@v1
+        with:
+          key: ${{ github.job }}-${{ runner.os }}
       - name: Configure
-        run: cmake --preset debug
+        run: cmake --preset debug -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
       - name: Build
         run: cmake --build --preset debug --parallel
       - name: Unit tests
@@ -27,11 +31,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install lint tools
-        run: sudo apt-get update && sudo apt-get install -y build-essential cmake clang-format clang-tidy
+        run: sudo apt-get update && sudo apt-get install -y build-essential cmake ninja-build ccache clang-format clang-tidy
+      - name: Set up ccache
+        uses: hendrikmuhs/ccache-action@v1
+        with:
+          key: ${{ github.job }}-${{ runner.os }}
       - name: Check formatting
         run: scripts/check-format.sh
       - name: Configure clang-tidy
-        run: cmake --preset lint
+        run: cmake --preset lint -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
       - name: Run clang-tidy build
         run: cmake --build --preset lint --parallel
 
@@ -46,9 +54,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install build tools
-        run: sudo apt-get update && sudo apt-get install -y build-essential cmake
+        run: sudo apt-get update && sudo apt-get install -y build-essential cmake ninja-build ccache
+      - name: Set up ccache
+        uses: hendrikmuhs/ccache-action@v1
+        with:
+          key: ${{ github.job }}-${{ runner.os }}-${{ matrix.preset }}
       - name: Configure ${{ matrix.preset }}
-        run: cmake --preset ${{ matrix.preset }}
+        run: cmake --preset ${{ matrix.preset }} -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
       - name: Build ${{ matrix.preset }}
         run: cmake --build --preset ${{ matrix.preset }} --parallel
       - name: Test ${{ matrix.preset }}
@@ -64,9 +76,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install valgrind
-        run: sudo apt-get update && sudo apt-get install -y build-essential cmake valgrind
+        run: sudo apt-get update && sudo apt-get install -y build-essential cmake ninja-build ccache valgrind
+      - name: Set up ccache
+        uses: hendrikmuhs/ccache-action@v1
+        with:
+          key: ${{ github.job }}-${{ runner.os }}
       - name: Configure
-        run: cmake --preset debug
+        run: cmake --preset debug -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
       - name: Build
         run: cmake --build --preset debug --parallel
       - name: Run unit tests under valgrind
@@ -80,9 +96,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install build tools and gRPC
-        run: sudo apt-get update && sudo apt-get install -y build-essential cmake libgrpc++-dev protobuf-compiler-grpc
+        run: sudo apt-get update && sudo apt-get install -y build-essential cmake ninja-build ccache libgrpc++-dev protobuf-compiler-grpc
+      - name: Set up ccache
+        uses: hendrikmuhs/ccache-action@v1
+        with:
+          key: ${{ github.job }}-${{ runner.os }}
       - name: Configure
-        run: cmake --preset grpc
+        run: cmake --preset grpc -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
       - name: Build
         run: cmake --build --preset grpc --parallel
       - name: Unit tests
