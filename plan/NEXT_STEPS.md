@@ -26,7 +26,7 @@ See `plan/E2E_YOLO.md` for the detailed plan and `plan/STEP12.md` for the snapsh
 | 12.4 | Run inference, compare output shapes | ✅ Done |
 | 12.7 | `scripts/e2e-yolo.sh` automated smoke script | ✅ Done |
 | 12.1 | Verify YOLO task contract in neuriplo-tasks | Pending (requires neuriplo-tasks dev branch) |
-| 12.5 | neuriplo-infer KServe client (HTTP) → runtime → response | Pending (requires neuriplo-infer dev branch) |
+| 12.5 | neuriplo-infer KServe client (HTTP) → runtime → response | ✅ Done: real neuriplo-infer→KServe HTTP→runtime→neuriplo→ONNX Runtime→YOLO E2E verified |
 | 12.6 | gRPC path parity test | Pending |
 
 ## Production Track (Priority: Medium)
@@ -69,3 +69,23 @@ Required before multi-model hot reload.
 | CI: gRPC + real-onnx combined preset |
 | CI: E2E smoke test with stub model via curl |
 | `.gitignore` entry for `.antigravitycli/` |
+
+## Cross-Repo Progress Notes
+
+- `neuriplo-infer` `feature/neuriplo-kserve-runtime`: KServe HTTP client path is
+  wired through the existing `InferenceInterface` boundary. Remote mode accepts
+  `--kserve_endpoint`, defaults `--kserve_model_name` to `--type`, supports
+  `--kserve_transport=http|grpc`, and no longer requires local `--weights` for
+  remote execution.
+- Validation: `cmake -S . -B build-kserve-codex -DDEFAULT_BACKEND=OPENCV_DNN
+  -DENABLE_APP_TESTS=ON -DCMAKE_BUILD_TYPE=Release`,
+  `cmake --build build-kserve-codex --parallel`, and
+  `ctest --test-dir build-kserve-codex --output-on-failure` pass in
+  `neuriplo-infer` (22/22 tests).
+- Real HTTP E2E proof completed: launched `neuriplo-kserve-runtime` with
+  `--backend onnx_runtime`, `--model-name yolo`, and `yolo26s.onnx`, then ran
+  `neuriplo-infer --type=yolo26 --source=data/dog.jpg --labels=labels/coco.names
+  --kserve_endpoint=http://127.0.0.1:19090 --kserve_model_name=yolo
+  --kserve_transport=http --min_confidence=0.25`. The CLI completed successfully,
+  runtime metrics reported `neuriplo_http_infer_requests_success_total{model="yolo",version="1"} 1`,
+  and `data/output/processed.png` was written.
