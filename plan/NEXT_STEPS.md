@@ -14,7 +14,7 @@
 
 ### Step 12: Multi-Component YOLO Integration
 
-**Goal**: Smoke-test the full neuriplo platform: `vision-inference` → KServe V2 →
+**Goal**: Smoke-test the full neuriplo platform: `neuriplo-infer` → KServe V2 →
 `neuriplo-kserve-runtime` → `neuriplo` (ONNX Runtime) → YOLO model.
 
 See `plan/E2E_YOLO.md` for the detailed plan and `plan/STEP12.md` for the snapshot.
@@ -25,8 +25,8 @@ See `plan/E2E_YOLO.md` for the detailed plan and `plan/STEP12.md` for the snapsh
 | 12.3 | Load real ONNX model, validate metadata from neuriplo | ✅ Done |
 | 12.4 | Run inference, compare output shapes | ✅ Done |
 | 12.7 | `scripts/e2e-yolo.sh` automated smoke script | ✅ Done |
-| 12.1 | Verify YOLO task contract in vision-core | Pending (requires vision-core dev branch) |
-| 12.5 | vision-inference KServe client (HTTP) → runtime → response | Pending (requires vision-inference dev branch) |
+| 12.1 | Verify YOLO task contract in neuriplo-tasks | Pending (requires neuriplo-tasks dev branch) |
+| 12.5 | neuriplo-infer KServe client (HTTP) → runtime → response | Pending (requires neuriplo-infer dev branch) |
 | 12.6 | gRPC path parity test | Pending |
 
 ## Production Track (Priority: Medium)
