@@ -27,7 +27,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(dirname "$SCRIPT_DIR")"
 BUILD_DIR="${REPO_DIR}/build/real-onnx"
 PORT=19090
-MODEL="${REPO_DIR}/../vision-inference/models/e2e/yolo26s.onnx"
+MODEL="${REPO_DIR}/../neuriplo-infer/models/e2e/yolo26s.onnx"
 
 # Check 1: Model exists
 echo "=== Check 1: Model file ==="

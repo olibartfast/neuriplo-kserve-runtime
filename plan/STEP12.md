@@ -27,11 +27,11 @@ The full neuriplo platform chain was smoke-tested end-to-end:
 
 ## Remaining (12.1, 12.5)
 
-- **12.1**: Verify YOLO task contract in vision-core (in/out shapes, class count, NMS settings
+- **12.1**: Verify YOLO task contract in neuriplo-tasks (in/out shapes, class count, NMS settings
   match the exported ONNX model)
-- **12.5**: vision-inference KServe client — replace direct neuriplo linking with HTTP/gRPC
-  calls to the runtime; requires changes in the vision-inference repository on the
-  `neuriplo-kserve-runtime` branch
+- **12.5**: neuriplo-infer KServe client — replace direct neuriplo linking with HTTP/gRPC
+  calls to the runtime; requires changes in the neuriplo-infer repository on the
+  `develop` branch
 
 ## E2E Smoke Script
 
