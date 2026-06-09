@@ -163,6 +163,10 @@ const ModelMetadata &NeuriploExecutor::metadata() const {
 }
 
 ExecutionResponse NeuriploExecutor::infer(const ExecutionRequest &request) {
+    if (request.llm_params) {
+        return inferStreaming(request, StreamingTokenCallback{});
+    }
+
     ExecutionResponse validation_error;
     auto inputs = orderedInputs(metadata_, request, validation_error);
     if (!inputs.has_value()) {

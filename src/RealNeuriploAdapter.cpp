@@ -3,7 +3,9 @@
 #include <stdexcept>
 
 #ifdef NEURIPLO_RUNTIME_WITH_REAL_NEURIPLO
+#include "BackendRegistry.hpp"
 #include "InferenceBackendSetup.hpp"
+#include "Tokenizer.hpp"
 
 #include <cstddef>
 #include <cstring>
@@ -24,6 +26,13 @@ template <typename T> std::vector<uint8_t> numericBytes(const InputTensor &tenso
 
 std::vector<uint8_t> tensorToBytes(const InputTensor &tensor) {
     const auto &dt = tensor.datatype;
+    if (dt == "BYTES") {
+        std::vector<uint8_t> bytes;
+        for (const auto &element : tensor.string_data) {
+            bytes.insert(bytes.end(), element.begin(), element.end());
+        }
+        return bytes;
+    }
     if (dt == "BOOL" || dt == "INT8")
         return numericBytes<int8_t>(tensor);
     if (dt == "INT16")
@@ -141,10 +150,18 @@ class RealNeuriploAdapter final : public NeuriploAdapter {
         metadata.name = config.model_name;
         metadata.versions = {"1"};
         metadata.platform = "neuriplo_" + config.backend;
-        metadata.inputs = convertLayers(backend_metadata.getInputs(),
-                                        extractDatatypes(backend_metadata.getInputs()));
-        metadata.outputs = convertLayers(backend_metadata.getOutputs(),
-                                         extractDatatypes(backend_metadata.getOutputs()));
+        if (backendKind(config.backend) == BackendKind::Llm) {
+            // LLM backends report raw layer metadata (e.g. "prompt1"/FP32), but
+            // the KServe LLM convention this runtime serves is a BYTES prompt
+            // in and a BYTES text tensor out, matching the stub LLM executor.
+            metadata.inputs = {{"prompt", "BYTES", {1}}};
+            metadata.outputs = {{"text", "BYTES", {1}}};
+        } else {
+            metadata.inputs = convertLayers(backend_metadata.getInputs(),
+                                            extractDatatypes(backend_metadata.getInputs()));
+            metadata.outputs = convertLayers(backend_metadata.getOutputs(),
+                                             extractDatatypes(backend_metadata.getOutputs()));
+        }
         output_metadata_.clear();
         output_metadata_.reserve(metadata.outputs.size());
         for (const auto &output : metadata.outputs) {
@@ -187,34 +204,60 @@ class RealNeuriploAdapter final : public NeuriploAdapter {
         return result;
     }
 
+    // neuriplo LLM backends (llama.cpp, Cactus) take raw prompt bytes as the
+    // first input tensor and return generated text as a tensor of per-character
+    // codes. InferenceInterface::get_infer_results has no generation-parameter,
+    // cancellation, or streaming hooks, so max_tokens/temperature/top_p/top_k
+    // and mid-decode cancellation cannot propagate until neuriplo exposes them.
     LlmInferenceResult llmInfer(const LlmInferenceParams &params) override {
+        LlmInferenceResult result;
         if (!engine_) {
-            LlmInferenceResult result;
             result.ok = false;
             result.error_message = "neuriplo engine is not loaded";
             return result;
         }
-
-        InputTensor prompt_tensor;
-        prompt_tensor.name = "prompt";
-        prompt_tensor.datatype = "BYTES";
-        prompt_tensor.shape = {1};
-        prompt_tensor.string_data = {params.prompt};
-        std::vector<InputTensor> inputs = {prompt_tensor};
-
-        auto neural_result = infer(inputs);
-
-        LlmInferenceResult result;
-        result.ok = neural_result.ok;
-        if (!neural_result.ok) {
-            result.error_message = neural_result.error_message.empty()
-                                       ? "neuriplo LLM inference failed"
-                                       : neural_result.error_message;
+        if (params.cancel_token && params.cancel_token->load(std::memory_order_acquire)) {
+            result.ok = false;
+            result.error_message = "request cancelled before LLM inference";
             return result;
         }
-        result.outputs = std::move(neural_result.outputs);
-        result.prompt_tokens = 0;
-        result.completion_tokens = 0;
+
+        std::vector<std::vector<uint8_t>> backend_inputs;
+        backend_inputs.emplace_back(params.prompt.begin(), params.prompt.end());
+
+        std::vector<std::vector<TensorElement>> values;
+        try {
+            auto [out_values, out_shapes] = engine_->get_infer_results(backend_inputs);
+            values = std::move(out_values);
+        } catch (const std::exception &ex) {
+            result.ok = false;
+            result.error_message = ex.what();
+            return result;
+        }
+
+        std::string generated_text;
+        if (!values.empty()) {
+            generated_text.reserve(values[0].size());
+            for (const auto &element : values[0]) {
+                generated_text.push_back(
+                    static_cast<char>(static_cast<unsigned char>(tensorElementToDouble(element))));
+            }
+        }
+
+        if (params.streaming_callback && !generated_text.empty()) {
+            params.streaming_callback(generated_text);
+        }
+
+        OutputTensor text_output;
+        text_output.name = "text";
+        text_output.datatype = "BYTES";
+        text_output.shape = {1};
+        text_output.string_data = {generated_text};
+        result.outputs.push_back(std::move(text_output));
+
+        const WhitespaceTokenizer tokenizer;
+        result.prompt_tokens = tokenizer.countTokens(params.prompt);
+        result.completion_tokens = tokenizer.countTokens(generated_text);
         result.finish_reason = "stop";
         return result;
     }

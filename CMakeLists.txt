@@ -131,6 +131,18 @@ if(NEURIPLO_RUNTIME_ENABLE_REAL_NEURIPLO)
         ${OpenCV_INCLUDE_DIRS}
     )
     target_link_libraries(neuriplo-kserve-runtime-core PRIVATE neuriplo glog::glog)
+    # neuriplo links llama.cpp with PRIVATE link directories and rpath options,
+    # which do not propagate through its static library to our executables.
+    if(DEFAULT_BACKEND STREQUAL "LLAMACPP")
+        target_link_directories(neuriplo-kserve-runtime-core PUBLIC "${LLAMACPP_DIR}/lib")
+        # --disable-new-dtags emits DT_RPATH instead of DT_RUNPATH so the
+        # llama.cpp directory is also searched for transitive SONAME deps
+        # (libllama.so.0 -> libggml.so.0).
+        target_link_options(neuriplo-kserve-runtime-core PUBLIC
+            "-Wl,-rpath-link,${LLAMACPP_DIR}/lib"
+            "-Wl,-rpath,${LLAMACPP_DIR}/lib"
+            "-Wl,--disable-new-dtags")
+    endif()
 endif()
 
 if(NEURIPLO_RUNTIME_ENABLE_GRPC)
