@@ -82,6 +82,15 @@
       "cacheVariables": {
         "NEURIPLO_RUNTIME_ENABLE_GRPC": "ON"
       }
+    },
+    {
+      "name": "real-onnx-grpc",
+      "inherits": "real-onnx",
+      "displayName": "Real neuriplo ONNX Runtime + gRPC",
+      "binaryDir": "${sourceDir}/build/real-onnx-grpc",
+      "cacheVariables": {
+        "NEURIPLO_RUNTIME_ENABLE_GRPC": "ON"
+      }
     }
   ],
   "buildPresets": [
@@ -92,7 +101,8 @@
     { "name": "tsan", "configurePreset": "tsan" },
     { "name": "ubsan", "configurePreset": "ubsan" },
     { "name": "real-onnx", "configurePreset": "real-onnx" },
-    { "name": "grpc", "configurePreset": "grpc" }
+    { "name": "grpc", "configurePreset": "grpc" },
+    { "name": "real-onnx-grpc", "configurePreset": "real-onnx-grpc" }
   ],
   "testPresets": [
     {
@@ -123,6 +133,11 @@
     {
       "name": "grpc",
       "configurePreset": "grpc",
+      "output": { "outputOnFailure": true }
+    },
+    {
+      "name": "real-onnx-grpc",
+      "configurePreset": "real-onnx-grpc",
       "output": { "outputOnFailure": true }
     }
   ]

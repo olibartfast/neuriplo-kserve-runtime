@@ -20,6 +20,8 @@ FetchContent_MakeAvailable(nlohmann_json)
 option(NEURIPLO_ENABLE_CLANG_TIDY "Run clang-tidy during builds" OFF)
 option(NEURIPLO_RUNTIME_ENABLE_REAL_NEURIPLO "Build the real neuriplo adapter" OFF)
 option(NEURIPLO_RUNTIME_ENABLE_GRPC "Build gRPC V2 support" OFF)
+set(NEURIPLO_RUNTIME_GRPC_PLUGIN "" CACHE FILEPATH
+    "grpc_cpp_plugin path override for hosts where the gRPC package lacks the plugin binary")
 set(NEURIPLO_RUNTIME_NEURIPLO_SOURCE_DIR "../neuriplo" CACHE PATH
     "Path to a local neuriplo checkout when real neuriplo support is enabled")
 set(NEURIPLO_SANITIZER "" CACHE STRING "Enable sanitizer instrumentation: address, thread, or undefined")
@@ -36,6 +38,7 @@ set(NEURIPLO_RUNTIME_SOURCES
     src/LlmScheduler.cpp
     src/Logging.cpp
     src/MetricsRegistry.cpp
+    src/ModelLifecycle.cpp
     src/ModelRegistry.cpp
     src/ModelScheduler.cpp
     src/NeuriploAdapterDefault.cpp
@@ -71,9 +74,13 @@ if(NEURIPLO_RUNTIME_ENABLE_GRPC)
     set(GRPC_SRCS "${PROTO_GEN_DIR}/kserve_grpc.grpc.pb.cc")
     set(GRPC_HDRS "${PROTO_GEN_DIR}/kserve_grpc.grpc.pb.h")
 
-    get_target_property(_GRPC_PLUGIN_BIN gRPC::grpc_cpp_plugin IMPORTED_LOCATION)
-    if(NOT _GRPC_PLUGIN_BIN)
-        set(_GRPC_PLUGIN_BIN "$<TARGET_FILE:gRPC::grpc_cpp_plugin>")
+    if(NEURIPLO_RUNTIME_GRPC_PLUGIN)
+        set(_GRPC_PLUGIN_BIN "${NEURIPLO_RUNTIME_GRPC_PLUGIN}")
+    else()
+        get_target_property(_GRPC_PLUGIN_BIN gRPC::grpc_cpp_plugin IMPORTED_LOCATION)
+        if(NOT _GRPC_PLUGIN_BIN)
+            set(_GRPC_PLUGIN_BIN "$<TARGET_FILE:gRPC::grpc_cpp_plugin>")
+        endif()
     endif()
     get_target_property(_GRPC_PLUGIN_SUPPORT_LOC gRPC::grpc_plugin_support IMPORTED_LOCATION_NONE)
     if(NOT _GRPC_PLUGIN_SUPPORT_LOC)
@@ -94,7 +101,7 @@ if(NEURIPLO_RUNTIME_ENABLE_GRPC)
                 "--proto_path=${PROTO_DIR}"
                 "--cpp_out=${PROTO_GEN_DIR}"
                 "--grpc_out=${PROTO_GEN_DIR}"
-                "--plugin=protoc-gen-grpc=$<TARGET_FILE:gRPC::grpc_cpp_plugin>"
+                "--plugin=protoc-gen-grpc=${_GRPC_PLUGIN_BIN}"
                 "${PROTO_FILE}"
             DEPENDS "${PROTO_FILE}"
             COMMENT "Generating gRPC sources from ${PROTO_FILE}"
@@ -106,7 +113,7 @@ if(NEURIPLO_RUNTIME_ENABLE_GRPC)
                 "--proto_path=${PROTO_DIR}"
                 "--cpp_out=${PROTO_GEN_DIR}"
                 "--grpc_out=${PROTO_GEN_DIR}"
-                "--plugin=protoc-gen-grpc=$<TARGET_FILE:gRPC::grpc_cpp_plugin>"
+                "--plugin=protoc-gen-grpc=${_GRPC_PLUGIN_BIN}"
                 "${PROTO_FILE}"
             DEPENDS "${PROTO_FILE}"
             COMMENT "Generating gRPC sources from ${PROTO_FILE}"
@@ -172,6 +179,7 @@ add_executable(neuriplo-kserve-runtime-tests
     tests/KServeV2CodecTest.cpp
     tests/LlmPathTest.cpp
     tests/LlmSchedulerTest.cpp
+    tests/ModelLifecycleTest.cpp
     tests/ModelRegistryTest.cpp
     tests/ModelStateMachineTest.cpp
     tests/NeuriploExecutorTest.cpp
@@ -205,6 +213,10 @@ if(NEURIPLO_RUNTIME_ENABLE_GRPC)
         protobuf::libprotobuf
         gRPC::grpc++
     )
+endif()
+
+if(NEURIPLO_RUNTIME_ENABLE_GRPC AND NEURIPLO_RUNTIME_ENABLE_REAL_NEURIPLO)
+    target_sources(neuriplo-kserve-runtime-tests PRIVATE tests/RealNeuriploGrpcSmokeTest.cpp)
 endif()
 
 if(NEURIPLO_ENABLE_CLANG_TIDY)

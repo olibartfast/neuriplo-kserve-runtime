@@ -1,6 +1,6 @@
 # Step 12: Multi-Component YOLO Integration
 
-## Status: Verification Complete
+## Status: Complete
 
 The platform-defined local serving chain was tested end-to-end:
 `neuriplo-infer` -> KServe V2 HTTP → `neuriplo-kserve-runtime` → `neuriplo` → ONNX Runtime → YOLO.
@@ -14,7 +14,8 @@ The platform-defined local serving chain was tested end-to-end:
 | 12.3 | Real YOLOv6s ONNX model loads via neuriplo, metadata extracted: input `images` [1,3,640,640] FP32, output `output0` [1,300,6] FP32 |
 | 12.4 | Inference through `/v2/models/yolo/infer` reaches ONNX Runtime, returns correct output shape |
 | 12.5 | `neuriplo-infer` CLI calls KServe HTTP endpoint, runtime executes YOLO via neuriplo/ONNX Runtime, task postprocess/render writes `data/output/processed.png` |
-| 12.7 | `scripts/e2e-yolo.sh` automated smoke script (7 checks, all pass) |
+| 12.7 | `scripts/e2e-yolo.sh` automated smoke script (HTTP + gRPC checks, all pass) |
+| 12.6 | gRPC path parity: `grpc_real_neuriplo_yolo_infer` test + live-runtime gRPC infer returns `output0` [1,300,6] |
 
 ## Runtime Configuration
 
@@ -27,11 +28,27 @@ The platform-defined local serving chain was tested end-to-end:
     --instances 1
 ```
 
-## Remaining (12.6)
+## gRPC Validation
 
-- **12.6**: gRPC path parity test for the same YOLO CLI/runtime path. HTTP E2E
-  is verified; this environment did not have gRPC available in CMake, so the
-  gRPC client was not built during the latest validation.
+Build preset: `real-onnx-grpc` (`NEURIPLO_RUNTIME_ENABLE_REAL_NEURIPLO=ON` +
+`NEURIPLO_RUNTIME_ENABLE_GRPC=ON`).
+
+```bash
+cmake --preset real-onnx-grpc
+cmake --build --preset real-onnx-grpc
+NEURIPLO_TEST_FILTER=grpc_real_neuriplo_yolo_infer \
+  NEURIPLO_E2E_YOLO_MODEL=/path/to/yolo26s.onnx \
+  ./build/real-onnx-grpc/neuriplo-kserve-runtime-tests
+```
+
+Live-runtime check (started by `scripts/e2e-yolo.sh`):
+
+```bash
+NEURIPLO_TEST_FILTER=grpc_real_neuriplo_yolo_infer \
+  NEURIPLO_GRPC_E2E_HOST=127.0.0.1 \
+  NEURIPLO_GRPC_E2E_PORT=19091 \
+  ./build/real-onnx-grpc/neuriplo-kserve-runtime-tests
+```
 
 ## E2E Smoke Script
 
