@@ -37,6 +37,27 @@ instrumentation. Run the runtime locally with:
 ./build/debug/neuriplo-kserve-runtime --model-name demo --backend stub --port 8080
 ```
 
+## MANDATORY: Pre-Push Lint And Format
+
+**Agents must run formatting and lint checks before every `git push`.** Do not push
+if either command fails.
+
+```bash
+scripts/check-format.sh
+cmake --preset lint
+cmake --build --preset lint --parallel
+```
+
+When C++ behavior changes, also run `ctest --preset debug` before pushing.
+
+Quick format fix for tracked sources:
+
+```bash
+git ls-files 'src/*.cpp' 'src/*.hpp' 'tests/*.cpp' 'tests/*.hpp' \
+  | xargs clang-format -i
+scripts/check-format.sh
+```
+
 ## Coding Style & Naming Conventions
 
 Use 4-space indentation and the repository `.clang-format` profile. Types and classes

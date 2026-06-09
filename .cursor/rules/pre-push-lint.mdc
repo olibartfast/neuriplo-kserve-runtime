@@ -1,0 +1,39 @@
+---
+description: MANDATORY pre-push formatting and lint validation
+alwaysApply: true
+---
+
+# MANDATORY: Lint Before Push
+
+**Never push without passing local format and lint checks first.**
+
+Before any `git push`, run these commands from the repository root and fix all failures:
+
+```bash
+scripts/check-format.sh
+cmake --preset lint
+cmake --build --preset lint --parallel
+```
+
+If you changed C++ sources, also run:
+
+```bash
+cmake --preset debug
+cmake --build --preset debug --parallel
+ctest --preset debug
+```
+
+## Rules
+
+1. Run `scripts/check-format.sh` on every commit that touches `src/` or `tests/`.
+2. If format check fails, run `clang-format -i` on the reported files, then re-check.
+3. Do not push when CI lint/format would fail.
+4. Treat a failed local format check as a blocker — same severity as a failing test.
+
+## Quick format fix
+
+```bash
+git ls-files 'src/*.cpp' 'src/*.hpp' 'tests/*.cpp' 'tests/*.hpp' \
+  | xargs clang-format -i
+scripts/check-format.sh
+```

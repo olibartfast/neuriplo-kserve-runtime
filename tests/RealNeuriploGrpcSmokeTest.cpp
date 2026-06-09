@@ -69,8 +69,8 @@ RuntimeConfig yoloRuntimeConfig(const std::string &model_path) {
 
 struct LiveGrpcServer {
     explicit LiveGrpcServer(RuntimeConfig config)
-        : config_(std::move(config)), registry_(config_), grpc_server_("127.0.0.1", port_, registry_,
-                                                                       metrics_) {
+        : config_(std::move(config)), registry_(config_),
+          grpc_server_("127.0.0.1", port_, registry_, metrics_) {
         grpc_thread_ = std::thread([this]() { grpc_server_.run(); });
         std::this_thread::sleep_for(std::chrono::milliseconds(200));
     }
@@ -87,8 +87,12 @@ struct LiveGrpcServer {
                                    grpc::InsecureChannelCredentials());
     }
 
-    int port() const { return port_; }
-    bool ready() const { return registry_.allReady(); }
+    int port() const {
+        return port_;
+    }
+    bool ready() const {
+        return registry_.allReady();
+    }
 
     RuntimeConfig config_;
     int port_ = findFreePort();
@@ -171,8 +175,8 @@ TEST_CASE(grpc_real_neuriplo_yolo_infer) {
     inference::ModelMetadataRequest metadata_request;
     metadata_request.set_name("yolo");
     inference::ModelMetadataResponse metadata_response;
-    const auto metadata_status = stub->ModelMetadata(&metadata_context, metadata_request,
-                                                     &metadata_response);
+    const auto metadata_status =
+        stub->ModelMetadata(&metadata_context, metadata_request, &metadata_response);
     REQUIRE(metadata_status.ok());
     requireYoloMetadata(metadata_response);
 
