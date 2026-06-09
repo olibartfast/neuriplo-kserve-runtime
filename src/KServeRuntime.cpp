@@ -680,8 +680,8 @@ HttpResponse KServeRuntime::completionsStreaming(const HttpRequest &request,
             return;
         }
 
-        const auto finish_chunk = streamingChunkJson(request_id, "text_completion",
-                                                     comp_req.model, created, "", "stop");
+        const auto finish_chunk =
+            streamingChunkJson(request_id, "text_completion", comp_req.model, created, "", "stop");
         writer.write(finish_chunk);
     };
 
