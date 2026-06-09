@@ -9,6 +9,7 @@ The platform-defined local serving chain was tested end-to-end:
 
 | Check | Result |
 |-------|--------|
+| 12.1 | YOLO task contract verified against neuriplo-tasks (`feature/neuriplo-kserve-runtime`): `yolo26` maps to `YOLO_NMS_FREE`, postprocessor consumes `tensors[0]` `[batch, detections, 6]` (x1,y1,x2,y2,score,class) with confidence filter and no NMS; `yolo26s.onnx` reports `images` [1,3,640,640] FP32 in, `output0` [1,300,6] FP32 out — exact match |
 | 12.2 | Build with `NEURIPLO_RUNTIME_ENABLE_REAL_NEURIPLO=ON` against sibling neuriplo checkout |
 | 12.3 | Real YOLOv6s ONNX model loads via neuriplo, metadata extracted: input `images` [1,3,640,640] FP32, output `output0` [1,300,6] FP32 |
 | 12.4 | Inference through `/v2/models/yolo/infer` reaches ONNX Runtime, returns correct output shape |
@@ -26,10 +27,8 @@ The platform-defined local serving chain was tested end-to-end:
     --instances 1
 ```
 
-## Remaining (12.1, 12.6)
+## Remaining (12.6)
 
-- **12.1**: Verify YOLO task contract in neuriplo-tasks (in/out shapes, class count, NMS settings
-  match the exported ONNX model)
 - **12.6**: gRPC path parity test for the same YOLO CLI/runtime path. HTTP E2E
   is verified; this environment did not have gRPC available in CMake, so the
   gRPC client was not built during the latest validation.

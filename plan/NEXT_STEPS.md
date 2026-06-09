@@ -25,7 +25,7 @@ See `plan/E2E_YOLO.md` for the detailed plan and `plan/STEP12.md` for the snapsh
 | 12.3 | Load real ONNX model, validate metadata from neuriplo | ✅ Done |
 | 12.4 | Run inference, compare output shapes | ✅ Done |
 | 12.7 | `scripts/e2e-yolo.sh` automated smoke script | ✅ Done |
-| 12.1 | Verify YOLO task contract in neuriplo-tasks | Pending (requires neuriplo-tasks dev branch) |
+| 12.1 | Verify YOLO task contract in neuriplo-tasks | ✅ Done: yolo26 → YOLO_NMS_FREE contract ([batch,dets,6], no NMS) matches yolo26s.onnx metadata exactly |
 | 12.5 | neuriplo-infer KServe client (HTTP) → runtime → response | ✅ Done: real neuriplo-infer→KServe HTTP→runtime→neuriplo→ONNX Runtime→YOLO E2E verified |
 | 12.6 | gRPC path parity test | Pending |
 
