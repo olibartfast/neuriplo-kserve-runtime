@@ -348,8 +348,10 @@ class LlmScheduler final : public Scheduler {
                       const TimePoint &deadline, ExecutionResponse &response) {
         try {
             if (request.llm_params && request.llm_params->streaming) {
-                response = executor.inferStreaming(
-                    request, [](const std::string &) { /* no-op for blocking path */ });
+                auto callback = request.streaming_callback
+                                    ? request.streaming_callback
+                                    : StreamingTokenCallback([](const std::string &) {});
+                response = executor.inferStreaming(request, std::move(callback));
             } else {
                 response = executor.infer(request);
             }
