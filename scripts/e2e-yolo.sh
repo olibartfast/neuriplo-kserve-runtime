@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # E2E YOLO Smoke Test
-# Verifies: runtime build → real neuriplo → ONNX model load → metadata → inference
+# Verifies: runtime build → real neuriplo → ONNX model load → HTTP + gRPC inference
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -25,9 +25,11 @@ trap cleanup EXIT
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(dirname "$SCRIPT_DIR")"
-BUILD_DIR="${REPO_DIR}/build/real-onnx"
+BUILD_DIR="${REPO_DIR}/build/real-onnx-grpc"
 PORT=19090
+GRPC_PORT=19091
 MODEL="${REPO_DIR}/../neuriplo-infer/models/e2e/yolo26s.onnx"
+INFER_BIN="${REPO_DIR}/../neuriplo-infer/build-kserve-codex/app/neuriplo-infer"
 
 # Check 1: Model exists
 echo "=== Check 1: Model file ==="
@@ -38,11 +40,11 @@ else
     exit 1
 fi
 
-# Check 2: Build with real neuriplo
+# Check 2: Build with real neuriplo + gRPC
 echo "=== Check 2: Build ==="
-if cmake --preset real-onnx -S "$REPO_DIR" -B "$BUILD_DIR" > /dev/null 2>&1 && \
-   cmake --build --preset real-onnx > /dev/null 2>&1; then
-    pass "Build succeeds with real neuriplo"
+if cmake --preset real-onnx-grpc -S "$REPO_DIR" -B "$BUILD_DIR" > /dev/null 2>&1 && \
+   cmake --build --preset real-onnx-grpc > /dev/null 2>&1; then
+    pass "Build succeeds with real neuriplo and gRPC"
 else
     fail "Build failed"
     exit 1
@@ -55,6 +57,7 @@ echo "=== Check 3: Runtime startup ==="
     --model-path "$MODEL" \
     --backend onnx_runtime \
     --port "$PORT" \
+    --grpc-port "$GRPC_PORT" \
     --instances 1 \
     &>/tmp/e2e-runtime.log &
 RUNTIME_PID=$!
@@ -95,7 +98,7 @@ else
 fi
 
 # Check 6: Inference reaches backend
-echo "=== Check 6: Inference ==="
+echo "=== Check 6: HTTP inference ==="
 RESP=$(python3 -c "
 import urllib.request, json
 body = json.dumps({
@@ -126,9 +129,9 @@ except Exception as e:
 " 2>/dev/null)
 
 if [ "$RESP" = "OK" ]; then
-    pass "Inference returns output0 [1,300,6] via real ONNX Runtime"
+    pass "HTTP inference returns output0 [1,300,6] via real ONNX Runtime"
 else
-    fail "Inference failed: $RESP"
+    fail "HTTP inference failed: $RESP"
 fi
 
 # Check 7: Metrics include model label
@@ -137,6 +140,42 @@ if curl -s "http://127.0.0.1:${PORT}/metrics" | grep -q 'model="yolo"'; then
     pass "Metrics include model=yolo label"
 else
     fail "Metrics missing model label"
+fi
+
+# Check 8: gRPC metadata + inference parity against live runtime
+echo "=== Check 8: gRPC inference parity ==="
+export NEURIPLO_E2E_YOLO_MODEL="$MODEL"
+export NEURIPLO_GRPC_E2E_HOST="127.0.0.1"
+export NEURIPLO_GRPC_E2E_PORT="$GRPC_PORT"
+if NEURIPLO_TEST_FILTER=grpc_real_neuriplo_yolo_infer \
+    "$BUILD_DIR/neuriplo-kserve-runtime-tests" > /tmp/e2e-grpc-test.log 2>&1; then
+    pass "gRPC inference returns output0 [1,300,6] via live runtime"
+else
+    fail "gRPC inference failed"
+    cat /tmp/e2e-grpc-test.log
+fi
+
+# Check 9: neuriplo-infer gRPC client path (optional; requires gRPC-enabled build)
+echo "=== Check 9: neuriplo-infer gRPC client ==="
+if [ ! -x "$INFER_BIN" ]; then
+    echo "[SKIP] neuriplo-infer binary not found at $INFER_BIN"
+elif ! strings "$INFER_BIN" | grep -q "KServe gRPC"; then
+    echo "[SKIP] neuriplo-infer was not built with gRPC client support"
+else
+    if "$INFER_BIN" \
+        --type=yolo26 \
+        --source="${REPO_DIR}/../neuriplo-infer/data/dog.jpg" \
+        --labels="${REPO_DIR}/../neuriplo-infer/labels/coco.names" \
+        --kserve_endpoint="grpc://127.0.0.1:${GRPC_PORT}" \
+        --kserve_model_name=yolo \
+        --kserve_transport=grpc \
+        --min_confidence=0.25 \
+        > /tmp/e2e-infer-grpc.log 2>&1; then
+        pass "neuriplo-infer completes YOLO flow over gRPC"
+    else
+        fail "neuriplo-infer gRPC client failed"
+        tail -20 /tmp/e2e-infer-grpc.log
+    fi
 fi
 
 echo ""

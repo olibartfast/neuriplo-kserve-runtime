@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ModelHandle.hpp"
+#include "ModelLifecycle.hpp"
 #include "ModelMetadata.hpp"
 #include "RuntimeConfig.hpp"
 
@@ -11,11 +12,14 @@
 
 class ModelRegistry {
   public:
-    using ExecutorFactory =
-        std::function<std::unique_ptr<Executor>(const RuntimeConfig &, std::string &error)>;
+    using ExecutorFactory = ModelLifecycle::ExecutorFactory;
 
     explicit ModelRegistry(const RuntimeConfig &config);
     ModelRegistry(const RuntimeConfig &config, ExecutorFactory factory);
+
+    bool reload(const RuntimeConfig &config);
+    bool reload(const RuntimeConfig &config, ExecutorFactory factory);
+    bool completeUnload(const std::string &model_name);
 
     std::optional<ModelMetadata> find(const std::string &model_name) const;
     std::optional<ModelMetadata> findVersion(const std::string &model_name,
@@ -35,9 +39,8 @@ class ModelRegistry {
     double tokensPerChar() const;
 
   private:
-    void loadModel(const RuntimeConfig &config, ExecutorFactory factory);
-
     ModelHandle handle_;
+    ModelLifecycle lifecycle_;
     bool log_payloads_ = false;
     double tokens_per_char_ = 0.25;
 };

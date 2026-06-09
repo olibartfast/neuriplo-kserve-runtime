@@ -1,11 +1,8 @@
 #include "ModelRegistry.hpp"
 
 #include "BackendRegistry.hpp"
-#include "Scheduler.hpp"
 
-#include <stdexcept>
 #include <utility>
-#include <vector>
 
 namespace {
 
@@ -17,65 +14,27 @@ std::unique_ptr<Executor> defaultExecutorFactory(const RuntimeConfig &config, st
 
 ModelRegistry::ModelRegistry(const RuntimeConfig &config)
     : log_payloads_(config.log_payloads), tokens_per_char_(config.tokens_per_char) {
-    loadModel(config, defaultExecutorFactory);
+    lifecycle_.load(handle_, config, defaultExecutorFactory);
 }
 
 ModelRegistry::ModelRegistry(const RuntimeConfig &config, ExecutorFactory factory)
     : log_payloads_(config.log_payloads), tokens_per_char_(config.tokens_per_char) {
-    loadModel(config, std::move(factory));
+    lifecycle_.load(handle_, config, std::move(factory));
 }
 
-void ModelRegistry::loadModel(const RuntimeConfig &config, ExecutorFactory factory) {
-    handle_.name = config.model_name;
-    handle_.versions = {"1"};
-    handle_.state.startLoad();
+bool ModelRegistry::reload(const RuntimeConfig &config) {
+    return lifecycle_.reload(handle_, config, defaultExecutorFactory);
+}
 
-    std::vector<std::unique_ptr<Executor>> executors;
-    executors.reserve(config.instances);
-    std::string error;
-    for (size_t instance_index = 0; instance_index < config.instances; ++instance_index) {
-        (void)instance_index;
-        auto executor = factory(config, error);
-        if (!executor) {
-            handle_.state.markFailed();
-            handle_.load_error = error.empty() ? "failed to create executor" : error;
-            handle_.metadata.name = config.model_name;
-            handle_.metadata.versions = handle_.versions;
-            handle_.metadata.platform = "neuriplo_" + config.backend;
-            return;
-        }
-        executors.push_back(std::move(executor));
+bool ModelRegistry::reload(const RuntimeConfig &config, ExecutorFactory factory) {
+    return lifecycle_.reload(handle_, config, std::move(factory));
+}
+
+bool ModelRegistry::completeUnload(const std::string &model_name) {
+    if (model_name != handle_.name) {
+        return false;
     }
-
-    handle_.metadata = executors.front()->metadata();
-    handle_.name = handle_.metadata.name;
-    handle_.versions = handle_.metadata.versions;
-
-    if (usesLlmScheduler(config.scheduler_strategy, config.backend)) {
-        LlmSchedulerConfig scheduler_config;
-        scheduler_config.max_queue_size = config.max_queue_size;
-        scheduler_config.request_timeout_ms = config.request_timeout_ms;
-        scheduler_config.instances = config.instances;
-        scheduler_config.context_length = config.context_length;
-        scheduler_config.kv_cache_slots = config.kv_cache_slots;
-        scheduler_config.max_tokens = config.max_tokens;
-        scheduler_config.tokens_per_char = config.tokens_per_char;
-        scheduler_config.memory_budget_bytes = config.memory_budget_bytes;
-        handle_.scheduler =
-            makeLlmScheduler(std::move(executors), scheduler_config, config.model_name);
-    } else {
-        SchedulerConfig scheduler_config;
-        scheduler_config.max_queue_size = config.max_queue_size;
-        scheduler_config.request_timeout_ms = config.request_timeout_ms;
-        scheduler_config.instances = config.instances;
-        scheduler_config.dynamic_batching.enabled = config.dynamic_batching_enabled;
-        scheduler_config.dynamic_batching.max_batch_size = config.max_batch_size;
-        scheduler_config.dynamic_batching.max_queue_delay_us = config.max_queue_delay_us;
-        scheduler_config.dynamic_batching.preferred_batch_sizes = config.preferred_batch_sizes;
-        handle_.scheduler =
-            makeModelScheduler(std::move(executors), scheduler_config, config.model_name);
-    }
-    handle_.state.markReady();
+    return lifecycle_.completeUnload(handle_);
 }
 
 std::optional<ModelMetadata> ModelRegistry::find(const std::string &model_name) const {
@@ -151,14 +110,10 @@ std::optional<std::string> ModelRegistry::defaultVersion(const std::string &mode
 }
 
 bool ModelRegistry::beginDrain(const std::string &model_name) {
-    if (model_name != handle_.name || handle_.scheduler == nullptr) {
+    if (model_name != handle_.name) {
         return false;
     }
-    if (handle_.state.current() == ModelState::Ready) {
-        handle_.state.beginUnload();
-    }
-    handle_.scheduler->beginDrain();
-    return true;
+    return lifecycle_.beginDrain(handle_);
 }
 
 SchedulerMetricsSnapshot ModelRegistry::schedulerMetrics(const std::string &model_name) const {

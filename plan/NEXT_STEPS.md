@@ -27,7 +27,9 @@ See `plan/E2E_YOLO.md` for the detailed plan and `plan/STEP12.md` for the snapsh
 | 12.7 | `scripts/e2e-yolo.sh` automated smoke script | ✅ Done |
 | 12.1 | Verify YOLO task contract in neuriplo-tasks | ✅ Done: yolo26 → YOLO_NMS_FREE contract ([batch,dets,6], no NMS) matches yolo26s.onnx metadata exactly |
 | 12.5 | neuriplo-infer KServe client (HTTP) → runtime → response | ✅ Done: real neuriplo-infer→KServe HTTP→runtime→neuriplo→ONNX Runtime→YOLO E2E verified |
-| 12.6 | gRPC path parity test | Pending |
+| 12.6 | gRPC path parity test | ✅ Done: `real-onnx-grpc` preset, `grpc_real_neuriplo_yolo_infer`, `e2e-yolo.sh` check 8 |
+
+Step 12 is complete. Next work starts at Step 13.
 
 ## Production Track (Priority: Medium)
 
@@ -36,11 +38,11 @@ See `plan/E2E_YOLO.md` for the detailed plan and `plan/STEP12.md` for the snapsh
 **Goal**: Separate model load/drain/reload (control) from infer hot path (data).
 Required before multi-model hot reload.
 
-| # | Item |
-|---|------|
-| 13.1 | Extract `ModelLifecycle` from `ModelRegistry` (load, unload, reload) |
-| 13.2 | Make infer path independent of load path (no mutex contention) |
-| 13.3 | Drain + reload without blocking in-flight inference |
+| # | Item | Status |
+|---|------|--------|
+| 13.1 | Extract `ModelLifecycle` from `ModelRegistry` (load, unload, reload) | ✅ Done |
+| 13.2 | Make infer path independent of load path (no mutex contention) | Pending |
+| 13.3 | Drain + reload without blocking in-flight inference | Pending |
 
 ### Step 14: Multi-Model Hot Reload
 
@@ -66,7 +68,7 @@ Required before multi-model hot reload.
 | Item |
 |------|
 | CI: build all sanitizers in parallel (currently sequential) |
-| CI: gRPC + real-onnx combined preset |
+| CI: `real-onnx-grpc` preset job |
 | CI: E2E smoke test with stub model via curl |
 | `.gitignore` entry for `.antigravitycli/` |
 
