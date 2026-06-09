@@ -79,12 +79,30 @@ focused `TEST_CASE(...)` coverage for route handling, config parsing, and failur
 Sanitizer presets should pass for changes touching request handling, threading, parsing,
 or ownership-sensitive code.
 
+## MANDATORY: GitFlow Workflow
+
+Follow the [Atlassian GitFlow workflow](https://www.atlassian.com/git/tutorials/comparing-workflows/gitflow-workflow).
+
+Branch mapping for this repository:
+
+- `master` — production (`main` in GitFlow)
+- `develop` — integration branch for features
+- `feature/*` or `feat/*` — branch from `develop`, merge to `develop` via PR
+- `release/*` — branch from `develop`; merge to `master` (tagged) and `develop`
+- `hotfix/*` — branch from `master`; merge to `master` and `develop`
+
+Do not commit feature work directly to `master`. Use PRs for merges into `develop` and
+`master`. If `develop` does not exist yet, create it from `master` before starting new
+feature branches.
+
 ## Commit & Pull Request Guidelines
 
 The current history uses short imperative commit messages, for example `Initial commit`.
 Keep future messages concise and action-oriented, such as `Add runtime config tests`.
 Pull requests should summarize the change, list validation commands run, and link related
 issues when available. Include API examples or endpoint output when behavior changes.
+Feature PRs target `develop`; release and hotfix PRs target `master` (and back-merge to
+`develop` when applicable).
 
 ## Security & Configuration Tips
 

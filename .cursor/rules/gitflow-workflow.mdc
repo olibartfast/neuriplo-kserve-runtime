@@ -1,0 +1,47 @@
+---
+description: MANDATORY GitFlow branching and merge workflow (Atlassian)
+alwaysApply: true
+---
+
+# MANDATORY: GitFlow Workflow
+
+Follow the [Atlassian GitFlow workflow](https://www.atlassian.com/git/tutorials/comparing-workflows/gitflow-workflow).
+
+## Branch roles (this repo)
+
+| GitFlow branch | This repo | Purpose |
+|----------------|-----------|---------|
+| `main` | `master` | Production release history; tag shipped versions here |
+| `develop` | `develop` | Integration branch for in-progress features |
+| `feature/*` | `feature/*` or `feat/*` | Short-lived feature work |
+| `release/*` | `release/*` | Release prep (bug fixes/docs only) |
+| `hotfix/*` | `hotfix/*` | Urgent production patches |
+
+## Rules
+
+1. **Do not land feature work directly on `master`.** Branch from `develop`, merge back to `develop`.
+2. **Features** start from latest `develop`:
+   ```bash
+   git checkout develop && git pull
+   git checkout -b feature/my-change   # or feat/my-change
+   ```
+3. **Finish features** via PR into `develop` (not `master`).
+4. **Releases** fork from `develop` as `release/x.y.z`. When ready, merge to `master` (tag version) and back to `develop`.
+5. **Hotfixes** fork from `master` only. When done, merge to both `master` and `develop`.
+6. **Never** let `feature/*` merge directly to `master`.
+7. Use PRs for all merges into `develop` and `master`; keep branches short-lived.
+
+## Agent checklist before push
+
+- Confirm current branch type matches the work (feature vs hotfix vs release).
+- Confirm merge target is correct (`develop` for features, `master` only for release/hotfix completion).
+- Rebase or merge latest `develop` into long-lived feature branches before opening PR.
+
+## Transition note
+
+If `develop` is missing, create it from `master` once and use it for all new feature branches:
+
+```bash
+git checkout master && git pull
+git checkout -b develop && git push -u origin develop
+```
