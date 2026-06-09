@@ -666,7 +666,8 @@ HttpResponse KServeRuntime::completionsStreaming(const HttpRequest &request,
 
         exec_req.cancel_token = makeCancelToken();
 
-        auto callback = [&writer, &request_id, &comp_req, created](const std::string &token) {
+        exec_req.streaming_callback = [&writer, &request_id, &comp_req,
+                                       created](const std::string &token) {
             const auto chunk = streamingChunkJson(request_id, "text_completion", comp_req.model,
                                                   created, token, "");
             writer.write(chunk);
@@ -679,18 +680,9 @@ HttpResponse KServeRuntime::completionsStreaming(const HttpRequest &request,
             return;
         }
 
-        std::string generated_text;
-        for (const auto &output : scheduled.response.outputs) {
-            if (output.datatype == "BYTES" && !output.string_data.empty()) {
-                generated_text += output.string_data.front();
-            }
-        }
-
-        if (generated_text.empty()) {
-            const auto chunk = streamingChunkJson(request_id, "text_completion", comp_req.model,
-                                                  created, generated_text, "stop");
-            writer.write(chunk);
-        }
+        const auto finish_chunk = streamingChunkJson(request_id, "text_completion",
+                                                     comp_req.model, created, "", "stop");
+        writer.write(finish_chunk);
     };
 
     return response;
@@ -839,9 +831,8 @@ HttpResponse KServeRuntime::chatCompletionsStreaming(const HttpRequest &request,
         exec_req.llm_params = params;
         exec_req.cancel_token = makeCancelToken();
 
-        auto callback = [&writer, &request_id, &chat_req, created](const std::string &token) {
-            Json delta;
-            delta["content"] = token;
+        exec_req.streaming_callback = [&writer, &request_id, &chat_req,
+                                       created](const std::string &token) {
             const auto chunk = streamingChunkJson(request_id, "chat.completion.chunk",
                                                   chat_req.model, created, token, "");
             writer.write(chunk);
@@ -852,13 +843,6 @@ HttpResponse KServeRuntime::chatCompletionsStreaming(const HttpRequest &request,
             const auto error_json = Json{{"error", scheduled.error_message}}.dump();
             writer.write("data: " + error_json + "\n\n");
             return;
-        }
-
-        std::string generated_text;
-        for (const auto &output : scheduled.response.outputs) {
-            if (output.datatype == "BYTES" && !output.string_data.empty()) {
-                generated_text += output.string_data.front();
-            }
         }
 
         const auto finish_chunk = streamingChunkJson(request_id, "chat.completion.chunk",

@@ -49,12 +49,15 @@ struct LlmResultMetadata {
     std::string finish_reason;
 };
 
+using StreamingTokenCallback = std::function<void(const std::string &token)>;
+
 struct ExecutionRequest {
     std::optional<std::string> id;
     std::vector<InputTensor> inputs;
     std::vector<std::string> requested_outputs;
     std::optional<LlmGenerationParams> llm_params;
     CancelToken cancel_token;
+    StreamingTokenCallback streaming_callback;
 };
 
 struct ExecutionResponse {
@@ -64,8 +67,6 @@ struct ExecutionResponse {
     std::vector<OutputTensor> outputs;
     std::optional<LlmResultMetadata> llm_metadata;
 };
-
-using StreamingTokenCallback = std::function<void(const std::string &token)>;
 
 class Executor {
   public:
