@@ -41,18 +41,22 @@ Required before multi-model hot reload.
 | # | Item | Status |
 |---|------|--------|
 | 13.1 | Extract `ModelLifecycle` from `ModelRegistry` (load, unload, reload) | ✅ Done |
-| 13.2 | Make infer path independent of load path (no mutex contention) | Pending |
-| 13.3 | Drain + reload without blocking in-flight inference | Pending |
+| 13.2 | Make infer path independent of load path (no mutex contention) | ✅ Done |
+| 13.3 | Drain + reload without blocking in-flight inference | ✅ Done: `SchedulerRetireQueue` background drain |
+
+Step 13 is complete. See `plan/STEP13.md`.
 
 ### Step 14: Multi-Model Hot Reload
 
 **Goal**: Load/unload/reload models without restarting the runtime.
 
-| # | Item |
-|---|------|
-| 14.1 | Multi-model registry (map of name→handle) |
-| 14.2 | Model add/remove at runtime via admin endpoint |
-| 14.3 | Version-switch with zero-downtime drain |
+| # | Item | Status |
+|---|------|--------|
+| 14.1 | Multi-model registry (map of name→handle) | ✅ Done: `ModelSlot` map, per-version snapshots |
+| 14.2 | Model add/remove at runtime via admin endpoint | ✅ Done: `/v2/admin/models` list/load/unload/reload |
+| 14.3 | Version-switch with zero-downtime drain | ✅ Done: `versions/{v}/activate`, old scheduler retired in background |
+
+Step 14 is complete. See `plan/STEP14.md`.
 
 ## Optimization Track (Priority: Low / Scale-Triggered)
 
@@ -65,12 +69,13 @@ Required before multi-model hot reload.
 
 ## Infrastructure Track
 
-| Item |
-|------|
-| CI: build all sanitizers in parallel (currently sequential) |
-| CI: `real-onnx-grpc` preset job |
-| CI: E2E smoke test with stub model via curl |
-| `.gitignore` entry for `.antigravitycli/` |
+| Item | Status |
+|------|--------|
+| CI: build all sanitizers in parallel (currently sequential) | Pending |
+| CI: `real-onnx-grpc` preset job | Pending |
+| CI: E2E smoke test with stub model via curl | Pending |
+| `.gitignore` entry for `.antigravitycli/` | ✅ Done (plus `logs/`) |
+| `enable_testing()` missing → `ctest` ran zero tests in CI | ✅ Fixed |
 
 ## Cross-Repo Progress Notes
 

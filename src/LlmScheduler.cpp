@@ -217,12 +217,16 @@ class LlmScheduler final : public Scheduler {
         return draining_.load(std::memory_order_acquire);
     }
 
+    void stopAccepting() override {
+        draining_.store(true, std::memory_order_release);
+        queue_cv_.notify_all();
+        slots_cv_.notify_all();
+    }
+
     void beginDrain() override {
         {
             std::lock_guard<std::mutex> lock(queue_mutex_);
-            if (draining_.exchange(true, std::memory_order_acq_rel)) {
-                return;
-            }
+            draining_.store(true, std::memory_order_release);
         }
 
         queue_cv_.notify_all();
