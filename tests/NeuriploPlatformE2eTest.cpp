@@ -1146,7 +1146,7 @@ TEST_CASE(e2e_real_neuriplo_scheduler_latency_measured) {
     config.backend = "onnx_runtime";
 
     ModelRegistry registry(config);
-    const auto *handle = registry.findHandle("identity");
+    const auto handle = registry.findHandle("identity");
     REQUIRE(handle != nullptr);
 
     ExecutionRequest req;
