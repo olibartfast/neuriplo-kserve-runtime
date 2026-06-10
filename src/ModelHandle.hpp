@@ -15,7 +15,7 @@ struct ModelHandle {
     std::vector<std::string> versions;
     ModelStateMachine state;
     ModelMetadata metadata;
-    std::unique_ptr<Scheduler> scheduler;
+    std::shared_ptr<Scheduler> scheduler;
     std::optional<std::string> load_error;
 
     bool isReady() const {

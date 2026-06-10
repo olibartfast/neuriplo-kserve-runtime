@@ -1,5 +1,6 @@
 #include "KServeRuntime.hpp"
 
+#include "AdminCodec.hpp"
 #include "BackendRegistry.hpp"
 #include "KServeErrors.hpp"
 #include "KServeV2Codec.hpp"
@@ -37,6 +38,11 @@ bool startsWith(const std::string &value, const std::string &prefix) {
     return value.rfind(prefix, 0) == 0;
 }
 
+bool endsWith(const std::string &value, const std::string &suffix) {
+    return value.size() >= suffix.size() &&
+           value.compare(value.size() - suffix.size(), suffix.size(), suffix) == 0;
+}
+
 std::string extractModelRouteTail(const std::string &path) {
     constexpr auto prefix = "/v2/models/";
     if (!startsWith(path, prefix)) {
@@ -65,8 +71,8 @@ VersionedRoute parseVersionedRoute(const std::string &suffix) {
     return route;
 }
 
-HttpResponse modelStateError(const ModelHandle &handle) {
-    switch (handle.state.current()) {
+HttpResponse modelStateError(const InferSnapshot &handle) {
+    switch (handle.state) {
     case ModelState::Failed: {
         const auto message =
             handle.load_error.has_value() ? *handle.load_error : "model failed to load";
@@ -134,7 +140,7 @@ std::string generateRequestId() {
     return buf;
 }
 
-bool modelIsLlm(const ModelHandle &handle, const std::string &backend) {
+bool modelIsLlm(const InferSnapshot &handle, const std::string &backend) {
     return usesLlmScheduler(handle.metadata.platform.find("llamacpp") != std::string::npos ||
                                     handle.metadata.platform.find("cactus") != std::string::npos ||
                                     handle.metadata.platform.find("ggml") != std::string::npos
@@ -182,6 +188,9 @@ HttpResponse KServeRuntime::handle(const HttpRequest &request) const {
     }
     if (request.method == "POST" && request.path == "/v1/embeddings") {
         return embeddings(request);
+    }
+    if (startsWith(request.path, "/v2/admin/")) {
+        return handleAdmin(request);
     }
 
     const auto route_tail = extractModelRouteTail(request.path);
@@ -244,8 +253,14 @@ HttpResponse KServeRuntime::ready() const {
 }
 
 HttpResponse KServeRuntime::metricsPage() const {
-    const auto name = registry_.modelName();
-    metrics_.setSchedulerMetrics(registry_.schedulerMetrics(name));
+    const auto models = registry_.listModels();
+    for (const auto &name : models) {
+        std::string version = registry_.defaultVersion(name).value_or("1");
+        if (models.size() == 1) {
+            version = metrics_.modelVersionLabel();
+        }
+        metrics_.setSchedulerMetrics(name, version, registry_.schedulerMetrics(name));
+    }
     auto body = metrics_.renderMetrics();
     HttpResponse response;
     response.status = 200;
@@ -266,10 +281,10 @@ HttpResponse KServeRuntime::modelMetadata(const std::string &model_name,
 
 HttpResponse KServeRuntime::modelReady(const std::string &model_name,
                                        const std::string &model_version) const {
-    const auto *handle = model_version.empty()
-                             ? registry_.findHandle(model_name)
-                             : registry_.findHandleVersion(model_name, model_version);
-    if (handle == nullptr) {
+    const auto handle = model_version.empty()
+                            ? registry_.findHandle(model_name)
+                            : registry_.findHandleVersion(model_name, model_version);
+    if (!handle) {
         return error(404, KServeErrors::ModelNotFound, "model not found: " + model_name);
     }
     if (!handle->isReady()) {
@@ -320,9 +335,9 @@ HttpResponse KServeRuntime::infer(const std::string &model_name, const std::stri
 
 std::optional<HttpResponse>
 KServeRuntime::validateInferModel(const std::string &model_name, const std::string &model_version,
-                                  const ModelHandle *&out_handle) const {
+                                  std::shared_ptr<const InferSnapshot> &out_handle) const {
     out_handle = registry_.findHandleVersion(model_name, model_version);
-    if (out_handle == nullptr) {
+    if (!out_handle) {
         return error(404, KServeErrors::ModelNotFound, "model not found: " + model_name);
     }
     if (!out_handle->isReady()) {
@@ -340,7 +355,7 @@ KServeRuntime::validateInferModel(const std::string &model_name, const std::stri
 std::optional<HttpResponse> KServeRuntime::decodeAndAdmit(const HttpRequest &request,
                                                           const std::string &model_name,
                                                           const std::string &model_version,
-                                                          const ModelHandle &handle,
+                                                          const InferSnapshot &handle,
                                                           InferenceParseResult &out_parsed) const {
     out_parsed = parseInferenceRequest(request.body, handle.metadata);
     if (!out_parsed.ok) {
@@ -369,7 +384,7 @@ std::optional<HttpResponse> KServeRuntime::decodeAndAdmit(const HttpRequest &req
 SchedulerResult KServeRuntime::scheduleInfer(const std::string &model_name,
                                              const std::string &model_version,
                                              const InferenceParseResult &parsed,
-                                             const ModelHandle &handle) const {
+                                             const InferSnapshot &handle) const {
     const std::string request_id =
         parsed.request.id.has_value() ? *parsed.request.id : generateRequestId();
 
@@ -543,8 +558,8 @@ HttpResponse KServeRuntime::completions(const HttpRequest &request) const {
         return error(400, KServeErrors::InvalidArgument, parse_result.error_message);
     }
 
-    const auto *handle = registry_.findHandle(comp_req.model);
-    if (handle == nullptr) {
+    const auto handle = registry_.findHandle(comp_req.model);
+    if (!handle) {
         return error(404, KServeErrors::ModelNotFound, "model not found: " + comp_req.model);
     }
     if (!handle->isReady()) {
@@ -632,7 +647,7 @@ HttpResponse KServeRuntime::completions(const HttpRequest &request) const {
 
 HttpResponse KServeRuntime::completionsStreaming(const HttpRequest &request,
                                                  const OpenAiCompletionRequest &comp_req,
-                                                 const ModelHandle &handle) const {
+                                                 const InferSnapshot &handle) const {
     const std::string request_id = "cmpl-" + generateRequestId();
     const auto now = std::chrono::system_clock::now();
     const auto created =
@@ -695,8 +710,8 @@ HttpResponse KServeRuntime::chatCompletions(const HttpRequest &request) const {
         return error(400, KServeErrors::InvalidArgument, parse_result.error_message);
     }
 
-    const auto *handle = registry_.findHandle(chat_req.model);
-    if (handle == nullptr) {
+    const auto handle = registry_.findHandle(chat_req.model);
+    if (!handle) {
         return error(404, KServeErrors::ModelNotFound, "model not found: " + chat_req.model);
     }
     if (!handle->isReady()) {
@@ -792,7 +807,7 @@ HttpResponse KServeRuntime::chatCompletions(const HttpRequest &request) const {
 
 HttpResponse KServeRuntime::chatCompletionsStreaming(const HttpRequest &request,
                                                      const OpenAiChatRequest &chat_req,
-                                                     const ModelHandle &handle) const {
+                                                     const InferSnapshot &handle) const {
     const std::string request_id = "chatcmpl-" + generateRequestId();
     const auto now = std::chrono::system_clock::now();
     const auto created =
@@ -860,8 +875,8 @@ HttpResponse KServeRuntime::embeddings(const HttpRequest &request) const {
         return error(400, KServeErrors::InvalidArgument, parse_result.error_message);
     }
 
-    const auto *handle = registry_.findHandle(emb_req.model);
-    if (handle == nullptr) {
+    const auto handle = registry_.findHandle(emb_req.model);
+    if (!handle) {
         return error(404, KServeErrors::ModelNotFound, "model not found: " + emb_req.model);
     }
     if (!handle->isReady()) {
@@ -912,4 +927,102 @@ HttpResponse KServeRuntime::embeddings(const HttpRequest &request) const {
     resp.prompt_tokens = prompt_tokens;
 
     return json(200, embeddingResponseJson(resp));
+}
+
+HttpResponse KServeRuntime::handleAdmin(const HttpRequest &request) const {
+    constexpr auto prefix = "/v2/admin/models";
+    if (!startsWith(request.path, prefix)) {
+        return error(404, KServeErrors::NotFound, "admin route not found");
+    }
+
+    RuntimeConfig defaults;
+    defaults.backend = "stub";
+
+    if (request.method == "GET" && request.path == prefix) {
+        Json models = Json::array();
+        for (const auto &name : registry_.listModels()) {
+            Json entry;
+            entry["name"] = name;
+            if (const auto version = registry_.defaultVersion(name)) {
+                entry["default_version"] = *version;
+            }
+            entry["ready"] = registry_.ready(name);
+            models.push_back(std::move(entry));
+        }
+        return json(200, Json{{"models", std::move(models)}}.dump());
+    }
+
+    if (request.method == "POST" && request.path == std::string(prefix) + "/load") {
+        const auto parsed = parseLoadModelRequest(request.body, defaults);
+        if (!parsed.ok) {
+            return error(400, KServeErrors::InvalidArgument, parsed.error_message);
+        }
+        if (registry_.loadModel(parsed.config)) {
+            metrics_.recordModelLoadSuccess(parsed.config.model_name, parsed.config.backend);
+            return json(200, R"({"loaded":true})");
+        }
+        metrics_.recordModelLoadFailure(parsed.config.model_name, parsed.config.backend);
+        return error(409, KServeErrors::Unavailable,
+                     "failed to load model: " + parsed.config.model_name);
+    }
+
+    const auto admin_tail = request.path.size() > std::string(prefix).size() + 1
+                                ? request.path.substr(std::string(prefix).size() + 1)
+                                : "";
+    if (admin_tail.empty()) {
+        return error(404, KServeErrors::NotFound, "admin route not found");
+    }
+
+    const auto first_slash = admin_tail.find('/');
+    const auto model_name =
+        first_slash == std::string::npos ? admin_tail : admin_tail.substr(0, first_slash);
+    const auto suffix = first_slash == std::string::npos ? "" : admin_tail.substr(first_slash + 1);
+
+    if (request.method == "DELETE" && suffix.empty()) {
+        if (registry_.unloadModel(model_name)) {
+            return json(200, R"({"unloaded":true})");
+        }
+        return error(404, KServeErrors::ModelNotFound, "model not found: " + model_name);
+    }
+
+    if (request.method == "POST" && suffix == "reload") {
+        const auto parsed = parseReloadModelRequest(request.body, defaults);
+        if (!parsed.ok) {
+            return error(400, KServeErrors::InvalidArgument, parsed.error_message);
+        }
+        RuntimeConfig reload_config = parsed.config;
+        reload_config.model_name = model_name;
+        if (registry_.reload(model_name, reload_config)) {
+            return json(200, R"({"reloaded":true})");
+        }
+        return error(409, KServeErrors::Unavailable, "failed to reload model: " + model_name);
+    }
+
+    constexpr auto versions_prefix = "versions/";
+    if (request.method == "POST" && startsWith(suffix, versions_prefix)) {
+        const auto version_tail = suffix.substr(std::string(versions_prefix).size());
+        const std::string activate_suffix = "/activate";
+        if (!endsWith(version_tail, activate_suffix)) {
+            return error(404, KServeErrors::NotFound, "admin route not found");
+        }
+        const auto version = version_tail.substr(0, version_tail.rfind(activate_suffix));
+        if (version.empty()) {
+            return error(400, KServeErrors::InvalidArgument, "version is required");
+        }
+
+        const auto parsed = parseSwitchVersionRequest(request.body, defaults);
+        if (!parsed.ok) {
+            return error(400, KServeErrors::InvalidArgument, parsed.error_message);
+        }
+        RuntimeConfig switch_config = parsed.config;
+        switch_config.model_name = model_name;
+        switch_config.model_version = version;
+        if (registry_.switchVersion(model_name, version, switch_config)) {
+            return json(200, R"({"activated":true})");
+        }
+        return error(409, KServeErrors::Unavailable,
+                     "failed to activate version " + version + " for model: " + model_name);
+    }
+
+    return error(404, KServeErrors::NotFound, "admin route not found");
 }
