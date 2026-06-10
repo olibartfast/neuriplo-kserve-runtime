@@ -1,6 +1,7 @@
 #pragma once
 
 #include "HttpTypes.hpp"
+#include "InferSnapshot.hpp"
 #include "KServeV2Codec.hpp"
 #include "MetricsRegistry.hpp"
 #include "ModelRegistry.hpp"
@@ -30,24 +31,25 @@ class KServeRuntime {
     HttpResponse completions(const HttpRequest &request) const;
     HttpResponse completionsStreaming(const HttpRequest &request,
                                       const OpenAiCompletionRequest &comp_req,
-                                      const ModelHandle &handle) const;
+                                      const InferSnapshot &handle) const;
     HttpResponse chatCompletions(const HttpRequest &request) const;
     HttpResponse chatCompletionsStreaming(const HttpRequest &request,
                                           const OpenAiChatRequest &chat_req,
-                                          const ModelHandle &handle) const;
+                                          const InferSnapshot &handle) const;
     HttpResponse embeddings(const HttpRequest &request) const;
+    HttpResponse handleAdmin(const HttpRequest &request) const;
 
-    std::optional<HttpResponse> validateInferModel(const std::string &model_name,
-                                                   const std::string &model_version,
-                                                   const ModelHandle *&out_handle) const;
+    std::optional<HttpResponse>
+    validateInferModel(const std::string &model_name, const std::string &model_version,
+                       std::shared_ptr<const InferSnapshot> &out_handle) const;
     std::optional<HttpResponse> decodeAndAdmit(const HttpRequest &request,
                                                const std::string &model_name,
                                                const std::string &model_version,
-                                               const ModelHandle &handle,
+                                               const InferSnapshot &handle,
                                                InferenceParseResult &out_parsed) const;
     SchedulerResult scheduleInfer(const std::string &model_name, const std::string &model_version,
                                   const InferenceParseResult &parsed,
-                                  const ModelHandle &handle) const;
+                                  const InferSnapshot &handle) const;
     HttpResponse encodeInferResponse(const std::string &model_name,
                                      const std::string &model_version, const HttpRequest &request,
                                      const InferenceParseResult &parsed,

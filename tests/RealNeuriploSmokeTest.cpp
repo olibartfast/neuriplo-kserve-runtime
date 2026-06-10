@@ -152,7 +152,7 @@ TEST_CASE(real_neuriplo_onnx_identity_golden_comparison) {
     const ModelRegistry registry(realOnnxConfig(model_path));
     REQUIRE(registry.allReady());
 
-    const auto *handle = registry.findHandle("identity");
+    const auto handle = registry.findHandle("identity");
     REQUIRE(handle != nullptr);
     REQUIRE(handle->scheduler != nullptr);
     REQUIRE_EQ(handle->metadata.inputs.size(), static_cast<size_t>(1));

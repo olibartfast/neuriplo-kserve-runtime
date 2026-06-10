@@ -28,6 +28,7 @@ set(NEURIPLO_SANITIZER "" CACHE STRING "Enable sanitizer instrumentation: addres
 set_property(CACHE NEURIPLO_SANITIZER PROPERTY STRINGS "" address thread undefined)
 
 set(NEURIPLO_RUNTIME_SOURCES
+    src/AdminCodec.cpp
     src/BackendRegistry.cpp
     src/BatchCompatibility.cpp
     src/DynamicBatcher.cpp
@@ -40,6 +41,7 @@ set(NEURIPLO_RUNTIME_SOURCES
     src/MetricsRegistry.cpp
     src/ModelLifecycle.cpp
     src/ModelRegistry.cpp
+    src/SchedulerRetireQueue.cpp
     src/ModelScheduler.cpp
     src/NeuriploAdapterDefault.cpp
     src/NeuriploExecutor.cpp
@@ -179,8 +181,12 @@ add_executable(neuriplo-kserve-runtime-tests
     tests/KServeV2CodecTest.cpp
     tests/LlmPathTest.cpp
     tests/LlmSchedulerTest.cpp
+    tests/AdminEndpointTest.cpp
     tests/ModelLifecycleTest.cpp
     tests/ModelRegistryTest.cpp
+    tests/MultiModelRegistryTest.cpp
+    tests/NeuriploPlatformE2eTest.cpp
+    tests/SchedulerRetireQueueTest.cpp
     tests/ModelStateMachineTest.cpp
     tests/NeuriploExecutorTest.cpp
     tests/OpenAiCodecTest.cpp
@@ -227,6 +233,8 @@ if(NEURIPLO_SANITIZER)
     target_compile_options(neuriplo-kserve-runtime-tests PRIVATE ${NEURIPLO_SANITIZER_FLAGS})
     target_link_options(neuriplo-kserve-runtime-tests PRIVATE ${NEURIPLO_SANITIZER_LINK_FLAGS})
 endif()
+
+enable_testing()
 
 add_test(NAME unit COMMAND neuriplo-kserve-runtime-tests)
 add_test(NAME version COMMAND neuriplo-kserve-runtime --version)
