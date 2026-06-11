@@ -8,9 +8,10 @@ server. Unit tests live in `tests/` and are registered through CTest. Build pres
 defined in `CMakePresets.json`; CI is defined in `.github/workflows/ci.yml`. Local editor
 debug tasks are under `.vscode/`.
 
-Read `plan/NEXT_STEPS.md` for current project status and the active work track. Completed
-step snapshots live in `plan/STEP0.md` through `plan/STEP14.md` (extend the range when a
-new `plan/STEP<N>.md` is added). Use `plan/STEP<N>_WIP.md` only for in-progress step work.
+Read `plan/NEXT_STEPS.md` for current project status and the active work track. Steps 0–14
+and the multi-backend track are complete; Step 15 (raw output hot path) adapter work is on
+`feature/step-15-raw-output` and needs neuriplo PR #14 on `develop` for real-* CI. Completed step snapshots live in `plan/STEP0.md` through
+`plan/STEP14.md` (extend the range when a new `plan/STEP<N>.md` is added). Use `plan/STEP<N>_WIP.md` only for in-progress step work.
 `plan/STEP0.md` remains useful historical context for the original scaffold assumptions.
 
 Treat `plan/ROADMAP.md` as the target roadmap and step snapshots as the implementation
@@ -47,12 +48,13 @@ ctest --preset debug
 
 `debug` builds the runtime and unit test binary. `release` creates an optimized build.
 `lint` enables clang-tidy. `asan`, `ubsan`, and `tsan` build with sanitizer
-instrumentation. Real-neuriplo presets need a `../neuriplo` checkout on
-`feature/multi-backend-registry` (until merged to `develop`): `real-onnx` /
+instrumentation. Real-neuriplo presets need a `../neuriplo` checkout on `develop`
+(`feature/multi-backend-registry` until PR #13 landed): `real-onnx` /
 `real-onnx-grpc` (single built-in ONNX Runtime), `real-multi` (built-in OpenCV DNN +
 ONNX Runtime in one binary), and `real-plugin` (OpenCV DNN built-in plus ONNX Runtime
 as a dlopen plugin; its ctest preset sets `NEURIPLO_PLUGIN_DIR` to the build's
-`plugins/` directory). CI real-neuriplo jobs check out the same neuriplo branch. `scripts/e2e-stub.sh` smoke-tests the stub HTTP surface;
+`plugins/` directory). CI real-neuriplo jobs check out `neuriplo@develop` (PR #7).
+`scripts/e2e-stub.sh` smoke-tests the stub HTTP surface;
 `scripts/e2e-multi-backend.sh` exercises two backends (ONNX Runtime built-in +
 TensorRT plugin) in one server on a local GPU machine — see its header for the
 required build. Run the runtime locally with:
