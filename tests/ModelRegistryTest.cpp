@@ -30,7 +30,7 @@ class MarkerExecutor final : public Executor {
         output.name = "output";
         output.datatype = "FP32";
         output.shape = {1, 1};
-        output.data = {42.0};
+        output.bytes = tensorBytesFromDoubles(output.datatype, {42.0});
         response.outputs.push_back(std::move(output));
         return response;
     }
@@ -115,7 +115,7 @@ TEST_CASE(model_registry_uses_injected_executor) {
     request.requested_outputs = {"output"};
     const auto result = handle->scheduler->submit(std::move(request));
     REQUIRE(result.ok);
-    REQUIRE_EQ(result.response.outputs[0].data[0], 42.0);
+    REQUIRE_EQ(tensorScalarAt<float>(result.response.outputs[0].bytes, 0), 42.0f);
 }
 
 TEST_CASE(model_registry_rejects_unknown_backend) {

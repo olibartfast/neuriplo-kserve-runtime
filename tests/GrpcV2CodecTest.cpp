@@ -48,9 +48,9 @@ TEST_CASE(grpc_codec_converts_model_infer_request) {
     REQUIRE_EQ(exec_request.inputs[0].shape[1], 3);
     REQUIRE_EQ(exec_request.inputs[0].shape[2], 224);
     REQUIRE_EQ(exec_request.inputs[0].shape[3], 224);
-    REQUIRE_EQ(exec_request.inputs[0].data.size(), 2u);
-    REQUIRE_EQ(exec_request.inputs[0].data[0], 0.5);
-    REQUIRE_EQ(exec_request.inputs[0].data[1], 0.25);
+    REQUIRE_EQ(exec_request.inputs[0].elementCount(), 2u);
+    REQUIRE_EQ(tensorScalarAt<float>(exec_request.inputs[0].bytes, 0), 0.5f);
+    REQUIRE_EQ(tensorScalarAt<float>(exec_request.inputs[0].bytes, 1), 0.25f);
     REQUIRE_EQ(exec_request.requested_outputs.size(), 1u);
     REQUIRE_EQ(exec_request.requested_outputs[0], "output");
 }
@@ -91,7 +91,7 @@ TEST_CASE(grpc_codec_builds_infer_response) {
     output.name = "output";
     output.datatype = "FP32";
     output.shape = {1, 1};
-    output.data = {42.0, 99.0};
+    output.bytes = tensorBytesFromDoubles(output.datatype, {42.0, 99.0});
     exec_response.outputs.push_back(output);
 
     const auto proto = grpc_v2::buildInferResponse(exec_response, "demo", "1",
@@ -153,9 +153,9 @@ TEST_CASE(grpc_codec_converts_int32_input) {
 
     auto exec_request = grpc_v2::convertInferRequest(proto);
     REQUIRE_EQ(exec_request.inputs.size(), 1u);
-    REQUIRE_EQ(exec_request.inputs[0].data.size(), 2u);
-    REQUIRE_EQ(exec_request.inputs[0].data[0], 10.0);
-    REQUIRE_EQ(exec_request.inputs[0].data[1], 20.0);
+    REQUIRE_EQ(exec_request.inputs[0].elementCount(), 2u);
+    REQUIRE_EQ(tensorScalarAt<int32_t>(exec_request.inputs[0].bytes, 0), 10);
+    REQUIRE_EQ(tensorScalarAt<int32_t>(exec_request.inputs[0].bytes, 1), 20);
 }
 
 TEST_CASE(grpc_codec_converts_int64_input) {
@@ -169,8 +169,8 @@ TEST_CASE(grpc_codec_converts_int64_input) {
     contents->add_int64_contents(100);
 
     auto exec_request = grpc_v2::convertInferRequest(proto);
-    REQUIRE_EQ(exec_request.inputs[0].data.size(), 1u);
-    REQUIRE_EQ(exec_request.inputs[0].data[0], 100.0);
+    REQUIRE_EQ(exec_request.inputs[0].elementCount(), 1u);
+    REQUIRE_EQ(tensorScalarAt<int64_t>(exec_request.inputs[0].bytes, 0), static_cast<int64_t>(100));
 }
 
 TEST_CASE(grpc_codec_converts_fp32_input) {
@@ -184,8 +184,27 @@ TEST_CASE(grpc_codec_converts_fp32_input) {
     contents->add_fp32_contents(1.5f);
 
     auto exec_request = grpc_v2::convertInferRequest(proto);
-    REQUIRE_EQ(exec_request.inputs[0].data.size(), 1u);
-    REQUIRE_EQ(exec_request.inputs[0].data[0], 1.5);
+    REQUIRE_EQ(exec_request.inputs[0].elementCount(), 1u);
+    REQUIRE_EQ(tensorScalarAt<float>(exec_request.inputs[0].bytes, 0), 1.5f);
+}
+
+TEST_CASE(grpc_codec_prefers_raw_input_contents) {
+    inference::ModelInferRequest proto;
+    proto.set_model_name("test");
+    auto *input = proto.add_inputs();
+    input->set_name("input");
+    input->set_datatype("FP32");
+    input->add_shape(2);
+    // Typed contents are also set; raw_input_contents must win for the input.
+    input->mutable_contents()->add_fp32_contents(9.0f);
+    const float values[2] = {1.5f, -2.0f};
+    proto.add_raw_input_contents(
+        std::string(reinterpret_cast<const char *>(values), sizeof(values)));
+
+    auto exec_request = grpc_v2::convertInferRequest(proto);
+    REQUIRE_EQ(exec_request.inputs[0].elementCount(), 2u);
+    REQUIRE_EQ(tensorScalarAt<float>(exec_request.inputs[0].bytes, 0), 1.5f);
+    REQUIRE_EQ(tensorScalarAt<float>(exec_request.inputs[0].bytes, 1), -2.0f);
 }
 
 TEST_CASE(grpc_codec_parses_llm_parameters) {
