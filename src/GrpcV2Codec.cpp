@@ -33,16 +33,36 @@ inference::ModelMetadataResponse buildModelMetadataResponse(const ModelMetadata 
 namespace {
 
 void fillContents(inference::InferTensorContents *contents, const std::string &datatype,
-                  const std::vector<double> &data, const std::vector<std::string> &string_data) {
+                  const std::vector<std::byte> &bytes,
+                  const std::vector<std::string> &string_data) {
     if (isBytesDatatype(datatype)) {
         for (const auto &s : string_data) {
             contents->add_bytes_contents(s);
         }
     } else {
-        for (const auto value : data) {
-            contents->add_fp64_contents(value);
-        }
+        withTensorElementType(datatype, [&](auto element) {
+            using T = decltype(element);
+            const size_t count = bytes.size() / sizeof(T);
+            for (size_t i = 0; i < count; ++i) {
+                contents->add_fp64_contents(static_cast<double>(tensorScalarAt<T>(bytes, i)));
+            }
+        });
     }
+}
+
+// Appends proto repeated-field values to the tensor's typed byte buffer,
+// converting each value to the tensor's declared datatype.
+template <typename Repeated> void appendContents(InputTensor &tensor, const Repeated &values) {
+    withTensorElementType(tensor.datatype, [&](auto element) {
+        using T = decltype(element);
+        size_t offset = tensor.bytes.size();
+        tensor.bytes.resize(offset + (static_cast<size_t>(values.size()) * sizeof(T)));
+        for (const auto value : values) {
+            const auto typed = static_cast<T>(value);
+            std::memcpy(tensor.bytes.data() + offset, &typed, sizeof(T));
+            offset += sizeof(T);
+        }
+    });
 }
 
 } // namespace
@@ -53,6 +73,7 @@ ExecutionRequest convertInferRequest(const inference::ModelInferRequest &proto_r
         request.id = proto_request.id();
     }
 
+    int input_index = 0;
     for (const auto &proto_input : proto_request.inputs()) {
         InputTensor tensor;
         tensor.name = proto_input.name();
@@ -63,30 +84,27 @@ ExecutionRequest convertInferRequest(const inference::ModelInferRequest &proto_r
         if (isBytesDatatype(tensor.datatype)) {
             tensor.string_data.assign(contents.bytes_contents().begin(),
                                       contents.bytes_contents().end());
+        } else if (input_index < proto_request.raw_input_contents_size()) {
+            // raw_input_contents carries the tensor's bytes verbatim in
+            // little-endian element order: one memcpy, no per-element work.
+            const auto &raw = proto_request.raw_input_contents(input_index);
+            tensor.bytes.resize(raw.size());
+            std::memcpy(tensor.bytes.data(), raw.data(), raw.size());
         } else if (contents.fp64_contents_size() > 0) {
-            tensor.data.assign(contents.fp64_contents().begin(), contents.fp64_contents().end());
+            appendContents(tensor, contents.fp64_contents());
         } else if (contents.fp32_contents_size() > 0) {
-            for (const auto value : contents.fp32_contents()) {
-                tensor.data.push_back(static_cast<double>(value));
-            }
+            appendContents(tensor, contents.fp32_contents());
         } else if (contents.int64_contents_size() > 0) {
-            for (const auto value : contents.int64_contents()) {
-                tensor.data.push_back(static_cast<double>(value));
-            }
+            appendContents(tensor, contents.int64_contents());
         } else if (contents.int_contents_size() > 0) {
-            for (const auto value : contents.int_contents()) {
-                tensor.data.push_back(static_cast<double>(value));
-            }
+            appendContents(tensor, contents.int_contents());
         } else if (contents.uint64_contents_size() > 0) {
-            for (const auto value : contents.uint64_contents()) {
-                tensor.data.push_back(static_cast<double>(value));
-            }
+            appendContents(tensor, contents.uint64_contents());
         } else if (contents.uint_contents_size() > 0) {
-            for (const auto value : contents.uint_contents()) {
-                tensor.data.push_back(static_cast<double>(value));
-            }
+            appendContents(tensor, contents.uint_contents());
         }
         request.inputs.push_back(std::move(tensor));
+        ++input_index;
     }
 
     for (const auto &proto_output : proto_request.outputs()) {
@@ -140,7 +158,7 @@ inference::ModelInferResponse buildInferResponse(const ExecutionResponse &exec_r
             proto_output->add_shape(dim);
         }
         auto *contents = proto_output->mutable_contents();
-        fillContents(contents, output.datatype, output.data, output.string_data);
+        fillContents(contents, output.datatype, output.bytes, output.string_data);
     }
 
     if (exec_response.llm_metadata.has_value()) {

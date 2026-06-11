@@ -50,8 +50,32 @@ bool readBool(const Json &json, const char *key, bool &out) {
     return true;
 }
 
+bool readInputSizes(const Json &json, RuntimeConfig &config) {
+    if (!json.contains("input_sizes") || !json["input_sizes"].is_array()) {
+        return false;
+    }
+    std::vector<std::vector<int64_t>> input_sizes;
+    for (const auto &shape : json["input_sizes"]) {
+        if (!shape.is_array()) {
+            return false;
+        }
+        std::vector<int64_t> dims;
+        for (const auto &dim : shape) {
+            if (!dim.is_number_integer()) {
+                return false;
+            }
+            dims.push_back(dim.get<int64_t>());
+        }
+        input_sizes.push_back(std::move(dims));
+    }
+    config.input_sizes = std::move(input_sizes);
+    return true;
+}
+
 void applyCommonFields(const Json &json, RuntimeConfig &config) {
     readString(json, "backend", config.backend);
+    readString(json, "plugin_dir", config.plugin_dir);
+    readInputSizes(json, config);
     readString(json, "model_path", config.model_path);
     readString(json, "storage_uri", config.storage_uri);
     readString(json, "scheduler_strategy", config.scheduler_strategy);

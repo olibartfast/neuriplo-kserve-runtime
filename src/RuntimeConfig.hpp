@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <optional>
 #include <string>
@@ -15,6 +16,10 @@ struct RuntimeConfig {
     std::string model_version = "1";
     std::string model_path;
     std::string backend = "stub";
+    std::string plugin_dir;
+    // Per-input tensor shapes (without batch dimension) for backends that
+    // cannot introspect them from the model file (e.g. opencv_dnn).
+    std::vector<std::vector<int64_t>> input_sizes;
     std::string storage_uri;
     std::string deployment;
     size_t max_queue_size = 64;

@@ -914,7 +914,7 @@ HttpResponse KServeRuntime::embeddings(const HttpRequest &request) const {
     std::vector<double> embedding;
     for (const auto &output : scheduled.response.outputs) {
         if (output.datatype != "BYTES") {
-            embedding = output.data;
+            embedding = tensorValuesAsDoubles(output.datatype, output.bytes);
             break;
         }
     }
@@ -949,7 +949,12 @@ HttpResponse KServeRuntime::handleAdmin(const HttpRequest &request) const {
             entry["ready"] = registry_.ready(name);
             models.push_back(std::move(entry));
         }
-        return json(200, Json{{"models", std::move(models)}}.dump());
+        Json backends = Json::array();
+        for (const auto &backend_id : availableBackendIds()) {
+            backends.push_back(backend_id);
+        }
+        return json(200,
+                    Json{{"models", std::move(models)}, {"backends", std::move(backends)}}.dump());
     }
 
     if (request.method == "POST" && request.path == std::string(prefix) + "/load") {
@@ -958,8 +963,21 @@ HttpResponse KServeRuntime::handleAdmin(const HttpRequest &request) const {
             return error(400, KServeErrors::InvalidArgument, parsed.error_message);
         }
         if (registry_.loadModel(parsed.config)) {
-            metrics_.recordModelLoadSuccess(parsed.config.model_name, parsed.config.backend);
-            return json(200, R"({"loaded":true})");
+            if (registry_.ready(parsed.config.model_name)) {
+                metrics_.recordModelLoadSuccess(parsed.config.model_name, parsed.config.backend);
+                return json(200, R"({"loaded":true})");
+            }
+            // The slot registered but the executor never came up (unknown or
+            // unavailable backend, bad model file, ...): surface the load
+            // error as a 4xx and drop the dead slot.
+            std::string message = "failed to load model: " + parsed.config.model_name;
+            if (const auto handle = registry_.findHandle(parsed.config.model_name);
+                handle && handle->load_error) {
+                message = *handle->load_error;
+            }
+            registry_.unloadModel(parsed.config.model_name);
+            metrics_.recordModelLoadFailure(parsed.config.model_name, parsed.config.backend);
+            return error(409, KServeErrors::Unavailable, message);
         }
         metrics_.recordModelLoadFailure(parsed.config.model_name, parsed.config.backend);
         return error(409, KServeErrors::Unavailable,
@@ -986,7 +1004,10 @@ HttpResponse KServeRuntime::handleAdmin(const HttpRequest &request) const {
     }
 
     if (request.method == "POST" && suffix == "reload") {
-        const auto parsed = parseReloadModelRequest(request.body, defaults);
+        // Start from the model's current config so an empty reload body keeps
+        // backend/model_path/plugin_dir instead of resetting to defaults.
+        const auto reload_defaults = registry_.modelConfig(model_name).value_or(defaults);
+        const auto parsed = parseReloadModelRequest(request.body, reload_defaults);
         if (!parsed.ok) {
             return error(400, KServeErrors::InvalidArgument, parsed.error_message);
         }
@@ -1010,7 +1031,8 @@ HttpResponse KServeRuntime::handleAdmin(const HttpRequest &request) const {
             return error(400, KServeErrors::InvalidArgument, "version is required");
         }
 
-        const auto parsed = parseSwitchVersionRequest(request.body, defaults);
+        const auto switch_defaults = registry_.modelConfig(model_name).value_or(defaults);
+        const auto parsed = parseSwitchVersionRequest(request.body, switch_defaults);
         if (!parsed.ok) {
             return error(400, KServeErrors::InvalidArgument, parsed.error_message);
         }

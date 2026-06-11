@@ -66,6 +66,7 @@ bool ModelRegistry::loadModelLocked(const std::string &model_name, const Runtime
     }
 
     ModelSlot slot;
+    slot.config = config;
     lifecycle_.load(slot.handle, config, factory);
     publishSnapshot(slot);
     models_.emplace(model_name, std::move(slot));
@@ -82,6 +83,20 @@ bool ModelRegistry::loadModel(const RuntimeConfig &config, ExecutorFactory facto
 }
 
 bool ModelRegistry::unloadModel(const std::string &model_name) {
+    {
+        // Failed loads register a slot without a scheduler, so the drain path
+        // can never release them; remove the slot directly.
+        std::unique_lock lock(models_mutex_);
+        auto *slot = findSlotMutable(model_name);
+        if (slot == nullptr) {
+            return false;
+        }
+        if (slot->handle.state.current() == ModelState::Failed &&
+            slot->handle.scheduler == nullptr) {
+            models_.erase(model_name);
+            return true;
+        }
+    }
     if (!beginDrain(model_name)) {
         return false;
     }
@@ -106,6 +121,7 @@ bool ModelRegistry::reload(const std::string &model_name, const RuntimeConfig &c
         return false;
     }
 
+    slot->config = config;
     publishSnapshot(*slot);
     retireSnapshot(old_snapshot);
     return slot->handle.isReady();
@@ -147,6 +163,7 @@ bool ModelRegistry::switchVersion(const std::string &model_name, const std::stri
         return false;
     }
 
+    slot->config = version_config;
     publishSnapshot(*slot);
     const auto new_snapshot = std::atomic_load(&slot->active_snapshot);
     if (old_snapshot && !old_version.empty()) {
@@ -276,6 +293,15 @@ bool ModelRegistry::allReady() const {
         }
     }
     return true;
+}
+
+std::optional<RuntimeConfig> ModelRegistry::modelConfig(const std::string &model_name) const {
+    std::shared_lock lock(models_mutex_);
+    const auto *slot = findSlot(model_name);
+    if (slot == nullptr) {
+        return std::nullopt;
+    }
+    return slot->config;
 }
 
 std::optional<std::string> ModelRegistry::defaultVersion(const std::string &model_name) const {

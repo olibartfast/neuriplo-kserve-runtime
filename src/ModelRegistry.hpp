@@ -17,6 +17,9 @@
 
 struct ModelSlot {
     ModelHandle handle;
+    // Config the model was last (re)loaded with; admin reloads start from it
+    // so an empty reload body keeps backend/model_path/plugin_dir intact.
+    RuntimeConfig config;
     std::shared_ptr<const InferSnapshot> active_snapshot;
     std::unordered_map<std::string, std::shared_ptr<const InferSnapshot>> version_snapshots;
 };
@@ -53,6 +56,7 @@ class ModelRegistry {
     bool readyVersion(const std::string &model_name, const std::string &version) const;
     bool allReady() const;
     std::optional<std::string> defaultVersion(const std::string &model_name) const;
+    std::optional<RuntimeConfig> modelConfig(const std::string &model_name) const;
     bool beginDrain(const std::string &model_name);
     SchedulerMetricsSnapshot schedulerMetrics(const std::string &model_name) const;
 

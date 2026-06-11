@@ -1,7 +1,10 @@
+#include "BackendRegistry.hpp"
 #include "ModelRegistry.hpp"
+#include "NeuriploAdapter.hpp"
 #include "RuntimeConfig.hpp"
 #include "Test.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
@@ -165,10 +168,12 @@ TEST_CASE(real_neuriplo_onnx_identity_golden_comparison) {
     input.name = "input";
     input.datatype = "FP32";
     input.shape = {1, 3, 4, 4};
-    input.data.reserve(48);
+    std::vector<double> input_values;
+    input_values.reserve(48);
     for (int i = 0; i < 48; ++i) {
-        input.data.push_back(static_cast<double>(i) / 10.0);
+        input_values.push_back(static_cast<double>(i) / 10.0);
     }
+    input.bytes = tensorBytesFromDoubles(input.datatype, input_values);
     request.inputs.push_back(input);
     request.requested_outputs = {"output"};
 
@@ -179,8 +184,95 @@ TEST_CASE(real_neuriplo_onnx_identity_golden_comparison) {
     REQUIRE_EQ(response.outputs.size(), static_cast<size_t>(1));
     REQUIRE_EQ(response.outputs[0].name, "output");
     REQUIRE_EQ(response.outputs[0].shape.size(), static_cast<size_t>(4));
-    REQUIRE_EQ(response.outputs[0].data.size(), input.data.size());
-    for (size_t i = 0; i < input.data.size(); ++i) {
-        requireNear(response.outputs[0].data[i], input.data[i]);
+    const auto output_values =
+        tensorValuesAsDoubles(response.outputs[0].datatype, response.outputs[0].bytes);
+    REQUIRE_EQ(output_values.size(), input_values.size());
+    for (size_t i = 0; i < input_values.size(); ++i) {
+        requireNear(output_values[i], input_values[i]);
     }
+}
+
+// Milestone proof: one process serves the same model through two different
+// neuriplo backends (built-in and/or dlopen plugin, depending on the preset).
+TEST_CASE(real_neuriplo_serves_two_backends_in_one_process) {
+    const auto available = realNeuriploAvailableBackends();
+    const auto has = [&available](const char *id) {
+        return std::find(available.begin(), available.end(), id) != available.end();
+    };
+    if (!has("opencv_dnn") || !has("onnx_runtime")) {
+        return; // single-backend build
+    }
+
+    const auto model_path = writeIdentityModel();
+    ModelRegistry registry(realOnnxConfig(model_path));
+    REQUIRE(registry.allReady());
+
+    auto cv_config = realOnnxConfig(model_path);
+    cv_config.model_name = "identity_cv";
+    cv_config.backend = "opencv_dnn";
+    // opencv_dnn cannot introspect input shapes from the model file; the
+    // backend prepends the batch dimension itself.
+    cv_config.input_sizes = {{3, 4, 4}};
+    REQUIRE(registry.loadModel(cv_config));
+    REQUIRE(registry.ready("identity"));
+    REQUIRE(registry.ready("identity_cv"));
+
+    for (const auto *model_name : {"identity", "identity_cv"}) {
+        const auto handle = registry.findHandle(model_name);
+        REQUIRE(handle != nullptr);
+        REQUIRE(handle->scheduler != nullptr);
+        REQUIRE(!handle->metadata.inputs.empty());
+
+        ExecutionRequest request;
+        InputTensor input;
+        input.name = handle->metadata.inputs[0].name;
+        input.datatype = "FP32";
+        input.shape = handle->metadata.inputs[0].shape;
+        size_t element_count = 1;
+        for (const auto dim : input.shape) {
+            element_count *= static_cast<size_t>(dim);
+        }
+        REQUIRE_EQ(element_count, static_cast<size_t>(48));
+        std::vector<double> input_values;
+        for (size_t i = 0; i < element_count; ++i) {
+            input_values.push_back(static_cast<double>(i) / 10.0);
+        }
+        input.bytes = tensorBytesFromDoubles(input.datatype, input_values);
+        request.inputs.push_back(input);
+
+        const auto scheduled = handle->scheduler->submit(std::move(request));
+        REQUIRE(scheduled.ok);
+        REQUIRE(scheduled.response.ok);
+        REQUIRE_EQ(scheduled.response.outputs.size(), static_cast<size_t>(1));
+        const auto output_values = tensorValuesAsDoubles(scheduled.response.outputs[0].datatype,
+                                                         scheduled.response.outputs[0].bytes);
+        REQUIRE_EQ(output_values.size(), static_cast<size_t>(48));
+        for (size_t i = 0; i < 48; ++i) {
+            requireNear(output_values[i], static_cast<double>(i) / 10.0);
+        }
+    }
+}
+
+TEST_CASE(real_neuriplo_reports_available_backends) {
+    REQUIRE(realNeuriploSupportEnabled());
+    const auto available = realNeuriploAvailableBackends();
+    REQUIRE(!available.empty());
+    REQUIRE(std::find(available.begin(), available.end(), "onnx_runtime") != available.end());
+}
+
+TEST_CASE(real_neuriplo_unavailable_backend_lists_alternatives) {
+    const auto available = realNeuriploAvailableBackends();
+    if (std::find(available.begin(), available.end(), "tensorrt") != available.end()) {
+        return; // TensorRT is genuinely available in this build
+    }
+
+    RuntimeConfig config;
+    config.model_name = "raft";
+    config.model_path = "/nonexistent/model.plan";
+    config.backend = "tensorrt";
+    std::string error;
+    const auto executor = createExecutorFor("tensorrt", config, error);
+    REQUIRE(executor == nullptr);
+    REQUIRE(error.find("'tensorrt' is not available") != std::string::npos);
+    REQUIRE(error.find("onnx_runtime") != std::string::npos);
 }

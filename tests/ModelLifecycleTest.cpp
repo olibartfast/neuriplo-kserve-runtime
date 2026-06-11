@@ -59,7 +59,7 @@ ModelLifecycle::ExecutorFactory markerFactory(double marker_value) {
                     output.name = "output";
                     output.datatype = "FP32";
                     output.shape = {1, 1};
-                    output.data = {marker_};
+                    output.bytes = tensorBytesFromDoubles(output.datatype, {marker_});
                     response.outputs.push_back(std::move(output));
                     return response;
                 }
@@ -143,7 +143,7 @@ TEST_CASE(model_lifecycle_reload_replaces_executor_after_drain) {
     request.requested_outputs = {"output"};
     auto first = handle.scheduler->submit(std::move(request));
     REQUIRE(first.ok);
-    REQUIRE_EQ(first.response.outputs[0].data[0], 1.0);
+    REQUIRE_EQ(tensorScalarAt<float>(first.response.outputs[0].bytes, 0), 1.0f);
 
     REQUIRE(lifecycle.reload(handle, demoConfig(), markerFactory(2.0)));
     REQUIRE(handle.isReady());
@@ -152,7 +152,7 @@ TEST_CASE(model_lifecycle_reload_replaces_executor_after_drain) {
     second_request.requested_outputs = {"output"};
     auto second = handle.scheduler->submit(std::move(second_request));
     REQUIRE(second.ok);
-    REQUIRE_EQ(second.response.outputs[0].data[0], 2.0);
+    REQUIRE_EQ(tensorScalarAt<float>(second.response.outputs[0].bytes, 0), 2.0f);
 }
 
 TEST_CASE(model_lifecycle_reload_from_failed_state) {
@@ -177,7 +177,7 @@ TEST_CASE(model_registry_reload_delegates_to_lifecycle) {
     request.requested_outputs = {"output"};
     const auto result = handle->scheduler->submit(std::move(request));
     REQUIRE(result.ok);
-    REQUIRE_EQ(result.response.outputs[0].data[0], 20.0);
+    REQUIRE_EQ(tensorScalarAt<float>(result.response.outputs[0].bytes, 0), 20.0f);
 }
 
 TEST_CASE(infer_snapshot_keeps_old_scheduler_alive_during_reload) {
@@ -223,7 +223,7 @@ TEST_CASE(infer_snapshot_keeps_old_scheduler_alive_during_reload) {
                     output.name = "output";
                     output.datatype = "FP32";
                     output.shape = {1, 1};
-                    output.data = {1.0};
+                    output.bytes = tensorBytesFromDoubles(output.datatype, {1.0});
                     response.outputs.push_back(std::move(output));
                     return response;
                 }
@@ -243,7 +243,8 @@ TEST_CASE(infer_snapshot_keeps_old_scheduler_alive_during_reload) {
         request.requested_outputs = {"output"};
         const auto result = snapshot->scheduler->submit(std::move(request));
         REQUIRE(result.ok);
-        infer_marker = result.response.outputs[0].data[0];
+        infer_marker =
+            static_cast<double>(tensorScalarAt<float>(result.response.outputs[0].bytes, 0));
         infer_done.store(true, std::memory_order_release);
     });
 
@@ -263,7 +264,7 @@ TEST_CASE(infer_snapshot_keeps_old_scheduler_alive_during_reload) {
     new_request.requested_outputs = {"output"};
     const auto new_result = new_snapshot->scheduler->submit(std::move(new_request));
     REQUIRE(new_result.ok);
-    REQUIRE_EQ(new_result.response.outputs[0].data[0], 2.0);
+    REQUIRE_EQ(tensorScalarAt<float>(new_result.response.outputs[0].bytes, 0), 2.0f);
 
     {
         std::lock_guard<std::mutex> lock(slow_state->mutex);

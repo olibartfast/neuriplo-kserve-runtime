@@ -49,7 +49,7 @@ KServeRuntime makeRuntimeWithVersion(const std::string &version) {
                 output.name = "output";
                 output.datatype = "FP32";
                 output.shape = {1, 1};
-                output.data = {1.0};
+                output.bytes = tensorBytesFromDoubles(output.datatype, {1.0});
                 response.outputs.push_back(std::move(output));
                 return response;
             }
@@ -180,7 +180,7 @@ TEST_CASE(inference_graph_overload_returns_stable_error) {
             output.name = "output";
             output.datatype = "FP32";
             output.shape = {1, 1};
-            output.data = {1.0};
+            output.bytes = tensorBytesFromDoubles(output.datatype, {1.0});
             response.outputs.push_back(std::move(output));
             return response;
         }

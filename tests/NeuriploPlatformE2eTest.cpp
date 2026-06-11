@@ -150,7 +150,8 @@ class MetadataStubExecutor final : public Executor {
             for (const auto dim : output.shape) {
                 element_count *= dim > 0 ? static_cast<size_t>(dim) : 1;
             }
-            tensor.data.assign(element_count, 0.0);
+            tensor.bytes =
+                tensorBytesFromDoubles(tensor.datatype, std::vector<double>(element_count, 0.0));
             response.outputs.push_back(std::move(tensor));
         }
         return response;
@@ -683,7 +684,7 @@ TEST_CASE(e2e_scheduler_queue_full_returns_overloaded) {
             out.name = "output";
             out.datatype = "FP32";
             out.shape = {1, 1};
-            out.data = {1.0};
+            out.bytes = tensorBytesFromDoubles(out.datatype, {1.0});
             resp.outputs.push_back(std::move(out));
             return resp;
         }
@@ -756,12 +757,12 @@ TEST_CASE(e2e_scheduler_queue_full_returns_overloaded) {
 TEST_CASE(e2e_dynamic_batching_merge_and_split) {
     ExecutionRequest req1;
     req1.inputs.push_back({"input", "FP32", {1, 3, 224, 224}});
-    req1.inputs[0].data = {1.0, 2.0, 3.0, 4.0};
+    req1.inputs[0].bytes = tensorBytesFromDoubles("FP32", {1.0, 2.0, 3.0, 4.0});
     req1.requested_outputs = {"output"};
 
     ExecutionRequest req2;
     req2.inputs.push_back({"input", "FP32", {1, 3, 224, 224}});
-    req2.inputs[0].data = {5.0, 6.0, 7.0, 8.0};
+    req2.inputs[0].bytes = tensorBytesFromDoubles("FP32", {5.0, 6.0, 7.0, 8.0});
     req2.requested_outputs = {"output"};
 
     MergedBatch merged;
@@ -771,7 +772,7 @@ TEST_CASE(e2e_dynamic_batching_merge_and_split) {
     REQUIRE_EQ(merged.batch_sizes[0], static_cast<size_t>(1));
     REQUIRE_EQ(merged.batch_sizes[1], static_cast<size_t>(1));
     REQUIRE_EQ(merged.request.inputs[0].shape[0], static_cast<int64_t>(2));
-    REQUIRE_EQ(merged.request.inputs[0].data.size(), static_cast<size_t>(8));
+    REQUIRE_EQ(merged.request.inputs[0].elementCount(), static_cast<size_t>(8));
 
     ExecutionResponse batch_resp;
     batch_resp.ok = true;
@@ -779,13 +780,14 @@ TEST_CASE(e2e_dynamic_batching_merge_and_split) {
     out.name = "output";
     out.datatype = "FP32";
     out.shape = {2, 4};
-    out.data = {10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0, 80.0};
+    out.bytes =
+        tensorBytesFromDoubles(out.datatype, {10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0, 80.0});
     batch_resp.outputs.push_back(std::move(out));
 
     auto split = splitExecutionResponse(batch_resp, merged.batch_sizes, {req1, req2});
     REQUIRE_EQ(split.size(), static_cast<size_t>(2));
-    REQUIRE_EQ(split[0].outputs[0].data.size(), static_cast<size_t>(4));
-    REQUIRE_EQ(split[1].outputs[0].data.size(), static_cast<size_t>(4));
+    REQUIRE_EQ(split[0].outputs[0].elementCount(), static_cast<size_t>(4));
+    REQUIRE_EQ(split[1].outputs[0].elementCount(), static_cast<size_t>(4));
 }
 
 TEST_CASE(e2e_kserve_v2_codec_parse_and_serialize) {
@@ -804,7 +806,7 @@ TEST_CASE(e2e_kserve_v2_codec_parse_and_serialize) {
     REQUIRE_EQ(*parsed.request.id, "codec-1");
     REQUIRE_EQ(parsed.request.inputs.size(), static_cast<size_t>(1));
     REQUIRE_EQ(parsed.request.inputs[0].name, "input");
-    REQUIRE_EQ(parsed.request.inputs[0].data.size(), static_cast<size_t>(2));
+    REQUIRE_EQ(parsed.request.inputs[0].elementCount(), static_cast<size_t>(2));
 
     ExecutionResponse exec_resp;
     exec_resp.ok = true;
@@ -812,7 +814,7 @@ TEST_CASE(e2e_kserve_v2_codec_parse_and_serialize) {
     out.name = "output";
     out.datatype = "FP32";
     out.shape = {1, 1000};
-    out.data.resize(1000, 0.5);
+    out.bytes = tensorBytesFromDoubles(out.datatype, std::vector<double>(1000, 0.5));
     exec_resp.outputs.push_back(std::move(out));
 
     const auto json_str = inferenceResponseJson("codec-test", "1", parsed.request, exec_resp);
@@ -1036,7 +1038,7 @@ TEST_CASE(e2e_stub_executor_returns_identity_output) {
     in.name = "input";
     in.datatype = "FP32";
     in.shape = {1, 3, 224, 224};
-    in.data = {1.0, 2.0, 3.0};
+    in.bytes = tensorBytesFromDoubles(in.datatype, {1.0, 2.0, 3.0});
     req.inputs.push_back(in);
 
     auto resp = exec.infer(req);
@@ -1058,9 +1060,10 @@ TEST_CASE(e2e_custom_executor_full_http_flow) {
                 out.name = input.name + "_scaled";
                 out.datatype = input.datatype;
                 out.shape = input.shape;
-                out.data = input.data;
-                for (auto &v : out.data)
+                auto values = tensorValuesAsDoubles(input.datatype, input.bytes);
+                for (auto &v : values)
                     v *= 2.0;
+                out.bytes = tensorBytesFromDoubles(out.datatype, values);
                 resp.outputs.push_back(std::move(out));
             }
             return resp;
@@ -1154,10 +1157,12 @@ TEST_CASE(e2e_real_neuriplo_scheduler_latency_measured) {
     input.name = "input";
     input.datatype = "FP32";
     input.shape = {1, 3, 4, 4};
-    input.data.reserve(48);
+    std::vector<double> input_values;
+    input_values.reserve(48);
     for (int i = 0; i < 48; ++i) {
-        input.data.push_back(static_cast<double>(i) / 10.0);
+        input_values.push_back(static_cast<double>(i) / 10.0);
     }
+    input.bytes = tensorBytesFromDoubles(input.datatype, input_values);
     req.inputs.push_back(input);
 
     auto result = handle->scheduler->submit(std::move(req));
