@@ -118,7 +118,7 @@ std::optional<std::vector<InputTensor>> orderedInputs(const ModelMetadata &metad
             return std::nullopt;
         }
         const auto expected_count = elementCount(input.shape);
-        if (!expected_count.has_value() || input.data.size() != *expected_count) {
+        if (!expected_count.has_value() || input.elementCount() != *expected_count) {
             error = invalidArgument("input data length does not match shape for neuriplo input: " +
                                     input.name);
             return std::nullopt;

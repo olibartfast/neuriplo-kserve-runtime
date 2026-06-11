@@ -914,7 +914,7 @@ HttpResponse KServeRuntime::embeddings(const HttpRequest &request) const {
     std::vector<double> embedding;
     for (const auto &output : scheduled.response.outputs) {
         if (output.datatype != "BYTES") {
-            embedding = output.data;
+            embedding = tensorValuesAsDoubles(output.datatype, output.bytes);
             break;
         }
     }

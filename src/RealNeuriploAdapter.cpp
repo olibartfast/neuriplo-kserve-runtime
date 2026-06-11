@@ -33,92 +33,22 @@ std::string toRuntimeBackendId(const std::string &backend) {
     return id;
 }
 
-template <typename T> std::vector<uint8_t> numericBytes(const InputTensor &tensor) {
-    std::vector<uint8_t> bytes(tensor.data.size() * sizeof(T));
-    for (size_t i = 0; i < tensor.data.size(); ++i) {
-        const auto value = static_cast<T>(tensor.data[i]);
-        std::memcpy(bytes.data() + (i * sizeof(T)), &value, sizeof(T));
-    }
-    return bytes;
-}
-
+// Canonical tensors already hold typed contiguous bytes (FP16 widened to
+// float, matching what this adapter always handed to backends), so the
+// backend payload is a straight byte copy.
 std::vector<uint8_t> tensorToBytes(const InputTensor &tensor) {
-    const auto &dt = tensor.datatype;
-    if (dt == "BYTES") {
+    if (tensor.datatype == "BYTES") {
         std::vector<uint8_t> bytes;
         for (const auto &element : tensor.string_data) {
             bytes.insert(bytes.end(), element.begin(), element.end());
         }
         return bytes;
     }
-    if (dt == "BOOL" || dt == "INT8")
-        return numericBytes<int8_t>(tensor);
-    if (dt == "INT16")
-        return numericBytes<int16_t>(tensor);
-    if (dt == "INT32")
-        return numericBytes<int32_t>(tensor);
-    if (dt == "INT64")
-        return numericBytes<int64_t>(tensor);
-    if (dt == "UINT8")
-        return numericBytes<uint8_t>(tensor);
-    if (dt == "UINT16")
-        return numericBytes<uint16_t>(tensor);
-    if (dt == "UINT32")
-        return numericBytes<uint32_t>(tensor);
-    if (dt == "UINT64")
-        return numericBytes<uint64_t>(tensor);
-    if (dt == "FP16") {
-        std::vector<uint8_t> bytes(tensor.data.size() * sizeof(float));
-        for (size_t i = 0; i < tensor.data.size(); ++i) {
-            const auto value = static_cast<float>(tensor.data[i]);
-            std::memcpy(bytes.data() + (i * sizeof(float)), &value, sizeof(float));
-        }
-        return bytes;
+    if (tensorElementSize(tensor.datatype) == 0) {
+        throw std::runtime_error("unsupported input datatype: " + tensor.datatype);
     }
-    if (dt == "FP32")
-        return numericBytes<float>(tensor);
-    if (dt == "FP64")
-        return numericBytes<double>(tensor);
-    throw std::runtime_error("unsupported input datatype: " + dt);
-}
-
-template <typename T> std::vector<double> numericFromBytes(const std::vector<uint8_t> &bytes) {
-    const size_t count = bytes.size() / sizeof(T);
-    std::vector<double> data(count);
-    for (size_t i = 0; i < count; ++i) {
-        T value;
-        std::memcpy(&value, bytes.data() + (i * sizeof(T)), sizeof(T));
-        data[i] = static_cast<double>(value);
-    }
-    return data;
-}
-
-std::vector<double> bytesToTensor(const std::vector<uint8_t> &bytes, const std::string &datatype) {
-    if (bytes.empty()) {
-        return {};
-    }
-    const auto &dt = datatype;
-    if (dt == "BOOL" || dt == "INT8")
-        return numericFromBytes<int8_t>(bytes);
-    if (dt == "INT16")
-        return numericFromBytes<int16_t>(bytes);
-    if (dt == "INT32")
-        return numericFromBytes<int32_t>(bytes);
-    if (dt == "INT64")
-        return numericFromBytes<int64_t>(bytes);
-    if (dt == "UINT8")
-        return numericFromBytes<uint8_t>(bytes);
-    if (dt == "UINT16")
-        return numericFromBytes<uint16_t>(bytes);
-    if (dt == "UINT32")
-        return numericFromBytes<uint32_t>(bytes);
-    if (dt == "UINT64")
-        return numericFromBytes<uint64_t>(bytes);
-    if (dt == "FP32")
-        return numericFromBytes<float>(bytes);
-    if (dt == "FP64")
-        return numericFromBytes<double>(bytes);
-    throw std::runtime_error("unsupported output datatype: " + dt);
+    const auto *begin = reinterpret_cast<const uint8_t *>(tensor.bytes.data());
+    return {begin, begin + tensor.bytes.size()};
 }
 
 std::vector<std::string> extractDatatypes(const std::vector<LayerInfo> &layers) {
@@ -226,10 +156,16 @@ class RealNeuriploAdapter final : public NeuriploAdapter {
                 output.datatype = "FP32";
             }
             output.shape = i < shapes.size() ? shapes[i] : std::vector<int64_t>{};
-            output.data.reserve(values[i].size());
-            for (const auto &value : values[i]) {
-                output.data.push_back(tensorElementToDouble(value));
-            }
+            // Outputs are declared FP32 (extractDatatypes); convert each
+            // TensorElement variant to the declared element type once here.
+            withTensorElementType(output.datatype, [&](auto element) {
+                using T = decltype(element);
+                output.bytes.resize(values[i].size() * sizeof(T));
+                for (size_t j = 0; j < values[i].size(); ++j) {
+                    const auto typed = static_cast<T>(tensorElementToDouble(values[i][j]));
+                    std::memcpy(output.bytes.data() + (j * sizeof(T)), &typed, sizeof(T));
+                }
+            });
             result.outputs.push_back(std::move(output));
         }
         return result;

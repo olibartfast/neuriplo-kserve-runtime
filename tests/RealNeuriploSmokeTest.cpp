@@ -168,10 +168,12 @@ TEST_CASE(real_neuriplo_onnx_identity_golden_comparison) {
     input.name = "input";
     input.datatype = "FP32";
     input.shape = {1, 3, 4, 4};
-    input.data.reserve(48);
+    std::vector<double> input_values;
+    input_values.reserve(48);
     for (int i = 0; i < 48; ++i) {
-        input.data.push_back(static_cast<double>(i) / 10.0);
+        input_values.push_back(static_cast<double>(i) / 10.0);
     }
+    input.bytes = tensorBytesFromDoubles(input.datatype, input_values);
     request.inputs.push_back(input);
     request.requested_outputs = {"output"};
 
@@ -182,9 +184,11 @@ TEST_CASE(real_neuriplo_onnx_identity_golden_comparison) {
     REQUIRE_EQ(response.outputs.size(), static_cast<size_t>(1));
     REQUIRE_EQ(response.outputs[0].name, "output");
     REQUIRE_EQ(response.outputs[0].shape.size(), static_cast<size_t>(4));
-    REQUIRE_EQ(response.outputs[0].data.size(), input.data.size());
-    for (size_t i = 0; i < input.data.size(); ++i) {
-        requireNear(response.outputs[0].data[i], input.data[i]);
+    const auto output_values =
+        tensorValuesAsDoubles(response.outputs[0].datatype, response.outputs[0].bytes);
+    REQUIRE_EQ(output_values.size(), input_values.size());
+    for (size_t i = 0; i < input_values.size(); ++i) {
+        requireNear(output_values[i], input_values[i]);
     }
 }
 
@@ -229,18 +233,22 @@ TEST_CASE(real_neuriplo_serves_two_backends_in_one_process) {
             element_count *= static_cast<size_t>(dim);
         }
         REQUIRE_EQ(element_count, static_cast<size_t>(48));
+        std::vector<double> input_values;
         for (size_t i = 0; i < element_count; ++i) {
-            input.data.push_back(static_cast<double>(i) / 10.0);
+            input_values.push_back(static_cast<double>(i) / 10.0);
         }
+        input.bytes = tensorBytesFromDoubles(input.datatype, input_values);
         request.inputs.push_back(input);
 
         const auto scheduled = handle->scheduler->submit(std::move(request));
         REQUIRE(scheduled.ok);
         REQUIRE(scheduled.response.ok);
         REQUIRE_EQ(scheduled.response.outputs.size(), static_cast<size_t>(1));
-        REQUIRE_EQ(scheduled.response.outputs[0].data.size(), static_cast<size_t>(48));
+        const auto output_values = tensorValuesAsDoubles(scheduled.response.outputs[0].datatype,
+                                                         scheduled.response.outputs[0].bytes);
+        REQUIRE_EQ(output_values.size(), static_cast<size_t>(48));
         for (size_t i = 0; i < 48; ++i) {
-            requireNear(scheduled.response.outputs[0].data[i], static_cast<double>(i) / 10.0);
+            requireNear(output_values[i], static_cast<double>(i) / 10.0);
         }
     }
 }

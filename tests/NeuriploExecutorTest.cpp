@@ -67,11 +67,13 @@ class FakeNeuriploAdapter final : public NeuriploAdapter {
             tensor.name = metadata_.outputs[i].name;
             tensor.datatype = metadata_.outputs[i].datatype;
             tensor.shape = metadata_.outputs[i].shape;
-            if (!inputs.empty() && !inputs.front().data.empty()) {
-                tensor.data = {inputs.front().data.front()};
-            } else {
-                tensor.data = {static_cast<double>(i)};
-            }
+            const auto front_values =
+                inputs.empty()
+                    ? std::vector<double>{}
+                    : tensorValuesAsDoubles(inputs.front().datatype, inputs.front().bytes);
+            tensor.bytes = tensorBytesFromDoubles(
+                tensor.datatype,
+                {front_values.empty() ? static_cast<double>(i) : front_values.front()});
             result.outputs.push_back(std::move(tensor));
         }
         return result;
@@ -85,9 +87,19 @@ class FakeNeuriploAdapter final : public NeuriploAdapter {
     ModelMetadata metadata_;
 };
 
+InputTensor makeInput(std::string name, std::string datatype, std::vector<int64_t> shape,
+                      const std::vector<double> &values) {
+    InputTensor tensor;
+    tensor.name = std::move(name);
+    tensor.datatype = std::move(datatype);
+    tensor.shape = std::move(shape);
+    tensor.bytes = tensorBytesFromDoubles(tensor.datatype, values);
+    return tensor;
+}
+
 ExecutionRequest request(std::vector<std::string> outputs = {}) {
     ExecutionRequest execution_request;
-    execution_request.inputs.push_back({"input", "FP32", {1, 3}, {1.0, 2.0, 3.0}});
+    execution_request.inputs.push_back(makeInput("input", "FP32", {1, 3}, {1.0, 2.0, 3.0}));
     execution_request.requested_outputs = std::move(outputs);
     return execution_request;
 }
@@ -126,7 +138,7 @@ TEST_CASE(neuriplo_executor_runs_inference_and_filters_outputs) {
     REQUIRE_EQ(response.outputs.size(), static_cast<size_t>(1));
     REQUIRE_EQ(response.outputs[0].name, "scores");
     REQUIRE_EQ(response.outputs[0].datatype, "FP32");
-    REQUIRE(!response.outputs[0].data.empty());
+    REQUIRE(!response.outputs[0].bytes.empty());
 }
 
 TEST_CASE(neuriplo_executor_orders_inputs_by_metadata) {
@@ -137,15 +149,15 @@ TEST_CASE(neuriplo_executor_orders_inputs_by_metadata) {
     REQUIRE(executor != nullptr);
 
     ExecutionRequest execution_request;
-    execution_request.inputs.push_back({"second", "FP32", {1}, {2.0}});
-    execution_request.inputs.push_back({"first", "FP32", {1}, {1.0}});
+    execution_request.inputs.push_back(makeInput("second", "FP32", {1}, {2.0}));
+    execution_request.inputs.push_back(makeInput("first", "FP32", {1}, {1.0}));
     execution_request.requested_outputs = {"scores"};
 
     const auto response = executor->infer(execution_request);
     REQUIRE(response.ok);
     REQUIRE_EQ(response.outputs.size(), static_cast<size_t>(1));
     REQUIRE_EQ(response.outputs[0].name, "scores");
-    REQUIRE(!response.outputs[0].data.empty());
+    REQUIRE(!response.outputs[0].bytes.empty());
 }
 
 TEST_CASE(neuriplo_executor_rejects_missing_required_input) {
@@ -156,7 +168,7 @@ TEST_CASE(neuriplo_executor_rejects_missing_required_input) {
     REQUIRE(executor != nullptr);
 
     ExecutionRequest execution_request;
-    execution_request.inputs.push_back({"first", "FP32", {1}, {1.0}});
+    execution_request.inputs.push_back(makeInput("first", "FP32", {1}, {1.0}));
 
     const auto response = executor->infer(execution_request);
     REQUIRE(!response.ok);
@@ -171,7 +183,7 @@ TEST_CASE(neuriplo_executor_rejects_duplicate_input) {
     REQUIRE(executor != nullptr);
 
     auto execution_request = request();
-    execution_request.inputs.push_back({"input", "FP32", {1, 3}, {4.0, 5.0, 6.0}});
+    execution_request.inputs.push_back(makeInput("input", "FP32", {1, 3}, {4.0, 5.0, 6.0}));
 
     const auto response = executor->infer(execution_request);
     REQUIRE(!response.ok);
@@ -200,7 +212,7 @@ TEST_CASE(neuriplo_executor_rejects_data_length_mismatch) {
     REQUIRE(executor != nullptr);
 
     auto execution_request = request();
-    execution_request.inputs[0].data = {1.0, 2.0};
+    execution_request.inputs[0].bytes = tensorBytesFromDoubles("FP32", {1.0, 2.0});
 
     const auto response = executor->infer(execution_request);
     REQUIRE(!response.ok);
@@ -226,13 +238,13 @@ TEST_CASE(neuriplo_executor_supports_integer_datatypes) {
     REQUIRE(executor != nullptr);
 
     ExecutionRequest execution_request;
-    execution_request.inputs.push_back({"input", "INT32", {1, 3}, {1.0, 2.0, 3.0}});
+    execution_request.inputs.push_back(makeInput("input", "INT32", {1, 3}, {1.0, 2.0, 3.0}));
 
     const auto response = executor->infer(execution_request);
     REQUIRE(response.ok);
     REQUIRE_EQ(real_adapter->last_inputs.size(), static_cast<size_t>(1));
     REQUIRE_EQ(real_adapter->last_inputs[0].datatype, "INT32");
-    REQUIRE_EQ(real_adapter->last_inputs[0].data.size(), static_cast<size_t>(3));
+    REQUIRE_EQ(real_adapter->last_inputs[0].elementCount(), static_cast<size_t>(3));
 }
 
 TEST_CASE(neuriplo_executor_supports_fp16_datatype) {
@@ -251,7 +263,7 @@ TEST_CASE(neuriplo_executor_supports_fp16_datatype) {
     REQUIRE(executor != nullptr);
 
     ExecutionRequest execution_request;
-    execution_request.inputs.push_back({"input", "FP16", {1, 3}, {1.0, 2.0, 3.0}});
+    execution_request.inputs.push_back(makeInput("input", "FP16", {1, 3}, {1.0, 2.0, 3.0}));
 
     const auto response = executor->infer(execution_request);
     REQUIRE(response.ok);
@@ -273,7 +285,7 @@ TEST_CASE(neuriplo_executor_supports_fp64_datatype) {
     REQUIRE(executor != nullptr);
 
     ExecutionRequest execution_request;
-    execution_request.inputs.push_back({"input", "FP64", {1, 3}, {1.0, 2.0, 3.0}});
+    execution_request.inputs.push_back(makeInput("input", "FP64", {1, 3}, {1.0, 2.0, 3.0}));
 
     const auto response = executor->infer(execution_request);
     REQUIRE(response.ok);
@@ -295,7 +307,7 @@ TEST_CASE(neuriplo_executor_supports_uint8_datatype) {
     REQUIRE(executor != nullptr);
 
     ExecutionRequest execution_request;
-    execution_request.inputs.push_back({"input", "UINT8", {1, 3}, {1.0, 2.0, 3.0}});
+    execution_request.inputs.push_back(makeInput("input", "UINT8", {1, 3}, {1.0, 2.0, 3.0}));
 
     const auto response = executor->infer(execution_request);
     REQUIRE(response.ok);
@@ -331,7 +343,7 @@ TEST_CASE(neuriplo_executor_preserves_int32_output_datatype) {
     REQUIRE(executor != nullptr);
 
     ExecutionRequest execution_request;
-    execution_request.inputs.push_back({"input", "INT32", {1, 3}, {1.0, 2.0, 3.0}});
+    execution_request.inputs.push_back(makeInput("input", "INT32", {1, 3}, {1.0, 2.0, 3.0}));
 
     const auto response = executor->infer(execution_request);
     REQUIRE(response.ok);
@@ -357,7 +369,7 @@ TEST_CASE(neuriplo_executor_preserves_fp16_output_datatype) {
     REQUIRE(executor != nullptr);
 
     ExecutionRequest execution_request;
-    execution_request.inputs.push_back({"input", "FP16", {1, 3}, {1.0, 2.0, 3.0}});
+    execution_request.inputs.push_back(makeInput("input", "FP16", {1, 3}, {1.0, 2.0, 3.0}));
 
     const auto response = executor->infer(execution_request);
     REQUIRE(response.ok);
@@ -381,7 +393,7 @@ TEST_CASE(neuriplo_executor_preserves_uint8_output_datatype) {
     REQUIRE(executor != nullptr);
 
     ExecutionRequest execution_request;
-    execution_request.inputs.push_back({"input", "UINT8", {1, 3}, {1.0, 2.0, 3.0}});
+    execution_request.inputs.push_back(makeInput("input", "UINT8", {1, 3}, {1.0, 2.0, 3.0}));
 
     const auto response = executor->infer(execution_request);
     REQUIRE(response.ok);
