@@ -5,6 +5,7 @@
 
 #include "kserve_grpc.pb.h"
 
+#include <cstring>
 #include <string>
 
 namespace {
@@ -106,9 +107,31 @@ TEST_CASE(grpc_codec_builds_infer_response) {
     REQUIRE_EQ(proto.outputs(0).shape_size(), 2);
     REQUIRE_EQ(proto.outputs(0).shape(0), 1);
     REQUIRE_EQ(proto.outputs(0).shape(1), 1);
-    REQUIRE_EQ(proto.outputs(0).contents().fp64_contents_size(), 2);
-    REQUIRE_EQ(proto.outputs(0).contents().fp64_contents(0), 42.0);
-    REQUIRE_EQ(proto.outputs(0).contents().fp64_contents(1), 99.0);
+    REQUIRE_EQ(proto.outputs(0).contents().fp64_contents_size(), 0);
+    REQUIRE_EQ(proto.raw_output_contents_size(), 1);
+    const auto &raw = proto.raw_output_contents(0);
+    REQUIRE_EQ(raw.size(), output.bytes.size());
+    REQUIRE(std::memcmp(raw.data(), output.bytes.data(), raw.size()) == 0);
+}
+
+TEST_CASE(grpc_codec_builds_bytes_infer_response) {
+    ExecutionResponse exec_response;
+    exec_response.ok = true;
+    OutputTensor output;
+    output.name = "text";
+    output.datatype = "BYTES";
+    output.shape = {1};
+    output.string_data = {"hello world"};
+    exec_response.outputs.push_back(output);
+
+    const auto proto = grpc_v2::buildInferResponse(exec_response, "llm", "1",
+                                                   std::optional<std::string>{});
+
+    REQUIRE_EQ(proto.outputs_size(), 1);
+    REQUIRE_EQ(proto.outputs(0).datatype(), "BYTES");
+    REQUIRE_EQ(proto.outputs(0).contents().bytes_contents_size(), 1);
+    REQUIRE_EQ(proto.outputs(0).contents().bytes_contents(0), "hello world");
+    REQUIRE_EQ(proto.raw_output_contents_size(), 0);
 }
 
 TEST_CASE(grpc_codec_builds_infer_response_without_id) {
