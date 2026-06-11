@@ -7,6 +7,8 @@
 #include "InferenceBackendSetup.hpp"
 #include "Tokenizer.hpp"
 
+#include <algorithm>
+#include <cctype>
 #include <cstddef>
 #include <cstring>
 #include <memory>
@@ -15,92 +17,38 @@
 
 namespace {
 
-template <typename T> std::vector<uint8_t> numericBytes(const InputTensor &tensor) {
-    std::vector<uint8_t> bytes(tensor.data.size() * sizeof(T));
-    for (size_t i = 0; i < tensor.data.size(); ++i) {
-        const auto value = static_cast<T>(tensor.data[i]);
-        std::memcpy(bytes.data() + (i * sizeof(T)), &value, sizeof(T));
-    }
-    return bytes;
+// Runtime backend ids are lowercase ("onnx_runtime"); neuriplo registry ids
+// are the same words uppercased ("ONNX_RUNTIME").
+std::string toNeuriploBackendId(const std::string &backend) {
+    std::string id = backend;
+    std::transform(id.begin(), id.end(), id.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
+    return id;
 }
 
+std::string toRuntimeBackendId(const std::string &backend) {
+    std::string id = backend;
+    std::transform(id.begin(), id.end(), id.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return id;
+}
+
+// Canonical tensors already hold typed contiguous bytes (FP16 widened to
+// float, matching what this adapter always handed to backends), so the
+// backend payload is a straight byte copy.
 std::vector<uint8_t> tensorToBytes(const InputTensor &tensor) {
-    const auto &dt = tensor.datatype;
-    if (dt == "BYTES") {
+    if (tensor.datatype == "BYTES") {
         std::vector<uint8_t> bytes;
         for (const auto &element : tensor.string_data) {
             bytes.insert(bytes.end(), element.begin(), element.end());
         }
         return bytes;
     }
-    if (dt == "BOOL" || dt == "INT8")
-        return numericBytes<int8_t>(tensor);
-    if (dt == "INT16")
-        return numericBytes<int16_t>(tensor);
-    if (dt == "INT32")
-        return numericBytes<int32_t>(tensor);
-    if (dt == "INT64")
-        return numericBytes<int64_t>(tensor);
-    if (dt == "UINT8")
-        return numericBytes<uint8_t>(tensor);
-    if (dt == "UINT16")
-        return numericBytes<uint16_t>(tensor);
-    if (dt == "UINT32")
-        return numericBytes<uint32_t>(tensor);
-    if (dt == "UINT64")
-        return numericBytes<uint64_t>(tensor);
-    if (dt == "FP16") {
-        std::vector<uint8_t> bytes(tensor.data.size() * sizeof(float));
-        for (size_t i = 0; i < tensor.data.size(); ++i) {
-            const auto value = static_cast<float>(tensor.data[i]);
-            std::memcpy(bytes.data() + (i * sizeof(float)), &value, sizeof(float));
-        }
-        return bytes;
+    if (tensorElementSize(tensor.datatype) == 0) {
+        throw std::runtime_error("unsupported input datatype: " + tensor.datatype);
     }
-    if (dt == "FP32")
-        return numericBytes<float>(tensor);
-    if (dt == "FP64")
-        return numericBytes<double>(tensor);
-    throw std::runtime_error("unsupported input datatype: " + dt);
-}
-
-template <typename T> std::vector<double> numericFromBytes(const std::vector<uint8_t> &bytes) {
-    const size_t count = bytes.size() / sizeof(T);
-    std::vector<double> data(count);
-    for (size_t i = 0; i < count; ++i) {
-        T value;
-        std::memcpy(&value, bytes.data() + (i * sizeof(T)), sizeof(T));
-        data[i] = static_cast<double>(value);
-    }
-    return data;
-}
-
-std::vector<double> bytesToTensor(const std::vector<uint8_t> &bytes, const std::string &datatype) {
-    if (bytes.empty()) {
-        return {};
-    }
-    const auto &dt = datatype;
-    if (dt == "BOOL" || dt == "INT8")
-        return numericFromBytes<int8_t>(bytes);
-    if (dt == "INT16")
-        return numericFromBytes<int16_t>(bytes);
-    if (dt == "INT32")
-        return numericFromBytes<int32_t>(bytes);
-    if (dt == "INT64")
-        return numericFromBytes<int64_t>(bytes);
-    if (dt == "UINT8")
-        return numericFromBytes<uint8_t>(bytes);
-    if (dt == "UINT16")
-        return numericFromBytes<uint16_t>(bytes);
-    if (dt == "UINT32")
-        return numericFromBytes<uint32_t>(bytes);
-    if (dt == "UINT64")
-        return numericFromBytes<uint64_t>(bytes);
-    if (dt == "FP32")
-        return numericFromBytes<float>(bytes);
-    if (dt == "FP64")
-        return numericFromBytes<double>(bytes);
-    throw std::runtime_error("unsupported output datatype: " + dt);
+    const auto *begin = reinterpret_cast<const uint8_t *>(tensor.bytes.data());
+    return {begin, begin + tensor.bytes.size()};
 }
 
 std::vector<std::string> extractDatatypes(const std::vector<LayerInfo> &layers) {
@@ -140,9 +88,22 @@ double tensorElementToDouble(const TensorElement &element) {
 class RealNeuriploAdapter final : public NeuriploAdapter {
   public:
     ModelMetadata load(const RuntimeConfig &config) override {
-        engine_ = setup_inference_engine(config.model_path);
+        EngineOptions options;
+        options.model_path = config.model_path;
+        options.backend_id = toNeuriploBackendId(config.backend);
+        options.plugin_dir = config.plugin_dir;
+        options.input_sizes = config.input_sizes;
+        engine_ = setup_inference_engine(options);
         if (!engine_) {
-            throw std::runtime_error("setup_inference_engine returned null");
+            std::string available;
+            for (const auto &id : realNeuriploAvailableBackends(config.plugin_dir)) {
+                if (!available.empty()) {
+                    available += ", ";
+                }
+                available += id;
+            }
+            throw std::runtime_error("failed to load backend '" + config.backend +
+                                     "' (available in this process: " + available + ")");
         }
 
         const auto backend_metadata = engine_->get_inference_metadata();
@@ -195,10 +156,16 @@ class RealNeuriploAdapter final : public NeuriploAdapter {
                 output.datatype = "FP32";
             }
             output.shape = i < shapes.size() ? shapes[i] : std::vector<int64_t>{};
-            output.data.reserve(values[i].size());
-            for (const auto &value : values[i]) {
-                output.data.push_back(tensorElementToDouble(value));
-            }
+            // Outputs are declared FP32 (extractDatatypes); convert each
+            // TensorElement variant to the declared element type once here.
+            withTensorElementType(output.datatype, [&](auto element) {
+                using T = decltype(element);
+                output.bytes.resize(values[i].size() * sizeof(T));
+                for (size_t j = 0; j < values[i].size(); ++j) {
+                    const auto typed = static_cast<T>(tensorElementToDouble(values[i][j]));
+                    std::memcpy(output.bytes.data() + (j * sizeof(T)), &typed, sizeof(T));
+                }
+            });
             result.outputs.push_back(std::move(output));
         }
         return result;
@@ -272,9 +239,29 @@ class RealNeuriploAdapter final : public NeuriploAdapter {
 std::unique_ptr<NeuriploAdapter> makeRealNeuriploAdapter() {
     return std::make_unique<RealNeuriploAdapter>();
 }
+
+bool realNeuriploSupportEnabled() noexcept {
+    return true;
+}
+
+std::vector<std::string> realNeuriploAvailableBackends(const std::string &plugin_dir) {
+    std::vector<std::string> ids;
+    for (const auto &id : available_backend_ids(plugin_dir)) {
+        ids.push_back(toRuntimeBackendId(id));
+    }
+    return ids;
+}
 #else
 std::unique_ptr<NeuriploAdapter> makeRealNeuriploAdapter() {
     throw std::runtime_error("real neuriplo support is not enabled; rebuild with "
                              "NEURIPLO_RUNTIME_ENABLE_REAL_NEURIPLO=ON");
+}
+
+bool realNeuriploSupportEnabled() noexcept {
+    return false;
+}
+
+std::vector<std::string> realNeuriploAvailableBackends(const std::string & /*plugin_dir*/) {
+    return {};
 }
 #endif

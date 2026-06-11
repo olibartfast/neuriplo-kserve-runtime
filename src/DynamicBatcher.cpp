@@ -7,7 +7,7 @@
 
 namespace {
 
-size_t tensorElementCount(const std::vector<int64_t> &shape) {
+size_t shapeElementCount(const std::vector<int64_t> &shape) {
     if (shape.empty()) {
         return 0;
     }
@@ -36,14 +36,14 @@ InputTensor mergeInputTensors(const std::vector<InputTensor> &inputs,
     merged.shape[0] = static_cast<int64_t>(
         std::accumulate(batch_sizes.begin(), batch_sizes.end(), static_cast<size_t>(0)));
 
-    size_t total_elements = 0;
+    size_t total_bytes = 0;
     for (const auto &input : inputs) {
-        total_elements += input.data.size();
+        total_bytes += input.bytes.size();
     }
-    merged.data.clear();
-    merged.data.reserve(total_elements);
+    merged.bytes.clear();
+    merged.bytes.reserve(total_bytes);
     for (const auto &input : inputs) {
-        merged.data.insert(merged.data.end(), input.data.begin(), input.data.end());
+        merged.bytes.insert(merged.bytes.end(), input.bytes.begin(), input.bytes.end());
     }
     return merged;
 }
@@ -159,8 +159,9 @@ splitExecutionResponse(const ExecutionResponse &batched, const std::vector<size_
                 break;
             }
 
-            const size_t expected_elements = tensorElementCount(output.shape);
-            if (expected_elements != output.data.size()) {
+            const size_t element_size = tensorElementSize(output.datatype);
+            const size_t expected_elements = shapeElementCount(output.shape);
+            if (element_size == 0 || expected_elements * element_size != output.bytes.size()) {
                 response.ok = false;
                 response.error_code = "BACKEND_ERROR";
                 response.error_message = "batched output data size mismatch";
@@ -177,9 +178,9 @@ splitExecutionResponse(const ExecutionResponse &batched, const std::vector<size_
                 break;
             }
 
-            const size_t start = batch_offset * slice_elements;
-            const size_t end = start + request_batch * slice_elements;
-            if (start > output.data.size() || end > output.data.size()) {
+            const size_t start = batch_offset * slice_elements * element_size;
+            const size_t end = start + (request_batch * slice_elements * element_size);
+            if (start > output.bytes.size() || end > output.bytes.size()) {
                 response.ok = false;
                 response.error_code = "BACKEND_ERROR";
                 response.error_message = "batched output size mismatch";
@@ -187,9 +188,9 @@ splitExecutionResponse(const ExecutionResponse &batched, const std::vector<size_
                 break;
             }
 
-            split_output.data.assign(output.data.begin() + static_cast<std::ptrdiff_t>(start),
-                                     output.data.begin() + static_cast<std::ptrdiff_t>(end));
-            if (tensorElementCount(split_output.shape) != split_output.data.size()) {
+            split_output.bytes.assign(output.bytes.begin() + static_cast<std::ptrdiff_t>(start),
+                                      output.bytes.begin() + static_cast<std::ptrdiff_t>(end));
+            if (shapeElementCount(split_output.shape) * element_size != split_output.bytes.size()) {
                 response.ok = false;
                 response.error_code = "BACKEND_ERROR";
                 response.error_message = "batched output slice data size mismatch";

@@ -66,6 +66,9 @@ message ModelInferRequest {
   map<string, InferParameter> parameters = 4;
   repeated InferInputTensor inputs = 5;
   repeated InferRequestedOutputTensor outputs = 6;
+  // Raw little-endian tensor bytes, one entry per input tensor in order.
+  // When present for an input, it replaces that input's contents field.
+  repeated bytes raw_input_contents = 7;
 
   message InferInputTensor {
     string name = 1;

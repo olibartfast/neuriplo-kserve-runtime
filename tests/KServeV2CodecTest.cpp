@@ -88,10 +88,10 @@ TEST_CASE(kserve_v2_codec_preserves_input_tensor_data) {
     REQUIRE_EQ(parsed.request.inputs[0].shape.size(), static_cast<size_t>(2));
     REQUIRE_EQ(parsed.request.inputs[0].shape[0], 1);
     REQUIRE_EQ(parsed.request.inputs[0].shape[1], 3);
-    REQUIRE_EQ(parsed.request.inputs[0].data.size(), static_cast<size_t>(3));
-    REQUIRE_EQ(parsed.request.inputs[0].data[0], 1.25);
-    REQUIRE_EQ(parsed.request.inputs[0].data[1], 2.5);
-    REQUIRE_EQ(parsed.request.inputs[0].data[2], 3.75);
+    REQUIRE_EQ(parsed.request.inputs[0].elementCount(), static_cast<size_t>(3));
+    REQUIRE_EQ(tensorScalarAt<float>(parsed.request.inputs[0].bytes, 0), 1.25f);
+    REQUIRE_EQ(tensorScalarAt<float>(parsed.request.inputs[0].bytes, 1), 2.5f);
+    REQUIRE_EQ(tensorScalarAt<float>(parsed.request.inputs[0].bytes, 2), 3.75f);
 }
 
 TEST_CASE(kserve_v2_codec_parses_requested_outputs) {

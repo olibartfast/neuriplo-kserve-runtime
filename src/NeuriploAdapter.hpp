@@ -44,3 +44,11 @@ class NeuriploAdapter {
 using NeuriploAdapterFactory = std::unique_ptr<NeuriploAdapter> (*)();
 
 std::unique_ptr<NeuriploAdapter> makeRealNeuriploAdapter();
+
+// True when this binary was built with NEURIPLO_RUNTIME_ENABLE_REAL_NEURIPLO.
+bool realNeuriploSupportEnabled() noexcept;
+
+// Runtime backend ids (lowercase, e.g. "onnx_runtime") this process can serve
+// through neuriplo: compiled-in backends plus plugins discovered under
+// plugin_dir / NEURIPLO_PLUGIN_DIR. Empty when real support is disabled.
+std::vector<std::string> realNeuriploAvailableBackends(const std::string &plugin_dir = "");

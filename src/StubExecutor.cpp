@@ -165,7 +165,8 @@ class StubExecutor final : public Executor {
         for (const auto dimension : output.shape) {
             element_count *= static_cast<size_t>(dimension);
         }
-        output.data.assign(element_count, 0.0);
+        // All-zero bytes decode to zero for every fixed-size datatype.
+        output.bytes.assign(element_count * tensorElementSize(output.datatype), std::byte{0});
         return output;
     }
 

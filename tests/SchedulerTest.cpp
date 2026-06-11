@@ -32,7 +32,9 @@ class CountingExecutor final : public Executor {
         output.name = "output";
         output.datatype = "FP32";
         output.shape = {1, 1};
-        output.data = {static_cast<double>(completed_.fetch_add(1, std::memory_order_relaxed) + 1)};
+        output.bytes = tensorBytesFromDoubles(
+            output.datatype,
+            {static_cast<double>(completed_.fetch_add(1, std::memory_order_relaxed) + 1)});
         response.outputs.push_back(std::move(output));
         completed_ids_.push_back(id);
         return response;
@@ -62,7 +64,7 @@ class SlowExecutor final : public Executor {
         output.name = "output";
         output.datatype = "FP32";
         output.shape = {1, 1};
-        output.data = {1.0};
+        output.bytes = tensorBytesFromDoubles(output.datatype, {1.0});
         response.outputs.push_back(std::move(output));
         return response;
     }
@@ -109,7 +111,8 @@ class BatchTrackingExecutor final : public Executor {
         output.name = "output";
         output.datatype = "FP32";
         output.shape = {batch_size, 1};
-        output.data.assign(static_cast<size_t>(batch_size), 0.0);
+        output.bytes = tensorBytesFromDoubles(
+            output.datatype, std::vector<double>(static_cast<size_t>(batch_size), 0.0));
         response.outputs.push_back(std::move(output));
         return response;
     }
@@ -139,7 +142,7 @@ class BlockingExecutor final : public Executor {
         output.name = "output";
         output.datatype = "FP32";
         output.shape = {1, 1};
-        output.data = {1.0};
+        output.bytes = tensorBytesFromDoubles(output.datatype, {1.0});
         response.outputs.push_back(std::move(output));
         return response;
     }
@@ -213,7 +216,8 @@ class RecordingBatchExecutor final : public Executor {
         output.name = "output";
         output.datatype = "FP32";
         output.shape = {batch_dimension, 1};
-        output.data.assign(static_cast<size_t>(batch_dimension), 0.0);
+        output.bytes = tensorBytesFromDoubles(
+            output.datatype, std::vector<double>(static_cast<size_t>(batch_dimension), 0.0));
         response.outputs.push_back(std::move(output));
         return response;
     }
@@ -417,7 +421,7 @@ TEST_CASE(scheduler_batched_outputs_match_single_request_shape) {
     REQUIRE_EQ(single_output.name, "output");
     REQUIRE_EQ(single_output.datatype, "FP32");
     REQUIRE_EQ(single_output.shape, (std::vector<int64_t>{1, 1}));
-    REQUIRE_EQ(single_output.data.size(), static_cast<size_t>(1));
+    REQUIRE_EQ(single_output.elementCount(), static_cast<size_t>(1));
 
     SchedulerConfig batch_config;
     batch_config.instances = 1;
@@ -445,7 +449,7 @@ TEST_CASE(scheduler_batched_outputs_match_single_request_shape) {
         REQUIRE_EQ(batched_output.name, single_output.name);
         REQUIRE_EQ(batched_output.datatype, single_output.datatype);
         REQUIRE_EQ(batched_output.shape, single_output.shape);
-        REQUIRE_EQ(batched_output.data.size(), single_output.data.size());
+        REQUIRE_EQ(batched_output.elementCount(), single_output.elementCount());
     }
 }
 

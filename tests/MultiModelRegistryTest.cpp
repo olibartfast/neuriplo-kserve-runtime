@@ -37,7 +37,7 @@ ModelRegistry::ExecutorFactory markerFactory(double marker_value,
                 output.name = "output";
                 output.datatype = "FP32";
                 output.shape = {1, 1};
-                output.data = {marker_};
+                output.bytes = tensorBytesFromDoubles(output.datatype, {marker_});
                 response.outputs.push_back(std::move(output));
                 return response;
             }
@@ -88,7 +88,7 @@ TEST_CASE(multi_model_registry_reload_retires_old_scheduler_in_background) {
     request.requested_outputs = {"output"};
     const auto result = snapshot->scheduler->submit(std::move(request));
     REQUIRE(result.ok);
-    REQUIRE_EQ(result.response.outputs[0].data[0], 2.0);
+    REQUIRE_EQ(tensorScalarAt<float>(result.response.outputs[0].bytes, 0), 2.0f);
 }
 
 TEST_CASE(multi_model_registry_switch_version_keeps_old_version_snapshot) {
@@ -111,5 +111,5 @@ TEST_CASE(multi_model_registry_switch_version_keeps_old_version_snapshot) {
     new_request.requested_outputs = {"output"};
     const auto new_result = active->scheduler->submit(std::move(new_request));
     REQUIRE(new_result.ok);
-    REQUIRE_EQ(new_result.response.outputs[0].data[0], 2.0);
+    REQUIRE_EQ(tensorScalarAt<float>(new_result.response.outputs[0].bytes, 0), 2.0f);
 }

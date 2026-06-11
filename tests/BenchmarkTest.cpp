@@ -69,7 +69,8 @@ TEST_CASE(benchmark_scheduler_latency_stub_executor) {
     input.name = "input";
     input.datatype = "FP32";
     input.shape = {1, 3, 224, 224};
-    input.data.assign(3 * 224 * 224, 1.0);
+    input.bytes = tensorBytesFromDoubles(
+        input.datatype, std::vector<double>(static_cast<size_t>(3) * 224 * 224, 1.0));
     req.inputs.push_back(std::move(input));
     req.requested_outputs = {"output"};
 
@@ -101,6 +102,65 @@ TEST_CASE(benchmark_scheduler_latency_stub_executor) {
     REQUIRE(stats.p99 < 1000000.0);
 }
 
+TEST_CASE(benchmark_scheduler_latency_multi_mb_fp32) {
+    const auto cfg = benchConfig();
+    std::string error;
+    std::vector<std::unique_ptr<Executor>> executors;
+    for (size_t i = 0; i < cfg.instances; ++i) {
+        (void)i;
+        executors.push_back(makeStubExecutor(cfg, error));
+    }
+
+    SchedulerConfig sched_cfg;
+    sched_cfg.max_queue_size = cfg.max_queue_size;
+    sched_cfg.request_timeout_ms = cfg.request_timeout_ms;
+    sched_cfg.instances = cfg.instances;
+    auto scheduler = makeModelScheduler(std::move(executors), sched_cfg, cfg.model_name);
+    REQUIRE(scheduler != nullptr);
+
+    constexpr size_t warmup = 20;
+    constexpr size_t samples = 200;
+
+    // 1x3x1024x1024 FP32 = 12 MiB per request; dominated by payload copies
+    // through the scheduler rather than executor work.
+    ExecutionRequest req;
+    InputTensor input;
+    input.name = "input";
+    input.datatype = "FP32";
+    input.shape = {1, 3, 1024, 1024};
+    input.bytes = tensorBytesFromDoubles(
+        input.datatype, std::vector<double>(static_cast<size_t>(3) * 1024 * 1024, 1.0));
+    req.inputs.push_back(std::move(input));
+    req.requested_outputs = {"output"};
+
+    for (size_t i = 0; i < warmup; ++i) {
+        (void)scheduler->submit(req);
+    }
+
+    std::vector<double> latencies_us;
+    latencies_us.reserve(samples);
+
+    for (size_t i = 0; i < samples; ++i) {
+        const auto t0 = std::chrono::steady_clock::now();
+        auto result = scheduler->submit(req);
+        const auto t1 = std::chrono::steady_clock::now();
+        REQUIRE(result.ok);
+        latencies_us.push_back(static_cast<double>(
+            std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count()));
+    }
+
+    const auto stats = computeStats(latencies_us);
+
+    printf("\n  Multi-MB FP32 (12 MiB/request) scheduler latency (N=%zu):\n", stats.count);
+    printf("    mean: %8.1f us\n", stats.mean);
+    printf("    p50:  %8.1f us\n", stats.p50);
+    printf("    p95:  %8.1f us\n", stats.p95);
+    printf("    p99:  %8.1f us\n", stats.p99);
+
+    REQUIRE(stats.p50 >= 0);
+    REQUIRE(stats.p99 < 1000000.0);
+}
+
 TEST_CASE(benchmark_scheduler_throughput_submit_wait) {
     const auto cfg = benchConfig();
     std::string error;
@@ -122,7 +182,8 @@ TEST_CASE(benchmark_scheduler_throughput_submit_wait) {
     input.name = "input";
     input.datatype = "FP32";
     input.shape = {1, 3, 224, 224};
-    input.data.assign(3 * 224 * 224, 1.0);
+    input.bytes = tensorBytesFromDoubles(
+        input.datatype, std::vector<double>(static_cast<size_t>(3) * 224 * 224, 1.0));
     req.inputs.push_back(std::move(input));
     req.requested_outputs = {"output"};
 
