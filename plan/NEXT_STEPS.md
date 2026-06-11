@@ -58,6 +58,70 @@ Step 13 is complete. See `plan/STEP13.md`.
 
 Step 14 is complete. See `plan/STEP14.md`.
 
+## Multi-Backend Track (Complete)
+
+Phases 0–2 (multi-backend registry, plugin ABI/loader, runtime integration) and Phase 3.1
+(typed byte-buffer input hot path, ~2.5× latency improvement) are merged to `develop` in
+both `neuriplo` and `neuriplo-kserve-runtime`. Nothing from the approved multi-backend
+plan remains in scope.
+
+### In-flight merge gates
+
+| PR | Repo | Purpose | Status |
+|----|------|---------|--------|
+| [#7](https://github.com/olibartfast/neuriplo-kserve-runtime/pull/7) | runtime | CI: real-* jobs check out `neuriplo@develop` after PR #13 merge | ✅ Merged |
+| [#14](https://github.com/olibartfast/neuriplo/pull/14) | neuriplo | `get_infer_results_raw()` + `RawOutputTensor` on built-in backends | Open; merge before runtime Step 15 CI goes green |
+
+**Merge order:** PR #14 (neuriplo raw API) → runtime Step 15 adapter PR.
+
+## Follow-ups (Priority: High)
+
+Natural completions and deferred items, roughly in order of value.
+
+### Step 15: Raw output hot path (next)
+
+**Goal:** Complete Phase 3.1 perf work on the output side. Plugins already bypass
+`TensorElement` via the C ABI; built-in backends still pay ~16 B/scalar through
+`get_infer_results()`.
+
+**Blocked on:** neuriplo PR #14 merge to `develop` for CI; adapter work in
+`feature/step-15-raw-output`.
+
+| # | Item | Status |
+|---|------|--------|
+| 15.1 | `RealNeuriploAdapter::infer()` calls `get_infer_results_raw()` | ✅ Done |
+| 15.2 | Map `RawOutputTensor.dtype` → KServe datatype; move `bytes`/`shape` directly into `OutputTensor` | ✅ Done |
+| 15.3 | Drop `tensorElementToDouble` / `withTensorElementType` scalar loop on tensor path | ✅ Done |
+| 15.4 | Keep `llmInfer()` on `get_infer_results()` until neuriplo exposes raw LLM output | Deferred |
+
+**Scope note:** existing real-neuriplo CI presets (`real-multi`, `real-plugin`,
+`real-onnx-grpc`) should cover regression; optional byte-identical comparison test vs old
+path.
+
+### CI hardening (small)
+
+| Item | Status |
+|------|--------|
+| Pin neuriplo SHA in runtime real-* jobs (cross-repo API drift guard) | In PR #7 / follow-up |
+| Free-disk-space step before ROCm/MIGraphX Docker builds | neuriplo-side (PR #14 era) |
+
+### Feature follow-ups (deferred)
+
+| Item | Notes |
+|------|-------|
+| `--model-repository` Triton-layout scan (`config.pbtxt` → backend id) | Auto-load `/home/oli/model_repository` without admin POSTs |
+| `device_id` / multi-GPU placement | Per-backend device selection |
+| Per-backend OBJECT-lib isolation (built-in mode) | Match plugin isolation for static backends |
+
+### Release
+
+Cut **neuriplo v0.6.0** (last release v0.5.0) and tag runtime after develop CI is stable
+post PR #7 + #14. Multi-backend + plugin ABI is a solid minor bump.
+
+### Parallel track (out of scope unless requested)
+
+`feature/step-13-2-infer-data-plane` — Step 13.2 data-plane work; separate from Step 15.
+
 ## Optimization Track (Priority: Low / Scale-Triggered)
 
 | Item | Trigger |
@@ -72,7 +136,7 @@ Step 14 is complete. See `plan/STEP14.md`.
 | Item | Status |
 |------|--------|
 | CI: build all sanitizers in parallel (currently sequential) | ✅ Done: `fail-fast: false` matrix (asan/ubsan/tsan run as parallel jobs) |
-| CI: `real-onnx-grpc` preset job | ✅ Done: checks out `neuriplo@feature/multi-backend-registry`, downloads ORT 1.19.2 CPU, builds + ctest |
+| CI: `real-onnx-grpc` preset job | ✅ Done: real-neuriplo presets build + ctest; PR #7 flips checkout to `neuriplo@develop` |
 | CI: E2E smoke test with stub model via curl | ✅ Done: `scripts/e2e-stub.sh` (11 checks incl. admin lifecycle) + `e2e-smoke` job |
 | CI triggers only covered `master`; GitFlow PRs target `develop` and ran no CI | ✅ Fixed: push/PR triggers cover `master` and `develop` |
 | `.gitignore` entry for `.antigravitycli/` | ✅ Done (plus `logs/`) |
