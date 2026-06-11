@@ -47,11 +47,12 @@ ctest --preset debug
 
 `debug` builds the runtime and unit test binary. `release` creates an optimized build.
 `lint` enables clang-tidy. `asan`, `ubsan`, and `tsan` build with sanitizer
-instrumentation. Real-neuriplo presets need a `../neuriplo` checkout: `real-onnx` /
+instrumentation. Real-neuriplo presets need a `../neuriplo` checkout on
+`feature/multi-backend-registry` (until merged to `develop`): `real-onnx` /
 `real-onnx-grpc` (single built-in ONNX Runtime), `real-multi` (built-in OpenCV DNN +
 ONNX Runtime in one binary), and `real-plugin` (OpenCV DNN built-in plus ONNX Runtime
 as a dlopen plugin; its ctest preset sets `NEURIPLO_PLUGIN_DIR` to the build's
-`plugins/` directory). `scripts/e2e-stub.sh` smoke-tests the stub HTTP surface;
+`plugins/` directory). CI real-neuriplo jobs check out the same neuriplo branch. `scripts/e2e-stub.sh` smoke-tests the stub HTTP surface;
 `scripts/e2e-multi-backend.sh` exercises two backends (ONNX Runtime built-in +
 TensorRT plugin) in one server on a local GPU machine — see its header for the
 required build. Run the runtime locally with:
