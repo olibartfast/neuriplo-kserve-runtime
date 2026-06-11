@@ -85,6 +85,20 @@ double tensorElementToDouble(const TensorElement &element) {
     return std::visit([](const auto value) { return static_cast<double>(value); }, element);
 }
 
+std::string tensorDtypeToKserve(TensorDtype dtype) {
+    switch (dtype) {
+    case TensorDtype::FP32:
+        return "FP32";
+    case TensorDtype::INT32:
+        return "INT32";
+    case TensorDtype::INT64:
+        return "INT64";
+    case TensorDtype::UINT8:
+        return "UINT8";
+    }
+    throw std::runtime_error("unsupported neuriplo output dtype");
+}
+
 class RealNeuriploAdapter final : public NeuriploAdapter {
   public:
     ModelMetadata load(const RuntimeConfig &config) override {
@@ -142,30 +156,24 @@ class RealNeuriploAdapter final : public NeuriploAdapter {
             backend_inputs.push_back(tensorToBytes(input));
         }
 
-        auto [values, shapes] = engine_->get_infer_results(backend_inputs);
+        const auto raw_outputs = engine_->get_infer_results_raw(backend_inputs);
 
         NeuriploInferenceResult result;
-        result.outputs.reserve(values.size());
-        for (size_t i = 0; i < values.size(); ++i) {
+        result.outputs.reserve(raw_outputs.size());
+        for (size_t i = 0; i < raw_outputs.size(); ++i) {
+            const auto &raw = raw_outputs[i];
             OutputTensor output;
             if (i < output_metadata_.size()) {
                 output.name = output_metadata_[i].name;
-                output.datatype = output_metadata_[i].datatype;
             } else {
                 output.name = "output_" + std::to_string(i);
-                output.datatype = "FP32";
             }
-            output.shape = i < shapes.size() ? shapes[i] : std::vector<int64_t>{};
-            // Outputs are declared FP32 (extractDatatypes); convert each
-            // TensorElement variant to the declared element type once here.
-            withTensorElementType(output.datatype, [&](auto element) {
-                using T = decltype(element);
-                output.bytes.resize(values[i].size() * sizeof(T));
-                for (size_t j = 0; j < values[i].size(); ++j) {
-                    const auto typed = static_cast<T>(tensorElementToDouble(values[i][j]));
-                    std::memcpy(output.bytes.data() + (j * sizeof(T)), &typed, sizeof(T));
-                }
-            });
+            output.datatype = tensorDtypeToKserve(raw.dtype);
+            output.shape = raw.shape;
+            output.bytes.resize(raw.bytes.size());
+            if (!raw.bytes.empty()) {
+                std::memcpy(output.bytes.data(), raw.bytes.data(), raw.bytes.size());
+            }
             result.outputs.push_back(std::move(output));
         }
         return result;
