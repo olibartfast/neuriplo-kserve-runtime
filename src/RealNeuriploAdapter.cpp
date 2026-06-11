@@ -7,6 +7,8 @@
 #include "InferenceBackendSetup.hpp"
 #include "Tokenizer.hpp"
 
+#include <algorithm>
+#include <cctype>
 #include <cstddef>
 #include <cstring>
 #include <memory>
@@ -14,6 +16,22 @@
 #include <variant>
 
 namespace {
+
+// Runtime backend ids are lowercase ("onnx_runtime"); neuriplo registry ids
+// are the same words uppercased ("ONNX_RUNTIME").
+std::string toNeuriploBackendId(const std::string &backend) {
+    std::string id = backend;
+    std::transform(id.begin(), id.end(), id.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
+    return id;
+}
+
+std::string toRuntimeBackendId(const std::string &backend) {
+    std::string id = backend;
+    std::transform(id.begin(), id.end(), id.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return id;
+}
 
 template <typename T> std::vector<uint8_t> numericBytes(const InputTensor &tensor) {
     std::vector<uint8_t> bytes(tensor.data.size() * sizeof(T));
@@ -140,9 +158,22 @@ double tensorElementToDouble(const TensorElement &element) {
 class RealNeuriploAdapter final : public NeuriploAdapter {
   public:
     ModelMetadata load(const RuntimeConfig &config) override {
-        engine_ = setup_inference_engine(config.model_path);
+        EngineOptions options;
+        options.model_path = config.model_path;
+        options.backend_id = toNeuriploBackendId(config.backend);
+        options.plugin_dir = config.plugin_dir;
+        options.input_sizes = config.input_sizes;
+        engine_ = setup_inference_engine(options);
         if (!engine_) {
-            throw std::runtime_error("setup_inference_engine returned null");
+            std::string available;
+            for (const auto &id : realNeuriploAvailableBackends(config.plugin_dir)) {
+                if (!available.empty()) {
+                    available += ", ";
+                }
+                available += id;
+            }
+            throw std::runtime_error("failed to load backend '" + config.backend +
+                                     "' (available in this process: " + available + ")");
         }
 
         const auto backend_metadata = engine_->get_inference_metadata();
@@ -272,9 +303,29 @@ class RealNeuriploAdapter final : public NeuriploAdapter {
 std::unique_ptr<NeuriploAdapter> makeRealNeuriploAdapter() {
     return std::make_unique<RealNeuriploAdapter>();
 }
+
+bool realNeuriploSupportEnabled() noexcept {
+    return true;
+}
+
+std::vector<std::string> realNeuriploAvailableBackends(const std::string &plugin_dir) {
+    std::vector<std::string> ids;
+    for (const auto &id : available_backend_ids(plugin_dir)) {
+        ids.push_back(toRuntimeBackendId(id));
+    }
+    return ids;
+}
 #else
 std::unique_ptr<NeuriploAdapter> makeRealNeuriploAdapter() {
     throw std::runtime_error("real neuriplo support is not enabled; rebuild with "
                              "NEURIPLO_RUNTIME_ENABLE_REAL_NEURIPLO=ON");
+}
+
+bool realNeuriploSupportEnabled() noexcept {
+    return false;
+}
+
+std::vector<std::string> realNeuriploAvailableBackends(const std::string & /*plugin_dir*/) {
+    return {};
 }
 #endif

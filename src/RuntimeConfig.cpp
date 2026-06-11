@@ -146,6 +146,7 @@ RuntimeConfig parseRuntimeConfig(int argc, char **argv, const RuntimeEnvironment
     applyStringEnvironmentDefault(config.model_version, environment, "MODEL_VERSION");
     applyStringEnvironmentDefault(config.model_path, environment, "MODEL_PATH");
     applyStringEnvironmentDefault(config.backend, environment, "BACKEND");
+    applyStringEnvironmentDefault(config.plugin_dir, environment, "NEURIPLO_PLUGIN_DIR");
     applyStringEnvironmentDefault(config.storage_uri, environment, "STORAGE_URI");
     applyStringEnvironmentDefault(config.deployment, environment, "DEPLOYMENT");
     applySizeEnvironmentDefault(config.max_request_bytes, environment, "MAX_REQUEST_BYTES");
@@ -173,6 +174,8 @@ RuntimeConfig parseRuntimeConfig(int argc, char **argv, const RuntimeEnvironment
             config.model_path = requireValue(i, argc, argv, arg);
         } else if (arg == "--backend") {
             config.backend = requireValue(i, argc, argv, arg);
+        } else if (arg == "--plugin-dir") {
+            config.plugin_dir = requireValue(i, argc, argv, arg);
         } else if (arg == "--deployment") {
             config.deployment = requireValue(i, argc, argv, arg);
         } else if (arg == "--max-queue-size") {

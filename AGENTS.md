@@ -8,16 +8,32 @@ server. Unit tests live in `tests/` and are registered through CTest. Build pres
 defined in `CMakePresets.json`; CI is defined in `.github/workflows/ci.yml`. Local editor
 debug tasks are under `.vscode/`.
 
-Read `plan/STEP0.md` before assuming integration readiness. It documents the current
-implemented scaffold and the missing pieces that still block real `neuriplo`,
-`vision-core`, and `vision-inference` integration. Completed step snapshots live in
-`plan/STEP1.md` through `plan/STEP6.md`; use `plan/STEP<N>_WIP.md` only for in-progress step work.
+Read `plan/NEXT_STEPS.md` for current project status and the active work track. Completed
+step snapshots live in `plan/STEP0.md` through `plan/STEP14.md` (extend the range when a
+new `plan/STEP<N>.md` is added). Use `plan/STEP<N>_WIP.md` only for in-progress step work.
+`plan/STEP0.md` remains useful historical context for the original scaffold assumptions.
 
-Treat `plan/ROADMAP.md` as the target roadmap and step snapshots as the current-state
+Treat `plan/ROADMAP.md` as the target roadmap and step snapshots as the implementation
 record. For architecture work, read `plan/DESIGN_PATTERNS.md` for patterns in use today and
 the "Architecture And Design Pattern Evolution" section in `plan/ROADMAP.md` for planned
 patterns. Prefer extending existing Strategy/factory/adapter boundaries over adding new
 frameworks unless the roadmap calls for them.
+
+## MANDATORY: Agent Guide Maintenance
+
+**Agents must keep this file current.** When your task changes any item below, update the
+matching `AGENTS.md` section in the same PR/commit — do not wait for the user to ask.
+
+Triggers:
+
+- New or completed `plan/STEP<N>.md`, or material edits to `plan/NEXT_STEPS.md`
+- Build, test, lint, or CI command/preset changes
+- New `.cursor/rules/*.mdc` or other mandatory workflow rules
+- Repo layout, module boundaries, or default runtime invocation changes
+- New cross-cutting architectural patterns (also update `plan/DESIGN_PATTERNS.md`)
+
+Keep `AGENTS.md` as stable conventions and pointers. Do not duplicate full roadmap or step
+snapshot content here.
 
 ## Build, Test, and Development Commands
 
@@ -31,7 +47,14 @@ ctest --preset debug
 
 `debug` builds the runtime and unit test binary. `release` creates an optimized build.
 `lint` enables clang-tidy. `asan`, `ubsan`, and `tsan` build with sanitizer
-instrumentation. Run the runtime locally with:
+instrumentation. Real-neuriplo presets need a `../neuriplo` checkout: `real-onnx` /
+`real-onnx-grpc` (single built-in ONNX Runtime), `real-multi` (built-in OpenCV DNN +
+ONNX Runtime in one binary), and `real-plugin` (OpenCV DNN built-in plus ONNX Runtime
+as a dlopen plugin; its ctest preset sets `NEURIPLO_PLUGIN_DIR` to the build's
+`plugins/` directory). `scripts/e2e-stub.sh` smoke-tests the stub HTTP surface;
+`scripts/e2e-multi-backend.sh` exercises two backends (ONNX Runtime built-in +
+TensorRT plugin) in one server on a local GPU machine — see its header for the
+required build. Run the runtime locally with:
 
 ```bash
 ./build/debug/neuriplo-kserve-runtime --model-name demo --backend stub --port 8080
@@ -109,5 +132,5 @@ Feature PRs target `develop`; release and hotfix PRs target `master` (and back-m
 Do not commit model files, secrets, tokens, or generated `build*/` directories. Keep
 runtime defaults safe for local development, and document any new network-facing options
 in `README.md` and tests. Update `plan/DESIGN_PATTERNS.md` when introducing a new
-cross-cutting architectural pattern, and update `plan/ROADMAP.md` when changing planned
-architecture direction.
+cross-cutting architectural pattern, update `plan/ROADMAP.md` when changing planned
+architecture direction, and sync this file per "Agent Guide Maintenance" above.
