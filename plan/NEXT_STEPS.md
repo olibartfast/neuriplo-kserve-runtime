@@ -72,7 +72,7 @@ Step 14 is complete. See `plan/STEP14.md`.
 | Item | Status |
 |------|--------|
 | CI: build all sanitizers in parallel (currently sequential) | ✅ Done: `fail-fast: false` matrix (asan/ubsan/tsan run as parallel jobs) |
-| CI: `real-onnx-grpc` preset job | ✅ Done: checks out `neuriplo@develop`, downloads ORT 1.19.2 CPU, builds + ctest |
+| CI: `real-onnx-grpc` preset job | ✅ Done: checks out `neuriplo@feature/multi-backend-registry`, downloads ORT 1.19.2 CPU, builds + ctest |
 | CI: E2E smoke test with stub model via curl | ✅ Done: `scripts/e2e-stub.sh` (11 checks incl. admin lifecycle) + `e2e-smoke` job |
 | CI triggers only covered `master`; GitFlow PRs target `develop` and ran no CI | ✅ Fixed: push/PR triggers cover `master` and `develop` |
 | `.gitignore` entry for `.antigravitycli/` | ✅ Done (plus `logs/`) |
