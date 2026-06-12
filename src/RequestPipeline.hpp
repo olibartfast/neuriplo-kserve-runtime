@@ -1,8 +1,8 @@
 #pragma once
 
 #include "HttpTypes.hpp"
+#include "InferSnapshot.hpp"
 #include "KServeV2Codec.hpp"
-#include "ModelHandle.hpp"
 #include "Scheduler.hpp"
 
 #include <functional>
@@ -14,7 +14,7 @@ struct InferContext {
     const HttpRequest *request = nullptr;
     std::string model_name;
     std::string model_version;
-    const ModelHandle *handle = nullptr;
+    std::shared_ptr<const InferSnapshot> handle;
     InferenceParseResult parsed;
     SchedulerResult scheduled;
 };

@@ -28,6 +28,7 @@ set(NEURIPLO_SANITIZER "" CACHE STRING "Enable sanitizer instrumentation: addres
 set_property(CACHE NEURIPLO_SANITIZER PROPERTY STRINGS "" address thread undefined)
 
 set(NEURIPLO_RUNTIME_SOURCES
+    src/AdminCodec.cpp
     src/BackendRegistry.cpp
     src/BatchCompatibility.cpp
     src/DynamicBatcher.cpp
@@ -40,6 +41,7 @@ set(NEURIPLO_RUNTIME_SOURCES
     src/MetricsRegistry.cpp
     src/ModelLifecycle.cpp
     src/ModelRegistry.cpp
+    src/SchedulerRetireQueue.cpp
     src/ModelScheduler.cpp
     src/NeuriploAdapterDefault.cpp
     src/NeuriploExecutor.cpp
@@ -140,7 +142,13 @@ if(NEURIPLO_RUNTIME_ENABLE_REAL_NEURIPLO)
     target_link_libraries(neuriplo-kserve-runtime-core PRIVATE neuriplo glog::glog)
     # neuriplo links llama.cpp with PRIVATE link directories and rpath options,
     # which do not propagate through its static library to our executables.
-    if(DEFAULT_BACKEND STREQUAL "LLAMACPP")
+    # NEURIPLO_BACKENDS lists all built-in backends; DEFAULT_BACKEND is always
+    # part of the enabled set even when not listed explicitly.
+    set(_NEURIPLO_BUILTIN_BACKENDS ${NEURIPLO_BACKENDS})
+    if(NOT DEFAULT_BACKEND IN_LIST _NEURIPLO_BUILTIN_BACKENDS)
+        list(PREPEND _NEURIPLO_BUILTIN_BACKENDS "${DEFAULT_BACKEND}")
+    endif()
+    if("LLAMACPP" IN_LIST _NEURIPLO_BUILTIN_BACKENDS)
         target_link_directories(neuriplo-kserve-runtime-core PUBLIC "${LLAMACPP_DIR}/lib")
         # --disable-new-dtags emits DT_RPATH instead of DT_RUNPATH so the
         # llama.cpp directory is also searched for transitive SONAME deps
@@ -179,8 +187,12 @@ add_executable(neuriplo-kserve-runtime-tests
     tests/KServeV2CodecTest.cpp
     tests/LlmPathTest.cpp
     tests/LlmSchedulerTest.cpp
+    tests/AdminEndpointTest.cpp
     tests/ModelLifecycleTest.cpp
     tests/ModelRegistryTest.cpp
+    tests/MultiModelRegistryTest.cpp
+    tests/NeuriploPlatformE2eTest.cpp
+    tests/SchedulerRetireQueueTest.cpp
     tests/ModelStateMachineTest.cpp
     tests/NeuriploExecutorTest.cpp
     tests/OpenAiCodecTest.cpp
@@ -227,6 +239,8 @@ if(NEURIPLO_SANITIZER)
     target_compile_options(neuriplo-kserve-runtime-tests PRIVATE ${NEURIPLO_SANITIZER_FLAGS})
     target_link_options(neuriplo-kserve-runtime-tests PRIVATE ${NEURIPLO_SANITIZER_LINK_FLAGS})
 endif()
+
+enable_testing()
 
 add_test(NAME unit COMMAND neuriplo-kserve-runtime-tests)
 add_test(NAME version COMMAND neuriplo-kserve-runtime --version)

@@ -1,6 +1,8 @@
 #include "BackendRegistry.hpp"
+#include "NeuriploAdapter.hpp"
 #include "Test.hpp"
 
+#include <algorithm>
 #include <string>
 
 TEST_CASE(backend_registry_classifies_tensor_backends) {
@@ -54,4 +56,28 @@ TEST_CASE(backend_registry_auto_detects_llm_backends) {
     REQUIRE(usesLlmScheduler("tensor", "llamacpp"));
     REQUIRE(usesLlmScheduler("tensor", "cactus"));
     REQUIRE(!usesLlmScheduler("tensor", "onnx_runtime"));
+}
+
+TEST_CASE(backend_registry_available_ids_are_sorted_and_include_stub) {
+    const auto ids = availableBackendIds();
+    REQUIRE(!ids.empty());
+    REQUIRE(std::is_sorted(ids.begin(), ids.end()));
+    REQUIRE(std::find(ids.begin(), ids.end(), "stub") != ids.end());
+    if (!realNeuriploSupportEnabled()) {
+        // Without real neuriplo support no neuriplo backend can be served.
+        REQUIRE(std::find(ids.begin(), ids.end(), "onnx_runtime") == ids.end());
+    }
+}
+
+TEST_CASE(backend_registry_stub_build_keeps_legacy_neuriplo_error) {
+    if (realNeuriploSupportEnabled()) {
+        return; // real builds cover this through RealNeuriploSmokeTest
+    }
+    RuntimeConfig config;
+    config.model_name = "demo";
+    config.backend = "onnx_runtime";
+    std::string error;
+    const auto executor = createExecutorFor("onnx_runtime", config, error);
+    REQUIRE(executor == nullptr);
+    REQUIRE(error.find("real neuriplo support is not enabled") != std::string::npos);
 }

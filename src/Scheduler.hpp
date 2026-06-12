@@ -57,6 +57,7 @@ class Scheduler {
     virtual SchedulerResult submit(ExecutionRequest request) = 0;
     virtual bool isReady() const = 0;
     virtual bool isDraining() const = 0;
+    virtual void stopAccepting() = 0;
     virtual void beginDrain() = 0;
     virtual SchedulerMetricsSnapshot metrics() const = 0;
 };

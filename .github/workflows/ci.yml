@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [master]
+    branches: [master, develop]
   pull_request:
-    branches: [master]
+    branches: [master, develop]
 
 jobs:
   build-test:
@@ -107,3 +107,152 @@ jobs:
         run: cmake --build --preset grpc --parallel
       - name: Unit tests
         run: ctest --preset grpc
+
+  e2e-smoke:
+    name: E2E stub smoke test (curl)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build tools
+        run: sudo apt-get update && sudo apt-get install -y build-essential cmake ninja-build ccache curl
+      - name: Set up ccache
+        uses: hendrikmuhs/ccache-action@v1
+        with:
+          key: ${{ github.job }}-${{ runner.os }}
+      - name: Configure
+        run: cmake --preset debug -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+      - name: Build runtime
+        run: cmake --build --preset debug --parallel --target neuriplo-kserve-runtime
+      - name: Run curl smoke test
+        run: scripts/e2e-stub.sh
+
+  real-onnx-grpc:
+    name: Real neuriplo ONNX + gRPC build and test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      ONNX_RUNTIME_VERSION: 1.19.2
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check out neuriplo
+        uses: actions/checkout@v4
+        with:
+          repository: olibartfast/neuriplo
+          ref: develop
+          path: neuriplo
+      - name: Install build tools and backend dependencies
+        run: sudo apt-get update && sudo apt-get install -y build-essential cmake ninja-build ccache libgrpc++-dev protobuf-compiler-grpc libopencv-dev libgoogle-glog-dev
+      - name: Cache ONNX Runtime
+        id: ort-cache
+        uses: actions/cache@v4
+        with:
+          path: onnxruntime-linux-x64-${{ env.ONNX_RUNTIME_VERSION }}
+          key: onnxruntime-linux-x64-${{ env.ONNX_RUNTIME_VERSION }}
+      - name: Download ONNX Runtime
+        if: steps.ort-cache.outputs.cache-hit != 'true'
+        run: |
+          curl -fsSL -o ort.tgz "https://github.com/microsoft/onnxruntime/releases/download/v${ONNX_RUNTIME_VERSION}/onnxruntime-linux-x64-${ONNX_RUNTIME_VERSION}.tgz"
+          tar -xzf ort.tgz
+      - name: Set up ccache
+        uses: hendrikmuhs/ccache-action@v1
+        with:
+          key: ${{ github.job }}-${{ runner.os }}
+      - name: Configure
+        run: >
+          cmake --preset real-onnx-grpc
+          -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+          -DNEURIPLO_RUNTIME_NEURIPLO_SOURCE_DIR=${{ github.workspace }}/neuriplo
+          -DONNX_RUNTIME_DIR=${{ github.workspace }}/onnxruntime-linux-x64-${{ env.ONNX_RUNTIME_VERSION }}
+      - name: Build
+        run: cmake --build --preset real-onnx-grpc --parallel
+      - name: Unit tests
+        run: ctest --preset real-onnx-grpc
+
+  real-multi:
+    name: Multi built-in backends (OpenCV DNN + ONNX Runtime)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      ONNX_RUNTIME_VERSION: 1.19.2
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check out neuriplo
+        uses: actions/checkout@v4
+        with:
+          repository: olibartfast/neuriplo
+          ref: develop
+          path: neuriplo
+      - name: Install build tools and backend dependencies
+        run: sudo apt-get update && sudo apt-get install -y build-essential cmake ninja-build ccache libopencv-dev libgoogle-glog-dev
+      - name: Cache ONNX Runtime
+        id: ort-cache
+        uses: actions/cache@v4
+        with:
+          path: onnxruntime-linux-x64-${{ env.ONNX_RUNTIME_VERSION }}
+          key: onnxruntime-linux-x64-${{ env.ONNX_RUNTIME_VERSION }}
+      - name: Download ONNX Runtime
+        if: steps.ort-cache.outputs.cache-hit != 'true'
+        run: |
+          curl -fsSL -o ort.tgz "https://github.com/microsoft/onnxruntime/releases/download/v${ONNX_RUNTIME_VERSION}/onnxruntime-linux-x64-${ONNX_RUNTIME_VERSION}.tgz"
+          tar -xzf ort.tgz
+      - name: Set up ccache
+        uses: hendrikmuhs/ccache-action@v1
+        with:
+          key: ${{ github.job }}-${{ runner.os }}
+      - name: Configure
+        run: >
+          cmake --preset real-multi
+          -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+          -DNEURIPLO_RUNTIME_NEURIPLO_SOURCE_DIR=${{ github.workspace }}/neuriplo
+          -DONNX_RUNTIME_DIR=${{ github.workspace }}/onnxruntime-linux-x64-${{ env.ONNX_RUNTIME_VERSION }}
+      - name: Build
+        run: cmake --build --preset real-multi --parallel
+      - name: Unit tests
+        run: ctest --preset real-multi
+
+  real-plugin:
+    name: ONNX Runtime as dlopen plugin
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      ONNX_RUNTIME_VERSION: 1.19.2
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check out neuriplo
+        uses: actions/checkout@v4
+        with:
+          repository: olibartfast/neuriplo
+          ref: develop
+          path: neuriplo
+      - name: Install build tools and backend dependencies
+        run: sudo apt-get update && sudo apt-get install -y build-essential cmake ninja-build ccache libopencv-dev libgoogle-glog-dev
+      - name: Cache ONNX Runtime
+        id: ort-cache
+        uses: actions/cache@v4
+        with:
+          path: onnxruntime-linux-x64-${{ env.ONNX_RUNTIME_VERSION }}
+          key: onnxruntime-linux-x64-${{ env.ONNX_RUNTIME_VERSION }}
+      - name: Download ONNX Runtime
+        if: steps.ort-cache.outputs.cache-hit != 'true'
+        run: |
+          curl -fsSL -o ort.tgz "https://github.com/microsoft/onnxruntime/releases/download/v${ONNX_RUNTIME_VERSION}/onnxruntime-linux-x64-${ONNX_RUNTIME_VERSION}.tgz"
+          tar -xzf ort.tgz
+      - name: Set up ccache
+        uses: hendrikmuhs/ccache-action@v1
+        with:
+          key: ${{ github.job }}-${{ runner.os }}
+      - name: Configure
+        run: >
+          cmake --preset real-plugin
+          -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+          -DNEURIPLO_RUNTIME_NEURIPLO_SOURCE_DIR=${{ github.workspace }}/neuriplo
+          -DONNX_RUNTIME_DIR=${{ github.workspace }}/onnxruntime-linux-x64-${{ env.ONNX_RUNTIME_VERSION }}
+      - name: Build
+        run: cmake --build --preset real-plugin --parallel
+      - name: Plugin exports exactly one symbol
+        run: |
+          exported=$(nm -D --defined-only build/real-plugin/plugins/libneuriplo_backend_onnx_runtime.so | awk '$2 == "T" { print $3 }')
+          echo "exported: ${exported}"
+          test "${exported}" = "neuriplo_plugin_get_api_v1"
+      - name: Unit tests
+        run: ctest --preset real-plugin

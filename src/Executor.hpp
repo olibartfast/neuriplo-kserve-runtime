@@ -1,8 +1,10 @@
 #pragma once
 
 #include "ModelMetadata.hpp"
+#include "TensorBytes.hpp"
 
 #include <atomic>
+#include <cstddef>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -19,20 +21,31 @@ inline bool isBytesDatatype(const std::string &datatype) {
     return datatype == "BYTES";
 }
 
+// Tensor payloads are native-endian typed bytes (see TensorBytes.hpp); BYTES
+// tensors use string_data instead. `bytes` holds elementCount() elements of
+// tensorElementSize(datatype) bytes each.
 struct OutputTensor {
     std::string name;
     std::string datatype;
     std::vector<int64_t> shape;
-    std::vector<double> data;
+    std::vector<std::byte> bytes;
     std::vector<std::string> string_data;
+
+    size_t elementCount() const {
+        return tensorElementCount(datatype, bytes);
+    }
 };
 
 struct InputTensor {
     std::string name;
     std::string datatype;
     std::vector<int64_t> shape;
-    std::vector<double> data;
+    std::vector<std::byte> bytes;
     std::vector<std::string> string_data;
+
+    size_t elementCount() const {
+        return tensorElementCount(datatype, bytes);
+    }
 };
 
 struct LlmGenerationParams {

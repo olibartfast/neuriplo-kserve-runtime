@@ -79,6 +79,16 @@ TEST_CASE(parse_runtime_config_cli_overrides_environment_defaults) {
     REQUIRE_EQ(config.backend, "cli_backend");
 }
 
+TEST_CASE(parse_runtime_config_plugin_dir_env_and_cli) {
+    const auto env_config = parse({"neuriplo-kserve-runtime"},
+                                  testEnvironment({{"NEURIPLO_PLUGIN_DIR", "/opt/plugins"}}));
+    REQUIRE_EQ(env_config.plugin_dir, "/opt/plugins");
+
+    const auto cli_config = parse({"neuriplo-kserve-runtime", "--plugin-dir", "/cli/plugins"},
+                                  testEnvironment({{"NEURIPLO_PLUGIN_DIR", "/opt/plugins"}}));
+    REQUIRE_EQ(cli_config.plugin_dir, "/cli/plugins");
+}
+
 TEST_CASE(parse_runtime_config_defaults_to_mnt_models_when_present) {
     const auto config = parse({"neuriplo-kserve-runtime"}, testEnvironment({}, true));
     REQUIRE_EQ(config.model_path, "/mnt/models");
