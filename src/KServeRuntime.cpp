@@ -554,8 +554,8 @@ HttpResponse KServeRuntime::encodeInferResponse(const std::string &model_name,
         success_res.headers["Inference-Header-Content-Length"] =
             std::to_string(framed.header_length);
     } else {
-        success_res = json(
-            200, inferenceResponseJson(model_name, model_version, parsed.request, execution_response));
+        success_res = json(200, inferenceResponseJson(model_name, model_version, parsed.request,
+                                                      execution_response));
     }
 
     {

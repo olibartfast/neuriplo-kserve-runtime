@@ -127,8 +127,9 @@ Bytes identityOnnxModel(int onnx_elem_type) {
 }
 
 std::string writeIdentityModel(int onnx_elem_type = 1) {
-    const auto path = std::filesystem::temp_directory_path() /
-                      ("neuriplo-kserve-runtime-identity-" + std::to_string(onnx_elem_type) + ".onnx");
+    const auto path =
+        std::filesystem::temp_directory_path() /
+        ("neuriplo-kserve-runtime-identity-" + std::to_string(onnx_elem_type) + ".onnx");
     std::ofstream output(path, std::ios::binary);
     if (!output) {
         throw std::runtime_error("failed to open ONNX smoke model for writing");
