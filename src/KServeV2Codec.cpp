@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cstdlib>
 #include <nlohmann/json.hpp>
 #include <string>
 #include <utility>
@@ -158,6 +159,49 @@ Json tensorMetadataJson(const TensorMetadata &tensor) {
     return Json{{"name", tensor.name}, {"datatype", tensor.datatype}, {"shape", shape}};
 }
 
+Json binaryOutputTensorJson(const OutputTensor &tensor, std::string &blob) {
+    Json shape = Json::array();
+    for (const auto dimension : tensor.shape) {
+        shape.push_back(dimension);
+    }
+
+    Json node{{"name", tensor.name}, {"datatype", tensor.datatype}, {"shape", shape}};
+    if (isBytesDatatype(tensor.datatype)) {
+        Json data = Json::array();
+        for (const auto &value : tensor.string_data) {
+            data.push_back(value);
+        }
+        node["data"] = std::move(data);
+        return node;
+    }
+
+    node["parameters"]["binary_data_size"] = tensor.bytes.size();
+    blob.append(reinterpret_cast<const char *>(tensor.bytes.data()), tensor.bytes.size());
+    return node;
+}
+
+long binaryDataSize(const Json &node) {
+    if (!node.contains("parameters") || !node["parameters"].is_object()) {
+        return -1;
+    }
+    const auto &params = node["parameters"];
+    if (!params.contains("binary_data_size") || !params["binary_data_size"].is_number_integer()) {
+        return -1;
+    }
+    return params["binary_data_size"].get<long>();
+}
+
+std::vector<std::byte> sliceBlob(const std::string &blob, size_t offset, size_t size) {
+    if (offset > blob.size() || size > blob.size() - offset) {
+        throw std::runtime_error("binary tensor data exceeds request body");
+    }
+    std::vector<std::byte> bytes(size);
+    if (size != 0) {
+        std::memcpy(bytes.data(), blob.data() + offset, size);
+    }
+    return bytes;
+}
+
 Json outputTensorJson(const OutputTensor &tensor) {
     Json shape = Json::array();
     for (const auto dimension : tensor.shape) {
@@ -190,6 +234,23 @@ InferenceParseResult parseInferenceRequest(const std::string &body, const ModelM
     } catch (const Json::parse_error &) {
         return invalid("invalid JSON request body");
     }
+    return parseInferenceRequest(root.dump(), metadata, root.dump().size());
+}
+
+InferenceParseResult parseInferenceRequest(const std::string &body, const ModelMetadata &metadata,
+                                           size_t header_length) {
+    if (header_length > body.size()) {
+        return invalid("binary inference header exceeds request body");
+    }
+
+    Json root;
+    try {
+        root = Json::parse(body.substr(0, header_length));
+    } catch (const Json::parse_error &) {
+        return invalid("invalid JSON request body");
+    }
+    const std::string binary_blob = body.substr(header_length);
+    size_t binary_offset = 0;
 
     if (!root.is_object()) {
         return invalid("inference request body must be a JSON object");
@@ -225,8 +286,13 @@ InferenceParseResult parseInferenceRequest(const std::string &body, const ModelM
         if (!input.contains("shape")) {
             return invalid("input shape is required");
         }
-        if (!input.contains("data") || !input["data"].is_array()) {
+        const auto binary_size = binaryDataSize(input);
+        const bool has_binary_data = binary_size >= 0;
+        if (!has_binary_data && (!input.contains("data") || !input["data"].is_array())) {
             return invalid("input data must be an array");
+        }
+        if (has_binary_data && binary_size < 0) {
+            return invalid("invalid binary data size");
         }
 
         const auto name = input["name"].get<std::string>();
@@ -259,6 +325,9 @@ InferenceParseResult parseInferenceRequest(const std::string &body, const ModelM
         tensor.shape = parsed_shape;
 
         if (isBytesDatatype(datatype)) {
+            if (has_binary_data) {
+                return invalid("binary BYTES input is not supported: " + name);
+            }
             auto string_data = parseStringData(input["data"]);
             if (!string_data.has_value()) {
                 return invalid("input data values must be strings for BYTES input: " + name);
@@ -268,6 +337,18 @@ InferenceParseResult parseInferenceRequest(const std::string &body, const ModelM
                 return invalid("input data element count mismatch for input: " + name);
             }
             tensor.string_data = std::move(*string_data);
+        } else if (has_binary_data) {
+            const auto byte_count = static_cast<size_t>(binary_size);
+            try {
+                tensor.bytes = sliceBlob(binary_blob, binary_offset, byte_count);
+            } catch (const std::runtime_error &error) {
+                return invalid(error.what());
+            }
+            binary_offset += byte_count;
+            const auto parsed_elements = tensorElementCount(datatype, tensor.bytes);
+            if (expected_elements != 0 && parsed_elements != expected_elements) {
+                return invalid("input data element count mismatch for input: " + name);
+            }
         } else {
             auto data = parseData(input["data"], datatype);
             if (!data.has_value()) {
@@ -280,6 +361,10 @@ InferenceParseResult parseInferenceRequest(const std::string &body, const ModelM
             tensor.bytes = std::move(*data);
         }
         request.inputs.push_back(std::move(tensor));
+    }
+
+    if (binary_offset != binary_blob.size()) {
+        return invalid("unused binary tensor data in request body");
     }
 
     for (const auto &expected_input : metadata.inputs) {
@@ -354,4 +439,27 @@ std::string inferenceResponseJson(const std::string &model_name, const std::stri
     }
     body["outputs"] = outputs;
     return body.dump();
+}
+
+BinaryInferenceResponse inferenceResponseBinary(const std::string &model_name,
+                                                const std::string &model_version,
+                                                const InferenceRequest &request,
+                                                const ExecutionResponse &response) {
+    Json header{{"model_name", model_name}, {"model_version", model_version}};
+    if (request.id.has_value()) {
+        header["id"] = *request.id;
+    }
+
+    std::string blob;
+    Json outputs = Json::array();
+    for (const auto &output : response.outputs) {
+        outputs.push_back(binaryOutputTensorJson(output, blob));
+    }
+    header["outputs"] = outputs;
+
+    BinaryInferenceResponse framed;
+    framed.body = header.dump();
+    framed.header_length = framed.body.size();
+    framed.body += blob;
+    return framed;
 }
