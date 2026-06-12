@@ -54,7 +54,7 @@ class GrpcServiceImpl final : public inference::GRPCInferenceService::Service {
                           const inference::ServerMetadataRequest * /*request*/,
                           inference::ServerMetadataResponse *reply) override {
         reply->set_name("neuriplo-kserve-runtime");
-        reply->set_version("0.1.0");
+        reply->set_version("0.2.0");
         return Status::OK;
     }
 
