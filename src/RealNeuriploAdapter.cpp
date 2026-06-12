@@ -51,11 +51,32 @@ std::vector<uint8_t> tensorToBytes(const InputTensor &tensor) {
     return {begin, begin + tensor.bytes.size()};
 }
 
+std::string tensorDataTypeToKserve(TensorDataType dtype) {
+    switch (dtype) {
+    case TensorDataType::Float32:
+        return "FP32";
+    case TensorDataType::Int32:
+        return "INT32";
+    case TensorDataType::Int64:
+        return "INT64";
+    case TensorDataType::UInt8:
+        return "UINT8";
+    case TensorDataType::Int8:
+        return "INT8";
+    case TensorDataType::Bool:
+        return "BOOL";
+    }
+    throw std::runtime_error("unsupported neuriplo tensor datatype");
+}
+
 std::vector<std::string> extractDatatypes(const std::vector<LayerInfo> &layers) {
     std::vector<std::string> datatypes;
     datatypes.reserve(layers.size());
-    for (size_t i = 0; i < layers.size(); ++i) {
-        datatypes.push_back("FP32");
+    for (const auto &layer : layers) {
+        // Carry the real per-layer datatype reported by the backend (e.g. INT64
+        // for EdgeCrafter's orig_target_sizes input and labels output) instead
+        // of assuming every tensor is FP32.
+        datatypes.push_back(tensorDataTypeToKserve(layer.datatype));
     }
     return datatypes;
 }
