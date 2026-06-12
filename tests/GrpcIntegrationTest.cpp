@@ -117,7 +117,7 @@ TEST_CASE(grpc_integration_server_metadata) {
     const auto status = stub->ServerMetadata(&context, request, &response);
     REQUIRE(status.ok());
     REQUIRE_EQ(response.name(), "neuriplo-kserve-runtime");
-    REQUIRE_EQ(response.version(), "0.1.0");
+    REQUIRE_EQ(response.version(), "0.2.0");
 }
 
 TEST_CASE(grpc_integration_model_ready) {
