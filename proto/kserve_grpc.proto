@@ -118,6 +118,7 @@ message ModelInferResponse {
   string id = 3;
   map<string, InferParameter> parameters = 4;
   repeated InferOutputTensor outputs = 5;
+  repeated bytes raw_output_contents = 6;
 
   message InferOutputTensor {
     string name = 1;

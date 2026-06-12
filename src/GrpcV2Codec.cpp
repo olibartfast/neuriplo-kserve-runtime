@@ -32,21 +32,10 @@ inference::ModelMetadataResponse buildModelMetadataResponse(const ModelMetadata 
 
 namespace {
 
-void fillContents(inference::InferTensorContents *contents, const std::string &datatype,
-                  const std::vector<std::byte> &bytes,
-                  const std::vector<std::string> &string_data) {
-    if (isBytesDatatype(datatype)) {
-        for (const auto &s : string_data) {
-            contents->add_bytes_contents(s);
-        }
-    } else {
-        withTensorElementType(datatype, [&](auto element) {
-            using T = decltype(element);
-            const size_t count = bytes.size() / sizeof(T);
-            for (size_t i = 0; i < count; ++i) {
-                contents->add_fp64_contents(static_cast<double>(tensorScalarAt<T>(bytes, i)));
-            }
-        });
+void fillBytesContents(inference::InferTensorContents *contents,
+                       const std::vector<std::string> &string_data) {
+    for (const auto &s : string_data) {
+        contents->add_bytes_contents(s);
     }
 }
 
@@ -157,8 +146,12 @@ inference::ModelInferResponse buildInferResponse(const ExecutionResponse &exec_r
         for (const auto dim : output.shape) {
             proto_output->add_shape(dim);
         }
-        auto *contents = proto_output->mutable_contents();
-        fillContents(contents, output.datatype, output.bytes, output.string_data);
+        if (isBytesDatatype(output.datatype)) {
+            fillBytesContents(proto_output->mutable_contents(), output.string_data);
+        } else {
+            proto.add_raw_output_contents(std::string(
+                reinterpret_cast<const char *>(output.bytes.data()), output.bytes.size()));
+        }
     }
 
     if (exec_response.llm_metadata.has_value()) {
