@@ -213,7 +213,7 @@ TEST_CASE(kserve_runtime_unversioned_infer_uses_default_executor_version) {
                 output.name = "output";
                 output.datatype = "FP32";
                 output.shape = {1, 1};
-                output.data = {7.0};
+                output.bytes = tensorBytesFromDoubles(output.datatype, {7.0});
                 response.outputs.push_back(std::move(output));
                 return response;
             }
@@ -267,7 +267,7 @@ TEST_CASE(kserve_runtime_uses_injected_executor_without_route_changes) {
                 output.name = "output";
                 output.datatype = "FP32";
                 output.shape = {1, 1};
-                output.data = {42.0};
+                output.bytes = tensorBytesFromDoubles(output.datatype, {42.0});
                 response.outputs.push_back(std::move(output));
                 return response;
             }
@@ -306,7 +306,10 @@ TEST_CASE(kserve_runtime_passes_input_tensors_to_executor) {
                 output.name = "output";
                 output.datatype = "FP32";
                 output.shape = {1, 1};
-                output.data = {request.inputs.at(0).data.at(1)};
+                output.bytes = tensorBytesFromDoubles(
+                    output.datatype, {tensorValuesAsDoubles(request.inputs.at(0).datatype,
+                                                            request.inputs.at(0).bytes)
+                                          .at(1)});
                 response.outputs.push_back(std::move(output));
                 return response;
             }
@@ -345,7 +348,7 @@ TEST_CASE(kserve_runtime_returns_overload_when_queue_is_full) {
             output.name = "output";
             output.datatype = "FP32";
             output.shape = {1, 1};
-            output.data = {1.0};
+            output.bytes = tensorBytesFromDoubles(output.datatype, {1.0});
             response.outputs.push_back(std::move(output));
             return response;
         }

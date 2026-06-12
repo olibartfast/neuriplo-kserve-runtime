@@ -96,6 +96,17 @@ void MetricsRegistry::recordModelLoadFailure(const std::string &model, const std
 void MetricsRegistry::setSchedulerMetrics(const SchedulerMetricsSnapshot &snapshot) {
     std::lock_guard<std::mutex> lock(mutex_);
     scheduler_metrics_ = snapshot;
+    scheduler_metrics_by_model_[active_model_name_] = {model_version_, snapshot};
+}
+
+void MetricsRegistry::setSchedulerMetrics(const std::string &model, const std::string &version,
+                                          const SchedulerMetricsSnapshot &snapshot) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    scheduler_metrics_by_model_[model] = {version, snapshot};
+    if (model == active_model_name_) {
+        scheduler_metrics_ = snapshot;
+        model_version_ = version;
+    }
 }
 
 SchedulerMetricsSnapshot MetricsRegistry::schedulerMetrics() const {
@@ -178,46 +189,69 @@ void MetricsRegistry::setDeployment(const std::string &deployment) {
     deployment_ = deployment;
 }
 
+std::string MetricsRegistry::modelVersionLabel() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return model_version_;
+}
+
 std::string MetricsRegistry::renderMetrics() const {
     std::lock_guard<std::mutex> lock(mutex_);
 
     std::string out;
+    const auto appendSchedulerMetrics = [&](const std::string &model, const std::string &version,
+                                            const SchedulerMetricsSnapshot &scheduler_metrics) {
+        auto modelLabel =
+            std::map<std::string, std::string>{{"model", model}, {"version", version}};
+        if (!deployment_.empty()) {
+            modelLabel["deployment"] = deployment_;
+        }
+
+        appendLine(out, "neuriplo_scheduler_queue_depth", modelLabel,
+                   static_cast<double>(scheduler_metrics.queue_depth));
+        appendLine(out, "neuriplo_scheduler_in_flight_requests", modelLabel,
+                   static_cast<double>(scheduler_metrics.in_flight));
+        appendCounterLine(out, "neuriplo_scheduler_requests_accepted_total", modelLabel,
+                          scheduler_metrics.requests_accepted);
+        appendCounterLine(out, "neuriplo_scheduler_requests_rejected_total", modelLabel,
+                          scheduler_metrics.requests_rejected);
+        appendCounterLine(out, "neuriplo_scheduler_requests_timed_out_total", modelLabel,
+                          scheduler_metrics.requests_timed_out);
+        appendLine(out, "neuriplo_scheduler_queue_wait_seconds", modelLabel,
+                   nsToSeconds(scheduler_metrics.queue_wait_ns_total));
+    };
+
+    // 1. Scheduler Metrics
+    out += "# HELP neuriplo_scheduler_queue_depth Current scheduler queue depth\n";
+    out += "# TYPE neuriplo_scheduler_queue_depth gauge\n";
+    out += "# HELP neuriplo_scheduler_in_flight_requests Current in-flight requests\n";
+    out += "# TYPE neuriplo_scheduler_in_flight_requests gauge\n";
+    out += "# HELP neuriplo_scheduler_requests_accepted_total Total accepted requests\n";
+    out += "# TYPE neuriplo_scheduler_requests_accepted_total counter\n";
+    out += "# HELP neuriplo_scheduler_requests_rejected_total Total rejected requests\n";
+    out += "# TYPE neuriplo_scheduler_requests_rejected_total counter\n";
+    out += "# HELP neuriplo_scheduler_requests_timed_out_total Total timed-out requests\n";
+    out += "# TYPE neuriplo_scheduler_requests_timed_out_total counter\n";
+    out += "# HELP neuriplo_scheduler_queue_wait_seconds Total seconds spent waiting in queue\n";
+    out += "# TYPE neuriplo_scheduler_queue_wait_seconds counter\n";
+
+    if (!scheduler_metrics_by_model_.empty()) {
+        for (const auto &[model, versioned_metrics] : scheduler_metrics_by_model_) {
+            appendSchedulerMetrics(model, versioned_metrics.first, versioned_metrics.second);
+        }
+    } else {
+        appendSchedulerMetrics(active_model_name_, model_version_, scheduler_metrics_);
+    }
+
     auto modelLabel = std::map<std::string, std::string>{{"model", active_model_name_},
                                                          {"version", model_version_}};
     if (!deployment_.empty()) {
         modelLabel["deployment"] = deployment_;
     }
 
-    // 1. Scheduler Metrics
-    out += "# HELP neuriplo_scheduler_queue_depth Current scheduler queue depth\n";
-    out += "# TYPE neuriplo_scheduler_queue_depth gauge\n";
-    appendLine(out, "neuriplo_scheduler_queue_depth", modelLabel,
-               static_cast<double>(scheduler_metrics_.queue_depth));
-
-    out += "# HELP neuriplo_scheduler_in_flight_requests Current in-flight requests\n";
-    out += "# TYPE neuriplo_scheduler_in_flight_requests gauge\n";
-    appendLine(out, "neuriplo_scheduler_in_flight_requests", modelLabel,
-               static_cast<double>(scheduler_metrics_.in_flight));
-
-    out += "# HELP neuriplo_scheduler_requests_accepted_total Total accepted requests\n";
-    out += "# TYPE neuriplo_scheduler_requests_accepted_total counter\n";
-    appendCounterLine(out, "neuriplo_scheduler_requests_accepted_total", modelLabel,
-                      scheduler_metrics_.requests_accepted);
-
-    out += "# HELP neuriplo_scheduler_requests_rejected_total Total rejected requests\n";
-    out += "# TYPE neuriplo_scheduler_requests_rejected_total counter\n";
-    appendCounterLine(out, "neuriplo_scheduler_requests_rejected_total", modelLabel,
-                      scheduler_metrics_.requests_rejected);
-
-    out += "# HELP neuriplo_scheduler_requests_timed_out_total Total timed-out requests\n";
-    out += "# TYPE neuriplo_scheduler_requests_timed_out_total counter\n";
-    appendCounterLine(out, "neuriplo_scheduler_requests_timed_out_total", modelLabel,
-                      scheduler_metrics_.requests_timed_out);
-
-    out += "# HELP neuriplo_scheduler_queue_wait_seconds Total seconds spent waiting in queue\n";
-    out += "# TYPE neuriplo_scheduler_queue_wait_seconds counter\n";
-    appendLine(out, "neuriplo_scheduler_queue_wait_seconds", modelLabel,
-               nsToSeconds(scheduler_metrics_.queue_wait_ns_total));
+    out += "# HELP neuriplo_scheduler_infer_seconds Total seconds spent in inference\n";
+    out += "# TYPE neuriplo_scheduler_infer_seconds counter\n";
+    appendLine(out, "neuriplo_scheduler_infer_seconds", modelLabel,
+               nsToSeconds(scheduler_metrics_.execution_ns_total));
 
     out += "# HELP neuriplo_scheduler_execution_seconds Total seconds spent in execution\n";
     out += "# TYPE neuriplo_scheduler_execution_seconds counter\n";

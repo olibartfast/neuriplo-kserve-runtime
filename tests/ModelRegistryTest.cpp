@@ -30,7 +30,7 @@ class MarkerExecutor final : public Executor {
         output.name = "output";
         output.datatype = "FP32";
         output.shape = {1, 1};
-        output.data = {42.0};
+        output.bytes = tensorBytesFromDoubles(output.datatype, {42.0});
         response.outputs.push_back(std::move(output));
         return response;
     }
@@ -49,7 +49,7 @@ TEST_CASE(model_registry_loads_stub_executor) {
     REQUIRE(metadata.has_value());
     REQUIRE_EQ(metadata->platform, "neuriplo_stub");
 
-    const auto *handle = registry.findHandle("demo");
+    const auto handle = registry.findHandle("demo");
     REQUIRE(handle != nullptr);
     REQUIRE_EQ(handle->versions, metadata->versions);
     REQUIRE_EQ(registry.defaultVersion("demo"), "1");
@@ -107,7 +107,7 @@ TEST_CASE(model_registry_uses_injected_executor) {
         return std::make_unique<MarkerExecutor>(std::move(metadata));
     });
 
-    const auto *handle = registry.findHandleVersion("demo", "1");
+    const auto handle = registry.findHandleVersion("demo", "1");
     REQUIRE(handle != nullptr);
     REQUIRE(handle->scheduler != nullptr);
 
@@ -115,7 +115,7 @@ TEST_CASE(model_registry_uses_injected_executor) {
     request.requested_outputs = {"output"};
     const auto result = handle->scheduler->submit(std::move(request));
     REQUIRE(result.ok);
-    REQUIRE_EQ(result.response.outputs[0].data[0], 42.0);
+    REQUIRE_EQ(tensorScalarAt<float>(result.response.outputs[0].bytes, 0), 42.0f);
 }
 
 TEST_CASE(model_registry_rejects_unknown_backend) {
@@ -124,7 +124,7 @@ TEST_CASE(model_registry_rejects_unknown_backend) {
 
     const ModelRegistry registry(config);
     REQUIRE(!registry.allReady());
-    const auto *handle = registry.findHandle("demo");
+    const auto handle = registry.findHandle("demo");
     REQUIRE(handle != nullptr);
     REQUIRE(handle->load_error.has_value());
     REQUIRE(handle->load_error->find("unsupported backend") != std::string::npos);
@@ -148,7 +148,7 @@ TEST_CASE(model_registry_uses_llm_scheduler_for_llm_strategy) {
     params.max_tokens = 16;
     request.llm_params = params;
 
-    const auto *handle = registry.findHandle("demo");
+    const auto handle = registry.findHandle("demo");
     REQUIRE(handle != nullptr);
     const auto result = handle->scheduler->submit(std::move(request));
     REQUIRE(result.ok);
@@ -164,7 +164,7 @@ TEST_CASE(
 
     const ModelRegistry registry(config);
     REQUIRE(!registry.allReady());
-    const auto *handle = registry.findHandle("demo");
+    const auto handle = registry.findHandle("demo");
     REQUIRE(handle != nullptr);
     REQUIRE(handle->load_error.has_value());
     REQUIRE(handle->load_error->find("real neuriplo support is not enabled") != std::string::npos);

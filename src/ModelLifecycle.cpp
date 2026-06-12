@@ -6,14 +6,14 @@
 #include <utility>
 #include <vector>
 
-void ModelLifecycle::load(ModelHandle &handle, const RuntimeConfig &config,
-                          ExecutorFactory factory) {
+void ModelLifecycle::load(ModelHandle &handle, const RuntimeConfig &config, ExecutorFactory factory,
+                          const std::optional<std::string> &version_override) {
     if (handle.state.current() != ModelState::Unloaded) {
         return;
     }
 
     handle.name = config.model_name;
-    handle.versions = {"1"};
+    handle.versions = {version_override.value_or("1")};
     handle.load_error.reset();
     handle.state.startLoad();
 
@@ -36,6 +36,9 @@ void ModelLifecycle::load(ModelHandle &handle, const RuntimeConfig &config,
     }
 
     handle.metadata = executors.front()->metadata();
+    if (version_override.has_value()) {
+        handle.metadata.versions = {*version_override};
+    }
     handle.name = handle.metadata.name;
     handle.versions = handle.metadata.versions;
 
@@ -49,8 +52,8 @@ void ModelLifecycle::load(ModelHandle &handle, const RuntimeConfig &config,
         scheduler_config.max_tokens = config.max_tokens;
         scheduler_config.tokens_per_char = config.tokens_per_char;
         scheduler_config.memory_budget_bytes = config.memory_budget_bytes;
-        handle.scheduler =
-            makeLlmScheduler(std::move(executors), scheduler_config, config.model_name);
+        handle.scheduler = std::shared_ptr<Scheduler>(
+            makeLlmScheduler(std::move(executors), scheduler_config, config.model_name).release());
     } else {
         SchedulerConfig scheduler_config;
         scheduler_config.max_queue_size = config.max_queue_size;
@@ -60,8 +63,9 @@ void ModelLifecycle::load(ModelHandle &handle, const RuntimeConfig &config,
         scheduler_config.dynamic_batching.max_batch_size = config.max_batch_size;
         scheduler_config.dynamic_batching.max_queue_delay_us = config.max_queue_delay_us;
         scheduler_config.dynamic_batching.preferred_batch_sizes = config.preferred_batch_sizes;
-        handle.scheduler =
-            makeModelScheduler(std::move(executors), scheduler_config, config.model_name);
+        handle.scheduler = std::shared_ptr<Scheduler>(
+            makeModelScheduler(std::move(executors), scheduler_config, config.model_name)
+                .release());
     }
     handle.state.markReady();
 }
@@ -73,16 +77,20 @@ bool ModelLifecycle::beginDrain(ModelHandle &handle) {
     if (handle.state.current() == ModelState::Ready) {
         handle.state.beginUnload();
     }
-    handle.scheduler->beginDrain();
+    handle.scheduler->stopAccepting();
     return true;
 }
 
-bool ModelLifecycle::completeUnload(ModelHandle &handle) {
+bool ModelLifecycle::completeUnload(ModelHandle &handle,
+                                    std::shared_ptr<Scheduler> *retired_scheduler) {
     if (handle.state.current() != ModelState::Unloading) {
         return false;
     }
     if (handle.scheduler != nullptr) {
-        handle.scheduler->beginDrain();
+        handle.scheduler->stopAccepting();
+        if (retired_scheduler != nullptr) {
+            *retired_scheduler = handle.scheduler;
+        }
         handle.scheduler.reset();
     }
     handle.metadata = {};
@@ -92,16 +100,14 @@ bool ModelLifecycle::completeUnload(ModelHandle &handle) {
 }
 
 bool ModelLifecycle::reload(ModelHandle &handle, const RuntimeConfig &config,
-                            ExecutorFactory factory) {
+                            ExecutorFactory factory,
+                            const std::optional<std::string> &version_override) {
     switch (handle.state.current()) {
     case ModelState::Loading:
         return false;
     case ModelState::Ready:
-        if (!beginDrain(handle)) {
-            return false;
-        }
-        if (!completeUnload(handle)) {
-            return false;
+        if (handle.scheduler != nullptr) {
+            handle.scheduler->stopAccepting();
         }
         break;
     case ModelState::Unloading:
@@ -116,6 +122,29 @@ bool ModelLifecycle::reload(ModelHandle &handle, const RuntimeConfig &config,
     case ModelState::Unloaded:
         break;
     }
-    load(handle, config, std::move(factory));
-    return handle.state.current() == ModelState::Ready;
+
+    ModelHandle next;
+    load(next, config, std::move(factory), version_override);
+    if (next.state.current() != ModelState::Ready) {
+        handle.load_error = next.load_error;
+        if (handle.state.current() == ModelState::Ready) {
+            handle.state.beginUnload();
+        }
+        handle.state.markFailed();
+        return false;
+    }
+
+    handle.name = next.name;
+    handle.versions = next.versions;
+    handle.metadata = next.metadata;
+    handle.scheduler = next.scheduler;
+    handle.load_error.reset();
+    if (handle.state.current() != ModelState::Ready) {
+        if (handle.state.current() != ModelState::Unloaded) {
+            handle.state.reset();
+        }
+        handle.state.startLoad();
+        handle.state.markReady();
+    }
+    return true;
 }

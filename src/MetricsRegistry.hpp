@@ -49,17 +49,22 @@ class MetricsRegistry {
     std::string renderMetrics() const;
 
     void setSchedulerMetrics(const SchedulerMetricsSnapshot &snapshot);
+    void setSchedulerMetrics(const std::string &model, const std::string &version,
+                             const SchedulerMetricsSnapshot &snapshot);
     SchedulerMetricsSnapshot schedulerMetrics() const;
 
     void recordProcessMemory();
 
     void setModelVersion(const std::string &version);
     void setDeployment(const std::string &deployment);
+    std::string modelVersionLabel() const;
 
   private:
     mutable std::mutex mutex_;
 
     SchedulerMetricsSnapshot scheduler_metrics_;
+    std::map<std::string, std::pair<std::string, SchedulerMetricsSnapshot>>
+        scheduler_metrics_by_model_;
     std::string active_model_name_ = "demo";
     std::string model_version_ = "1";
     std::string deployment_;

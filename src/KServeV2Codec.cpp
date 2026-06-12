@@ -55,14 +55,26 @@ std::vector<int64_t> parseShape(const Json &shape) {
     return parsed;
 }
 
-std::optional<std::vector<double>> parseData(const Json &data) {
-    std::vector<double> parsed;
-    parsed.reserve(data.size());
-    for (const auto &value : data) {
-        if (!value.is_number()) {
-            return std::nullopt;
+// Parses a JSON number array straight into the tensor's typed byte buffer.
+std::optional<std::vector<std::byte>> parseData(const Json &data, const std::string &datatype) {
+    std::vector<std::byte> parsed;
+    bool ok = true;
+    const bool known = withTensorElementType(datatype, [&](auto element) {
+        using T = decltype(element);
+        parsed.resize(data.size() * sizeof(T));
+        size_t index = 0;
+        for (const auto &value : data) {
+            if (!value.is_number()) {
+                ok = false;
+                return;
+            }
+            const auto typed = static_cast<T>(value.get<double>());
+            std::memcpy(parsed.data() + (index * sizeof(T)), &typed, sizeof(T));
+            ++index;
         }
-        parsed.push_back(value.get<double>());
+    });
+    if (!known || !ok) {
+        return std::nullopt;
     }
     return parsed;
 }
@@ -157,9 +169,13 @@ Json outputTensorJson(const OutputTensor &tensor) {
             data.push_back(value);
         }
     } else {
-        for (const auto value : tensor.data) {
-            data.push_back(value);
-        }
+        withTensorElementType(tensor.datatype, [&](auto element) {
+            using T = decltype(element);
+            const size_t count = tensor.bytes.size() / sizeof(T);
+            for (size_t i = 0; i < count; ++i) {
+                data.push_back(static_cast<double>(tensorScalarAt<T>(tensor.bytes, i)));
+            }
+        });
     }
     return Json{
         {"name", tensor.name}, {"datatype", tensor.datatype}, {"shape", shape}, {"data", data}};
@@ -253,14 +269,15 @@ InferenceParseResult parseInferenceRequest(const std::string &body, const ModelM
             }
             tensor.string_data = std::move(*string_data);
         } else {
-            auto data = parseData(input["data"]);
+            auto data = parseData(input["data"], datatype);
             if (!data.has_value()) {
                 return invalid("input data values must be numbers for input: " + name);
             }
-            if (!data->empty() && expected_elements != 0 && data->size() != expected_elements) {
+            const auto parsed_elements = tensorElementCount(datatype, *data);
+            if (!data->empty() && expected_elements != 0 && parsed_elements != expected_elements) {
                 return invalid("input data element count mismatch for input: " + name);
             }
-            tensor.data = std::move(*data);
+            tensor.bytes = std::move(*data);
         }
         request.inputs.push_back(std::move(tensor));
     }

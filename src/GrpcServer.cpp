@@ -78,10 +78,10 @@ class GrpcServiceImpl final : public inference::GRPCInferenceService::Service {
         const auto request_id = request->id().empty() ? std::optional<std::string>{}
                                                       : std::make_optional(request->id());
 
-        const auto *handle = model_version.empty()
-                                 ? registry_.findHandle(model_name)
-                                 : registry_.findHandleVersion(model_name, model_version);
-        if (handle == nullptr) {
+        const auto handle = model_version.empty()
+                                ? registry_.findHandle(model_name)
+                                : registry_.findHandleVersion(model_name, model_version);
+        if (!handle) {
             return Status(StatusCode::NOT_FOUND, "model not found: " + model_name);
         }
         if (!handle->isReady()) {

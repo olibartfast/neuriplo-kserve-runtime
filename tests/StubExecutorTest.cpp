@@ -41,8 +41,8 @@ TEST_CASE(stub_executor_returns_deterministic_output) {
     REQUIRE_EQ(response.outputs[0].name, "output");
     REQUIRE_EQ(response.outputs[0].shape.size(), static_cast<size_t>(2));
     REQUIRE_EQ(response.outputs[0].shape[1], 1000);
-    REQUIRE_EQ(response.outputs[0].data.size(), static_cast<size_t>(1000));
-    REQUIRE_EQ(response.outputs[0].data[0], 0.0);
+    REQUIRE_EQ(response.outputs[0].elementCount(), static_cast<size_t>(1000));
+    REQUIRE_EQ(tensorScalarAt<float>(response.outputs[0].bytes, 0), 0.0f);
 }
 
 TEST_CASE(stub_executor_honors_requested_outputs) {

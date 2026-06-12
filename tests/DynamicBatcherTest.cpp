@@ -12,7 +12,8 @@ ExecutionRequest makeRequest(int64_t batch_size, double marker) {
     input.name = "input";
     input.datatype = "FP32";
     input.shape = {batch_size, 2};
-    input.data.assign(static_cast<size_t>(batch_size * 2), marker);
+    input.bytes = tensorBytesFromDoubles(
+        input.datatype, std::vector<double>(static_cast<size_t>(batch_size * 2), marker));
     request.inputs.push_back(input);
     request.requested_outputs = {"output"};
     return request;
@@ -24,7 +25,7 @@ ExecutionResponse makeBatchedResponse(const std::vector<double> &values) {
     output.name = "output";
     output.datatype = "FP32";
     output.shape = {static_cast<int64_t>(values.size()), 1};
-    output.data = values;
+    output.bytes = tensorBytesFromDoubles(output.datatype, values);
     response.outputs.push_back(std::move(output));
     return response;
 }
@@ -40,7 +41,7 @@ TEST_CASE(dynamic_batcher_merges_compatible_requests) {
     REQUIRE_EQ(merged.batch_sizes[1], static_cast<size_t>(2));
     REQUIRE_EQ(merged.request.inputs.size(), static_cast<size_t>(1));
     REQUIRE_EQ(merged.request.inputs[0].shape[0], static_cast<int64_t>(3));
-    REQUIRE_EQ(merged.request.inputs[0].data.size(), static_cast<size_t>(6));
+    REQUIRE_EQ(merged.request.inputs[0].elementCount(), static_cast<size_t>(6));
 }
 
 TEST_CASE(dynamic_batcher_splits_batched_outputs) {
@@ -50,9 +51,9 @@ TEST_CASE(dynamic_batcher_splits_batched_outputs) {
     REQUIRE_EQ(split.size(), static_cast<size_t>(2));
     REQUIRE_EQ(split[0].outputs[0].shape[0], static_cast<int64_t>(1));
     REQUIRE_EQ(split[1].outputs[0].shape[0], static_cast<int64_t>(2));
-    REQUIRE_EQ(split[0].outputs[0].data[0], 10.0);
-    REQUIRE_EQ(split[1].outputs[0].data[0], 20.0);
-    REQUIRE_EQ(split[1].outputs[0].data[1], 30.0);
+    REQUIRE_EQ(tensorScalarAt<float>(split[0].outputs[0].bytes, 0), 10.0f);
+    REQUIRE_EQ(tensorScalarAt<float>(split[1].outputs[0].bytes, 0), 20.0f);
+    REQUIRE_EQ(tensorScalarAt<float>(split[1].outputs[0].bytes, 1), 30.0f);
 }
 
 TEST_CASE(dynamic_batcher_honors_preferred_batch_sizes) {

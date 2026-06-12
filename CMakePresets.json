@@ -75,6 +75,26 @@
       }
     },
     {
+      "name": "real-multi",
+      "inherits": "real-onnx",
+      "displayName": "Real neuriplo multi built-in (OpenCV DNN + ONNX Runtime)",
+      "binaryDir": "${sourceDir}/build/real-multi",
+      "cacheVariables": {
+        "DEFAULT_BACKEND": "OPENCV_DNN",
+        "NEURIPLO_BACKENDS": "OPENCV_DNN;ONNX_RUNTIME"
+      }
+    },
+    {
+      "name": "real-plugin",
+      "inherits": "real-onnx",
+      "displayName": "Real neuriplo OpenCV DNN built-in + ONNX Runtime plugin",
+      "binaryDir": "${sourceDir}/build/real-plugin",
+      "cacheVariables": {
+        "DEFAULT_BACKEND": "OPENCV_DNN",
+        "NEURIPLO_PLUGIN_BACKENDS": "ONNX_RUNTIME"
+      }
+    },
+    {
       "name": "grpc",
       "inherits": "debug",
       "displayName": "gRPC V2 support",
@@ -101,6 +121,8 @@
     { "name": "tsan", "configurePreset": "tsan" },
     { "name": "ubsan", "configurePreset": "ubsan" },
     { "name": "real-onnx", "configurePreset": "real-onnx" },
+    { "name": "real-multi", "configurePreset": "real-multi" },
+    { "name": "real-plugin", "configurePreset": "real-plugin" },
     { "name": "grpc", "configurePreset": "grpc" },
     { "name": "real-onnx-grpc", "configurePreset": "real-onnx-grpc" }
   ],
@@ -128,6 +150,19 @@
     {
       "name": "real-onnx",
       "configurePreset": "real-onnx",
+      "output": { "outputOnFailure": true }
+    },
+    {
+      "name": "real-multi",
+      "configurePreset": "real-multi",
+      "output": { "outputOnFailure": true }
+    },
+    {
+      "name": "real-plugin",
+      "configurePreset": "real-plugin",
+      "environment": {
+        "NEURIPLO_PLUGIN_DIR": "${sourceDir}/build/real-plugin/plugins"
+      },
       "output": { "outputOnFailure": true }
     },
     {
