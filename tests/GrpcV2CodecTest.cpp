@@ -124,8 +124,8 @@ TEST_CASE(grpc_codec_builds_bytes_infer_response) {
     output.string_data = {"hello world"};
     exec_response.outputs.push_back(output);
 
-    const auto proto = grpc_v2::buildInferResponse(exec_response, "llm", "1",
-                                                   std::optional<std::string>{});
+    const auto proto =
+        grpc_v2::buildInferResponse(exec_response, "llm", "1", std::optional<std::string>{});
 
     REQUIRE_EQ(proto.outputs_size(), 1);
     REQUIRE_EQ(proto.outputs(0).datatype(), "BYTES");
