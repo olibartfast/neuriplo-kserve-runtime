@@ -149,9 +149,8 @@ inference::ModelInferResponse buildInferResponse(const ExecutionResponse &exec_r
         if (isBytesDatatype(output.datatype)) {
             fillBytesContents(proto_output->mutable_contents(), output.string_data);
         } else {
-            proto.add_raw_output_contents(
-                std::string(reinterpret_cast<const char *>(output.bytes.data()),
-                            output.bytes.size()));
+            proto.add_raw_output_contents(std::string(
+                reinterpret_cast<const char *>(output.bytes.data()), output.bytes.size()));
         }
     }
 
