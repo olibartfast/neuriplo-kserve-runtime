@@ -13,7 +13,9 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <nlohmann/json.hpp>
+#include <optional>
 #include <random>
 #include <string>
 #include <utility>
@@ -41,6 +43,19 @@ bool startsWith(const std::string &value, const std::string &prefix) {
 bool endsWith(const std::string &value, const std::string &suffix) {
     return value.size() >= suffix.size() &&
            value.compare(value.size() - suffix.size(), suffix.size(), suffix) == 0;
+}
+
+std::optional<size_t> inferenceHeaderLength(const HttpRequest &request) {
+    const auto found = request.headers.find("Inference-Header-Content-Length");
+    if (found == request.headers.end()) {
+        return std::nullopt;
+    }
+    char *end = nullptr;
+    const auto value = std::strtoull(found->second.c_str(), &end, 10);
+    if (end == found->second.c_str() || *end != '\0') {
+        return std::nullopt;
+    }
+    return static_cast<size_t>(value);
 }
 
 std::string extractModelRouteTail(const std::string &path) {
@@ -357,7 +372,10 @@ std::optional<HttpResponse> KServeRuntime::decodeAndAdmit(const HttpRequest &req
                                                           const std::string &model_version,
                                                           const InferSnapshot &handle,
                                                           InferenceParseResult &out_parsed) const {
-    out_parsed = parseInferenceRequest(request.body, handle.metadata);
+    const auto header_length = inferenceHeaderLength(request);
+    out_parsed = header_length.has_value()
+                     ? parseInferenceRequest(request.body, handle.metadata, *header_length)
+                     : parseInferenceRequest(request.body, handle.metadata);
     if (!out_parsed.ok) {
         return error(400, KServeErrors::InvalidArgument, out_parsed.error_message);
     }
@@ -526,8 +544,19 @@ HttpResponse KServeRuntime::encodeInferResponse(const std::string &model_name,
                                 scheduled.execution_latency_ns, scheduled.total_latency_ns,
                                 scheduled.batch_size);
 
-    HttpResponse success_res = json(
-        200, inferenceResponseJson(model_name, model_version, parsed.request, execution_response));
+    HttpResponse success_res;
+    if (inferenceHeaderLength(request).has_value()) {
+        const auto framed =
+            inferenceResponseBinary(model_name, model_version, parsed.request, execution_response);
+        success_res.status = 200;
+        success_res.content_type = "application/octet-stream";
+        success_res.body = framed.body;
+        success_res.headers["Inference-Header-Content-Length"] =
+            std::to_string(framed.header_length);
+    } else {
+        success_res = json(
+            200, inferenceResponseJson(model_name, model_version, parsed.request, execution_response));
+    }
 
     {
         LogEvent span;
