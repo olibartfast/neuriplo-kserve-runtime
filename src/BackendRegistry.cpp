@@ -54,6 +54,10 @@ void registerDefaultBackends() {
              [](const RuntimeConfig &config, std::string &error) {
                  return makeNeuriploExecutor(config, error);
              }},
+            {"litert", BackendKind::Tensor, true,
+             [](const RuntimeConfig &config, std::string &error) {
+                 return makeNeuriploExecutor(config, error);
+             }},
             {"ggml", BackendKind::Llm, true,
              [](const RuntimeConfig &config, std::string &error) {
                  return makeNeuriploExecutor(config, error);
