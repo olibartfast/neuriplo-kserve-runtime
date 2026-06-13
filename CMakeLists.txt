@@ -1,6 +1,16 @@
 cmake_minimum_required(VERSION 3.20)
 
-project(neuriplo-kserve-runtime VERSION 0.2.0 LANGUAGES CXX)
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/VERSION" NEURIPLO_RUNTIME_VERSION_RAW)
+string(STRIP "${NEURIPLO_RUNTIME_VERSION_RAW}" NEURIPLO_RUNTIME_VERSION_RAW)
+string(REGEX MATCH "^[0-9]+\\.[0-9]+\\.[0-9]+" PROJECT_SEMVER "${NEURIPLO_RUNTIME_VERSION_RAW}")
+
+project(neuriplo-kserve-runtime VERSION ${PROJECT_SEMVER} LANGUAGES CXX)
+
+set(NEURIPLO_RUNTIME_VERSION_STRING "${NEURIPLO_RUNTIME_VERSION_RAW}")
+configure_file(
+    cmake/RuntimeVersion.hpp.in
+    ${CMAKE_BINARY_DIR}/generated/RuntimeVersion.hpp
+    @ONLY)
 
 include(cmake/CompileSpeed.cmake)
 
@@ -130,7 +140,7 @@ if(NEURIPLO_RUNTIME_ENABLE_GRPC)
 endif()
 
 add_library(neuriplo-kserve-runtime-core STATIC ${NEURIPLO_RUNTIME_SOURCES})
-target_include_directories(neuriplo-kserve-runtime-core PUBLIC src)
+target_include_directories(neuriplo-kserve-runtime-core PUBLIC src ${CMAKE_BINARY_DIR}/generated)
 target_link_libraries(neuriplo-kserve-runtime-core PUBLIC nlohmann_json::nlohmann_json)
 
 if(NEURIPLO_RUNTIME_ENABLE_REAL_NEURIPLO)

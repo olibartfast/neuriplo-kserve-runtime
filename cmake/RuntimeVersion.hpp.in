@@ -1,0 +1,5 @@
+#pragma once
+
+namespace neuriplo_runtime {
+inline constexpr const char kVersion[] = "@NEURIPLO_RUNTIME_VERSION_STRING@";
+}
