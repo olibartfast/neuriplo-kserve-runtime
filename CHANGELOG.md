@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- `litert` registered as a neuriplo tensor backend, so a litert-enabled build
+  (`-DDEFAULT_BACKEND=LITERT -DLITERT_DIR=...`) serves TFLite models over KServe
+  V2. Validated locally 2026-06-13 with a `.tflite` round-trip
+  (`platform: neuriplo_litert`). Availability for non-litert binaries is still
+  gated by `realNeuriploAvailableBackends`.
+
 ## [0.2.0] - 2026-06-13
 
 ### Added
