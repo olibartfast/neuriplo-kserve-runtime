@@ -131,6 +131,13 @@ valgrind --leak-check=full --error-exitcode=1 ./build/debug/neuriplo-kserve-runt
   --grpc-port 9000
 ```
 
+`--backend` accepts any neuriplo tensor backend compiled into the binary:
+`onnx_runtime`, `opencv_dnn`, `openvino`, `tensorrt`, `libtorch`,
+`libtensorflow`, `migraphx`, `executorch`, `litert` (TFLite), plus the LLM
+backends `llamacpp` / `cactus` / `ggml`. A backend is only servable if neuriplo
+was built with it (see `DEFAULT_BACKEND` / `NEURIPLO_BACKENDS`); the runtime
+reports its model `platform` as `neuriplo_<backend>`.
+
 The runtime also reads KServe-friendly environment defaults. CLI flags override
 environment values.
 
