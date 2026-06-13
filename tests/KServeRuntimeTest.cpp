@@ -123,7 +123,7 @@ TEST_CASE(kserve_runtime_returns_server_metadata) {
     const auto response = request(runtime, "GET", "/v2");
     REQUIRE_EQ(response.status, 200);
     REQUIRE(response.body.find(R"("name":"neuriplo-kserve-runtime")") != std::string::npos);
-    REQUIRE(response.body.find(R"("version":"0.1.0")") != std::string::npos);
+    REQUIRE(response.body.find(R"("version":"0.2.0")") != std::string::npos);
 }
 
 TEST_CASE(kserve_runtime_returns_model_ready) {

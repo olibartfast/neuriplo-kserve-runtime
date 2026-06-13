@@ -66,23 +66,24 @@ Bytes tensorShape(const std::vector<int64_t> &shape) {
     return bytes;
 }
 
-Bytes tensorType(const std::vector<int64_t> &shape) {
+// elem_type is an onnx TensorProto.DataType (FLOAT = 1, INT64 = 7, ...).
+Bytes tensorType(const std::vector<int64_t> &shape, int elem_type) {
     Bytes bytes;
-    appendInt32(bytes, 1, 1); // FLOAT
+    appendInt32(bytes, 1, elem_type);
     appendMessage(bytes, 2, tensorShape(shape));
     return bytes;
 }
 
-Bytes typeProto(const std::vector<int64_t> &shape) {
+Bytes typeProto(const std::vector<int64_t> &shape, int elem_type) {
     Bytes bytes;
-    appendMessage(bytes, 1, tensorType(shape));
+    appendMessage(bytes, 1, tensorType(shape, elem_type));
     return bytes;
 }
 
-Bytes valueInfo(const std::string &name, const std::vector<int64_t> &shape) {
+Bytes valueInfo(const std::string &name, const std::vector<int64_t> &shape, int elem_type) {
     Bytes bytes;
     appendString(bytes, 1, name);
-    appendMessage(bytes, 2, typeProto(shape));
+    appendMessage(bytes, 2, typeProto(shape, elem_type));
     return bytes;
 }
 
@@ -95,7 +96,7 @@ Bytes identityNode() {
     return bytes;
 }
 
-Bytes graphProto() {
+Bytes graphProto(int elem_type) {
     constexpr int kGraphInputField = 11;
     constexpr int kGraphOutputField = 12;
     const std::vector<int64_t> shape{1, 3, 4, 4};
@@ -103,8 +104,8 @@ Bytes graphProto() {
     Bytes bytes;
     appendMessage(bytes, 1, identityNode());
     appendString(bytes, 2, "identity_graph");
-    appendMessage(bytes, kGraphInputField, valueInfo("input", shape));
-    appendMessage(bytes, kGraphOutputField, valueInfo("output", shape));
+    appendMessage(bytes, kGraphInputField, valueInfo("input", shape, elem_type));
+    appendMessage(bytes, kGraphOutputField, valueInfo("output", shape, elem_type));
     return bytes;
 }
 
@@ -114,23 +115,26 @@ Bytes opsetImport() {
     return bytes;
 }
 
-Bytes identityOnnxModel() {
+// onnx_elem_type defaults to FLOAT (1); the IR version field below (value 7) is
+// unrelated to the tensor element type.
+Bytes identityOnnxModel(int onnx_elem_type) {
     Bytes bytes;
     appendInt64(bytes, 1, 7);
     appendString(bytes, 2, "neuriplo-kserve-runtime");
-    appendMessage(bytes, 7, graphProto());
+    appendMessage(bytes, 7, graphProto(onnx_elem_type));
     appendMessage(bytes, 8, opsetImport());
     return bytes;
 }
 
-std::string writeIdentityModel() {
+std::string writeIdentityModel(int onnx_elem_type = 1) {
     const auto path =
-        std::filesystem::temp_directory_path() / "neuriplo-kserve-runtime-identity.onnx";
+        std::filesystem::temp_directory_path() /
+        ("neuriplo-kserve-runtime-identity-" + std::to_string(onnx_elem_type) + ".onnx");
     std::ofstream output(path, std::ios::binary);
     if (!output) {
         throw std::runtime_error("failed to open ONNX smoke model for writing");
     }
-    const auto model = identityOnnxModel();
+    const auto model = identityOnnxModel(onnx_elem_type);
     output.write(reinterpret_cast<const char *>(model.data()),
                  static_cast<std::streamsize>(model.size()));
     return path.string();
@@ -251,6 +255,27 @@ TEST_CASE(real_neuriplo_serves_two_backends_in_one_process) {
             requireNear(output_values[i], static_cast<double>(i) / 10.0);
         }
     }
+}
+
+// Regression guard for the dtype-propagation bug: the runtime once hardcoded
+// every backend tensor datatype to "FP32", which corrupted non-float tensors
+// (e.g. EdgeCrafter's INT64 orig_target_sizes input and labels output) crossing
+// the serving metadata boundary. Build an INT64 identity model and require the
+// real adapter to advertise the true element type, not FP32.
+TEST_CASE(real_neuriplo_reports_non_fp32_metadata_datatype) {
+    constexpr int kOnnxInt64 = 7; // onnx TensorProto.DataType.INT64
+    const auto model_path = writeIdentityModel(kOnnxInt64);
+    auto config = realOnnxConfig(model_path);
+    config.model_name = "identity_i64";
+    const ModelRegistry registry(config);
+    REQUIRE(registry.allReady());
+
+    const auto handle = registry.findHandle("identity_i64");
+    REQUIRE(handle != nullptr);
+    REQUIRE_EQ(handle->metadata.inputs.size(), static_cast<size_t>(1));
+    REQUIRE_EQ(handle->metadata.outputs.size(), static_cast<size_t>(1));
+    REQUIRE_EQ(handle->metadata.inputs[0].datatype, "INT64");
+    REQUIRE_EQ(handle->metadata.outputs[0].datatype, "INT64");
 }
 
 TEST_CASE(real_neuriplo_reports_available_backends) {

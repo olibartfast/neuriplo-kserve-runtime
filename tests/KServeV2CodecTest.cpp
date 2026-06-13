@@ -5,6 +5,7 @@
 #include "Test.hpp"
 
 #include <cstddef>
+#include <cstring>
 #include <string>
 
 namespace {
@@ -92,6 +93,44 @@ TEST_CASE(kserve_v2_codec_preserves_input_tensor_data) {
     REQUIRE_EQ(tensorScalarAt<float>(parsed.request.inputs[0].bytes, 0), 1.25f);
     REQUIRE_EQ(tensorScalarAt<float>(parsed.request.inputs[0].bytes, 1), 2.5f);
     REQUIRE_EQ(tensorScalarAt<float>(parsed.request.inputs[0].bytes, 2), 3.75f);
+}
+
+TEST_CASE(kserve_v2_codec_parses_http_binary_input) {
+    float values[] = {1.25f, 2.5f, 3.75f};
+    std::string header =
+        R"({"inputs":[{"name":"input","shape":[1,3],"datatype":"FP32","parameters":{"binary_data_size":12}}]})";
+    std::string body = header;
+    body.append(reinterpret_cast<const char *>(values), sizeof(values));
+
+    const auto parsed = parseInferenceRequest(body, smallMetadata(), header.size());
+    REQUIRE(parsed.ok);
+    REQUIRE_EQ(parsed.request.inputs.size(), static_cast<size_t>(1));
+    REQUIRE_EQ(parsed.request.inputs[0].elementCount(), static_cast<size_t>(3));
+    REQUIRE_EQ(tensorScalarAt<float>(parsed.request.inputs[0].bytes, 0), 1.25f);
+    REQUIRE_EQ(tensorScalarAt<float>(parsed.request.inputs[0].bytes, 1), 2.5f);
+    REQUIRE_EQ(tensorScalarAt<float>(parsed.request.inputs[0].bytes, 2), 3.75f);
+}
+
+TEST_CASE(kserve_v2_codec_serializes_http_binary_output) {
+    InferenceRequest request;
+    request.id = "req-bin";
+    request.requested_outputs = {"output"};
+
+    ExecutionResponse response;
+    OutputTensor output;
+    output.name = "output";
+    output.datatype = "FP32";
+    output.shape = {1, 2};
+    output.bytes.resize(sizeof(float) * 2);
+    const float values[] = {4.0f, 5.0f};
+    std::memcpy(output.bytes.data(), values, sizeof(values));
+    response.outputs.push_back(std::move(output));
+
+    const auto framed = inferenceResponseBinary("demo", "1", request, response);
+    REQUIRE(framed.header_length < framed.body.size());
+    const auto header = framed.body.substr(0, framed.header_length);
+    REQUIRE(header.find(R"("binary_data_size":8)") != std::string::npos);
+    REQUIRE_EQ(framed.body.size() - framed.header_length, sizeof(values));
 }
 
 TEST_CASE(kserve_v2_codec_parses_requested_outputs) {
