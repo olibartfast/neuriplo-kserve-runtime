@@ -42,7 +42,7 @@ void printUsage(std::ostream &out) {
 
 int main(int argc, char **argv) {
     if (hasFlag(argc, argv, "--version")) {
-        std::cout << "neuriplo-kserve-runtime 0.1.0" << '\n';
+        std::cout << "neuriplo-kserve-runtime 0.2.0" << '\n';
         return 0;
     }
     if (hasFlag(argc, argv, "--help") || hasFlag(argc, argv, "-h")) {
