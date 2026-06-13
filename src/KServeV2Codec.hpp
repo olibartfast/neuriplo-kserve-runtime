@@ -21,9 +21,21 @@ struct InferenceParseResult {
 };
 
 InferenceParseResult parseInferenceRequest(const std::string &body, const ModelMetadata &metadata);
+InferenceParseResult parseInferenceRequest(const std::string &body, const ModelMetadata &metadata,
+                                           size_t header_length);
 
 std::string modelMetadataJson(const ModelMetadata &metadata);
 
 std::string inferenceResponseJson(const std::string &model_name, const std::string &model_version,
                                   const InferenceRequest &request,
                                   const ExecutionResponse &response);
+
+struct BinaryInferenceResponse {
+    std::string body;
+    size_t header_length = 0;
+};
+
+BinaryInferenceResponse inferenceResponseBinary(const std::string &model_name,
+                                                const std::string &model_version,
+                                                const InferenceRequest &request,
+                                                const ExecutionResponse &response);
