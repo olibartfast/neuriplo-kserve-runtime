@@ -4,6 +4,7 @@
 #include "MetricsRegistry.hpp"
 #include "ModelRegistry.hpp"
 #include "RuntimeConfig.hpp"
+#include "RuntimeVersion.hpp"
 
 #ifdef NEURIPLO_RUNTIME_WITH_GRPC
 #include "GrpcServer.hpp"
@@ -42,7 +43,7 @@ void printUsage(std::ostream &out) {
 
 int main(int argc, char **argv) {
     if (hasFlag(argc, argv, "--version")) {
-        std::cout << "neuriplo-kserve-runtime 0.2.0" << '\n';
+        std::cout << "neuriplo-kserve-runtime " << neuriplo_runtime::kVersion << '\n';
         return 0;
     }
     if (hasFlag(argc, argv, "--help") || hasFlag(argc, argv, "-h")) {

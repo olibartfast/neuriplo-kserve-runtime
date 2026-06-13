@@ -5,6 +5,7 @@
 #include "GrpcV2Codec.hpp"
 #include "KServeErrors.hpp"
 #include "Logging.hpp"
+#include "RuntimeVersion.hpp"
 #include "Scheduler.hpp"
 #include "kserve_grpc.grpc.pb.h"
 
@@ -54,7 +55,7 @@ class GrpcServiceImpl final : public inference::GRPCInferenceService::Service {
                           const inference::ServerMetadataRequest * /*request*/,
                           inference::ServerMetadataResponse *reply) override {
         reply->set_name("neuriplo-kserve-runtime");
-        reply->set_version("0.2.0");
+        reply->set_version(neuriplo_runtime::kVersion);
         return Status::OK;
     }
 
