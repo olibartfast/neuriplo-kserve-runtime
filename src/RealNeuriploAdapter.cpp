@@ -164,7 +164,8 @@ std::string stripPbtxtComments(const std::string &content) {
 
 // Returns the balanced [ ... ] body that follows a top-level key (dims use
 // nested [ ] so bracket depth, not the first ']', delimits the section).
-std::optional<std::string> extractBracketSection(const std::string &content, const std::string &key) {
+std::optional<std::string> extractBracketSection(const std::string &content,
+                                                 const std::string &key) {
     const std::regex header(key + R"(\s*\[)");
     std::smatch match;
     if (!std::regex_search(content, match, header)) {
@@ -239,14 +240,16 @@ std::optional<std::string> findConfigPbtxt(const std::string &model_path) {
     return std::nullopt;
 }
 
-void overlayPbtxt(std::vector<TensorMetadata> &tensors, const std::vector<PbtxtTensor> &config, const char *kind) {
+void overlayPbtxt(std::vector<TensorMetadata> &tensors, const std::vector<PbtxtTensor> &config,
+                  const char *kind) {
     if (config.empty()) {
         return;
     }
     if (config.size() != tensors.size()) {
-        defaultLogger().warn(std::string("config.pbtxt ") + kind + " count (" + std::to_string(config.size()) +
-                             ") does not match backend metadata (" + std::to_string(tensors.size()) +
-                             "); keeping backend " + kind + " metadata");
+        defaultLogger().warn(std::string("config.pbtxt ") + kind + " count (" +
+                             std::to_string(config.size()) + ") does not match backend metadata (" +
+                             std::to_string(tensors.size()) + "); keeping backend " + kind +
+                             " metadata");
         return;
     }
     for (size_t i = 0; i < tensors.size(); ++i) {
