@@ -95,10 +95,10 @@ TEST_CASE(kserve_v2_codec_preserves_input_tensor_data) {
     REQUIRE_EQ(tensorScalarAt<float>(parsed.request.inputs[0].bytes, 2), 3.75f);
 }
 
-
 TEST_CASE(kserve_v2_codec_parses_http_binary_input) {
     float values[] = {1.25f, 2.5f, 3.75f};
-    std::string header = R"({"inputs":[{"name":"input","shape":[1,3],"datatype":"FP32","parameters":{"binary_data_size":12}}]})";
+    std::string header =
+        R"({"inputs":[{"name":"input","shape":[1,3],"datatype":"FP32","parameters":{"binary_data_size":12}}]})";
     std::string body = header;
     body.append(reinterpret_cast<const char *>(values), sizeof(values));
 
