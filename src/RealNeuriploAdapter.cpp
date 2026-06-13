@@ -5,13 +5,19 @@
 #ifdef NEURIPLO_RUNTIME_WITH_REAL_NEURIPLO
 #include "BackendRegistry.hpp"
 #include "InferenceBackendSetup.hpp"
+#include "Logging.hpp"
 #include "Tokenizer.hpp"
 
 #include <algorithm>
 #include <cctype>
 #include <cstddef>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <memory>
+#include <optional>
+#include <regex>
 #include <string>
 #include <variant>
 
@@ -102,6 +108,177 @@ std::vector<TensorMetadata> convertLayers(const std::vector<LayerInfo> &layers,
     return tensors;
 }
 
+// --- config.pbtxt I/O overlay -------------------------------------------------
+// The .pte ExecuTorch format carries no tensor names, so a name-less backend
+// advertises positional input_0/output_0 metadata. Triton-style model configs
+// already declare the authoritative I/O contract, so when a config.pbtxt sits
+// beside the model we overlay its names (and datatypes) onto backend metadata
+// by index. Backends that introspect real names (ONNX, TensorRT, OpenVINO) are
+// unaffected because the config matches the model. This keeps the backends
+// fully model-agnostic instead of hardcoding any single model's tensor names.
+struct PbtxtTensor {
+    std::string name;
+    std::string datatype; // KServe datatype string; empty when unmapped
+};
+
+std::string pbtxtTypeToKserve(const std::string &type) {
+    if (type == "TYPE_FP32")
+        return "FP32";
+    if (type == "TYPE_FP16")
+        return "FP16";
+    if (type == "TYPE_INT64")
+        return "INT64";
+    if (type == "TYPE_INT32")
+        return "INT32";
+    if (type == "TYPE_INT8")
+        return "INT8";
+    if (type == "TYPE_UINT8")
+        return "UINT8";
+    if (type == "TYPE_BOOL")
+        return "BOOL";
+    return {};
+}
+
+std::string stripPbtxtComments(const std::string &content) {
+    std::string out;
+    out.reserve(content.size());
+    bool in_string = false;
+    for (size_t i = 0; i < content.size(); ++i) {
+        const char c = content[i];
+        if (c == '"') {
+            in_string = !in_string;
+        }
+        if (c == '#' && !in_string) {
+            while (i < content.size() && content[i] != '\n') {
+                ++i;
+            }
+            if (i < content.size()) {
+                out.push_back('\n');
+            }
+            continue;
+        }
+        out.push_back(c);
+    }
+    return out;
+}
+
+// Returns the balanced [ ... ] body that follows a top-level key (dims use
+// nested [ ] so bracket depth, not the first ']', delimits the section).
+std::optional<std::string> extractBracketSection(const std::string &content, const std::string &key) {
+    const std::regex header(key + R"(\s*\[)");
+    std::smatch match;
+    if (!std::regex_search(content, match, header)) {
+        return std::nullopt;
+    }
+    size_t pos = static_cast<size_t>(match.position(0)) + static_cast<size_t>(match.length(0));
+    const size_t start = pos;
+    int depth = 1;
+    for (; pos < content.size() && depth > 0; ++pos) {
+        if (content[pos] == '[') {
+            ++depth;
+        } else if (content[pos] == ']') {
+            --depth;
+        }
+    }
+    if (depth != 0) {
+        return std::nullopt;
+    }
+    return content.substr(start, pos - 1 - start);
+}
+
+std::vector<PbtxtTensor> parsePbtxtTensors(const std::string &section) {
+    std::vector<PbtxtTensor> tensors;
+    const std::regex name_re(R"re(name\s*:\s*"([^"]*)")re");
+    const std::regex dtype_re(R"re(data_type\s*:\s*(TYPE_[A-Z0-9]+))re");
+    for (size_t i = 0; i < section.size();) {
+        if (section[i] != '{') {
+            ++i;
+            continue;
+        }
+        const size_t start = ++i;
+        int depth = 1;
+        for (; i < section.size() && depth > 0; ++i) {
+            if (section[i] == '{') {
+                ++depth;
+            } else if (section[i] == '}') {
+                --depth;
+            }
+        }
+        const std::string object = section.substr(start, (i - 1) - start);
+        PbtxtTensor tensor;
+        std::smatch m;
+        if (std::regex_search(object, m, name_re)) {
+            tensor.name = m[1];
+        }
+        if (std::regex_search(object, m, dtype_re)) {
+            tensor.datatype = pbtxtTypeToKserve(m[1]);
+        }
+        if (!tensor.name.empty()) {
+            tensors.push_back(std::move(tensor));
+        }
+    }
+    return tensors;
+}
+
+std::optional<std::string> findConfigPbtxt(const std::string &model_path) {
+    namespace fs = std::filesystem;
+    const fs::path path(model_path);
+    std::vector<fs::path> candidates;
+    if (path.has_parent_path()) {
+        // <model>/<version>/model.ext -> <model>/config.pbtxt
+        candidates.push_back(path.parent_path().parent_path() / "config.pbtxt");
+        candidates.push_back(path.parent_path() / "config.pbtxt");
+    }
+    candidates.push_back(path / "config.pbtxt");
+    for (const auto &candidate : candidates) {
+        std::error_code ec;
+        if (fs::is_regular_file(candidate, ec)) {
+            return candidate.string();
+        }
+    }
+    return std::nullopt;
+}
+
+void overlayPbtxt(std::vector<TensorMetadata> &tensors, const std::vector<PbtxtTensor> &config, const char *kind) {
+    if (config.empty()) {
+        return;
+    }
+    if (config.size() != tensors.size()) {
+        defaultLogger().warn(std::string("config.pbtxt ") + kind + " count (" + std::to_string(config.size()) +
+                             ") does not match backend metadata (" + std::to_string(tensors.size()) +
+                             "); keeping backend " + kind + " metadata");
+        return;
+    }
+    for (size_t i = 0; i < tensors.size(); ++i) {
+        tensors[i].name = config[i].name;
+        if (!config[i].datatype.empty()) {
+            tensors[i].datatype = config[i].datatype;
+        }
+    }
+}
+
+void applyConfigPbtxt(const std::string &model_path, ModelMetadata &metadata) {
+    const auto config_path = findConfigPbtxt(model_path);
+    if (!config_path) {
+        return;
+    }
+    std::ifstream in(*config_path);
+    if (!in) {
+        return;
+    }
+    std::string content((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    content = stripPbtxtComments(content);
+    const auto inputs = extractBracketSection(content, "input");
+    const auto outputs = extractBracketSection(content, "output");
+    if (inputs) {
+        overlayPbtxt(metadata.inputs, parsePbtxtTensors(*inputs), "input");
+    }
+    if (outputs) {
+        overlayPbtxt(metadata.outputs, parsePbtxtTensors(*outputs), "output");
+    }
+    defaultLogger().info("applied config.pbtxt I/O metadata from " + *config_path);
+}
+
 double tensorElementToDouble(const TensorElement &element) {
     return std::visit([](const auto value) { return static_cast<double>(value); }, element);
 }
@@ -157,6 +334,10 @@ class RealNeuriploAdapter final : public NeuriploAdapter {
                                             extractDatatypes(backend_metadata.getInputs()));
             metadata.outputs = convertLayers(backend_metadata.getOutputs(),
                                              extractDatatypes(backend_metadata.getOutputs()));
+            // Triton-style config.pbtxt (when present) is authoritative for I/O
+            // names/datatypes; this supplies names for backends whose model
+            // format carries none (ExecuTorch .pte) without backend hardcoding.
+            applyConfigPbtxt(config.model_path, metadata);
         }
         output_metadata_.clear();
         output_metadata_.reserve(metadata.outputs.size());

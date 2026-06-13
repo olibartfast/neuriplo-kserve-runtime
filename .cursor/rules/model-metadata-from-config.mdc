@@ -1,0 +1,33 @@
+---
+description: Source named I/O contract from config.pbtxt at the serving layer (Triton-style); never push model specifics into a backend
+alwaysApply: true
+---
+
+# Model metadata comes from the model or config.pbtxt — not from backend hardcoding
+
+The runtime advertises model metadata from two sources, in Triton's order:
+
+1. **The model file**, when the backend can introspect it (ONNX, TensorRT
+   engine, OpenVINO IR self-describe names/dtypes — "auto-complete").
+2. **`config.pbtxt`**, when the model format carries no names (ExecuTorch
+   `.pte`). `RealNeuriploAdapter::applyConfigPbtxt()` parses `input[]`/`output[]`
+   name + `data_type` and overlays them onto backend metadata **by index**
+   (counts must match; mismatch logs a warning and keeps backend metadata).
+
+## Rules
+
+- If a model needs a named contract the backend can't introspect, add a
+  `config.pbtxt` beside it (`<model>/config.pbtxt`, model at
+  `<model>/1/model.ext`). Do NOT edit the backend in `../neuriplo` to emit a
+  specific model's names — see neuriplo rule `backends-model-agnostic`.
+- Only generate `config.pbtxt` for backends that actually need it (name-less
+  formats). Self-describing backends must not depend on a generated config.
+- Keep `pbtxtTypeToKserve` in sync with the KServe datatype strings clients
+  expect (`TYPE_FP32` → `FP32`, etc.).
+
+## Why
+
+A Cursor agent once "fixed" a name-less ExecuTorch model by hardcoding one
+model's tensor names into the generic backend, mislabeling every model of the
+same I/O arity. The correct layer is the serving config, exactly as Triton does
+it and as the `tritonic` client expects (`/v2/models/<name>/config`).
