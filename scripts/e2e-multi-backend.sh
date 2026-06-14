@@ -12,7 +12,6 @@ set -euo pipefail
 #   cmake -S . -B build/real-trt-plugin -G Ninja \
 #     -DCMAKE_BUILD_TYPE=Debug \
 #     -DNEURIPLO_RUNTIME_ENABLE_REAL_NEURIPLO=ON \
-#     -DNEURIPLO_RUNTIME_NEURIPLO_SOURCE_DIR=../neuriplo \
 #     -DDEFAULT_BACKEND=ONNX_RUNTIME \
 #     -DNEURIPLO_PLUGIN_BACKENDS=TENSORRT \
 #     -DTENSORRT_DIR=$HOME/dependencies/TensorRT-10.13.3.9 \

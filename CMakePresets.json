@@ -69,7 +69,6 @@
       "binaryDir": "${sourceDir}/build/real-onnx",
       "cacheVariables": {
         "NEURIPLO_RUNTIME_ENABLE_REAL_NEURIPLO": "ON",
-        "NEURIPLO_RUNTIME_NEURIPLO_SOURCE_DIR": "${sourceDir}/../neuriplo",
         "DEFAULT_BACKEND": "ONNX_RUNTIME",
         "BUILD_INFERENCE_ENGINE_TESTS": "OFF"
       }

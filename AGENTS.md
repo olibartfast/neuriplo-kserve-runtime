@@ -51,10 +51,12 @@ ctest --preset debug
 instrumentation. Release metadata lives in `VERSION` (read by CMake) and
 `CHANGELOG.md` (Keep a Changelog format). On `release/*`, bump `VERSION`,
 update `CHANGELOG.md`, then merge to `master` and tag `vX.Y.Z`. Real-neuriplo presets
-need a `../neuriplo` checkout on `develop`: `real-onnx` / `real-onnx-grpc` (single built-in ONNX Runtime), `real-multi` (built-in OpenCV DNN +
-ONNX Runtime in one binary), and `real-plugin` (OpenCV DNN built-in plus ONNX Runtime
-as a dlopen plugin; its ctest preset sets `NEURIPLO_PLUGIN_DIR` to the build's
-`plugins/` directory). CI real-neuriplo jobs check out `neuriplo@develop` (PR #7).
+auto-clone neuriplo from GitHub (tag pinned in `versions.env`) into
+`build/<preset>/_deps/neurip-src/`: `real-onnx` / `real-onnx-grpc` (single built-in
+ONNX Runtime), `real-multi` (built-in OpenCV DNN + ONNX Runtime in one binary), and
+`real-plugin` (OpenCV DNN built-in plus ONNX Runtime as a dlopen plugin; its ctest
+preset sets `NEURIPLO_PLUGIN_DIR` to the build's `plugins/` directory). To iterate on
+neurip itself, override with `-DNEURIPLO_RUNTIME_NEURIPLO_SOURCE_DIR=/path/to/neuriplo`.
 `scripts/e2e-stub.sh` smoke-tests the stub HTTP surface;
 `scripts/e2e-multi-backend.sh` exercises two backends (ONNX Runtime built-in +
 TensorRT plugin) in one server on a local GPU machine — see its header for the

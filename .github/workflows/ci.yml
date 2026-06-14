@@ -134,12 +134,6 @@ jobs:
       ONNX_RUNTIME_VERSION: 1.19.2
     steps:
       - uses: actions/checkout@v4
-      - name: Check out neuriplo
-        uses: actions/checkout@v4
-        with:
-          repository: olibartfast/neuriplo
-          ref: develop
-          path: neuriplo
       - name: Install build tools and backend dependencies
         run: sudo apt-get update && sudo apt-get install -y build-essential cmake ninja-build ccache libgrpc++-dev protobuf-compiler-grpc libopencv-dev libgoogle-glog-dev
       - name: Cache ONNX Runtime
@@ -161,7 +155,6 @@ jobs:
         run: >
           cmake --preset real-onnx-grpc
           -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
-          -DNEURIPLO_RUNTIME_NEURIPLO_SOURCE_DIR=${{ github.workspace }}/neuriplo
           -DONNX_RUNTIME_DIR=${{ github.workspace }}/onnxruntime-linux-x64-${{ env.ONNX_RUNTIME_VERSION }}
       - name: Build
         run: cmake --build --preset real-onnx-grpc --parallel
@@ -176,12 +169,6 @@ jobs:
       ONNX_RUNTIME_VERSION: 1.19.2
     steps:
       - uses: actions/checkout@v4
-      - name: Check out neuriplo
-        uses: actions/checkout@v4
-        with:
-          repository: olibartfast/neuriplo
-          ref: develop
-          path: neuriplo
       - name: Install build tools and backend dependencies
         run: sudo apt-get update && sudo apt-get install -y build-essential cmake ninja-build ccache libopencv-dev libgoogle-glog-dev
       - name: Cache ONNX Runtime
@@ -203,7 +190,6 @@ jobs:
         run: >
           cmake --preset real-multi
           -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
-          -DNEURIPLO_RUNTIME_NEURIPLO_SOURCE_DIR=${{ github.workspace }}/neuriplo
           -DONNX_RUNTIME_DIR=${{ github.workspace }}/onnxruntime-linux-x64-${{ env.ONNX_RUNTIME_VERSION }}
       - name: Build
         run: cmake --build --preset real-multi --parallel
@@ -218,12 +204,6 @@ jobs:
       ONNX_RUNTIME_VERSION: 1.19.2
     steps:
       - uses: actions/checkout@v4
-      - name: Check out neuriplo
-        uses: actions/checkout@v4
-        with:
-          repository: olibartfast/neuriplo
-          ref: develop
-          path: neuriplo
       - name: Install build tools and backend dependencies
         run: sudo apt-get update && sudo apt-get install -y build-essential cmake ninja-build ccache libopencv-dev libgoogle-glog-dev
       - name: Cache ONNX Runtime
@@ -245,7 +225,6 @@ jobs:
         run: >
           cmake --preset real-plugin
           -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
-          -DNEURIPLO_RUNTIME_NEURIPLO_SOURCE_DIR=${{ github.workspace }}/neuriplo
           -DONNX_RUNTIME_DIR=${{ github.workspace }}/onnxruntime-linux-x64-${{ env.ONNX_RUNTIME_VERSION }}
       - name: Build
         run: cmake --build --preset real-plugin --parallel
