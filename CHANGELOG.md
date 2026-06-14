@@ -6,6 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-06-14
+
+### Changed
+- **Build system**: neuriplo is now auto-cloned from GitHub into
+  `build/<preset>/_deps/neurip-src/` at configure time (tag pinned in
+  `versions.env`). The mandatory `../neuriplo` sibling checkout is no longer
+  required. Local checkout still available as override via
+  `-DNEURIPLO_RUNTIME_NEURIPLO_SOURCE_DIR=/path/to/neuriplo`.
+- CI: real-* jobs no longer need a second `actions/checkout` for neuriplo.
+- Presets: `NEURIPLO_RUNTIME_NEURIPLO_SOURCE_DIR` removed from all real-*
+  preset cache variables.
+
+### Added
+- `versions.env` -- single source of truth for third-party dependency versions
+  (`NEURIPLO_VERSION`, `ONNX_RUNTIME_VERSION`).
+
 ## [0.3.0] - 2026-06-14
 
 ### Added
