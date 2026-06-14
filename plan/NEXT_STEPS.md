@@ -115,8 +115,9 @@ path.
 
 ### Release
 
-Cut **neuriplo v0.6.0** (last release v0.5.0) and tag runtime after develop CI is stable
-post PR #7 + #14. Multi-backend + plugin ABI is a solid minor bump.
+Runtime `release/0.3.0` is cut from `develop`; finish GitFlow by merging it to
+`master`, tagging `v0.3.0`, and back-merging to `develop`. Cut the matching
+neuriplo release once its raw-output API gate is merged and CI is stable.
 
 ### Parallel track (out of scope unless requested)
 

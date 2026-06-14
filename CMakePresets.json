@@ -111,6 +111,42 @@
       "cacheVariables": {
         "NEURIPLO_RUNTIME_ENABLE_GRPC": "ON"
       }
+    },
+    {
+      "name": "real-openvino",
+      "inherits": "real-onnx",
+      "displayName": "Real neuriplo OpenVINO",
+      "binaryDir": "${sourceDir}/build/real-openvino",
+      "cacheVariables": {
+        "DEFAULT_BACKEND": "OPENVINO"
+      }
+    },
+    {
+      "name": "real-openvino-grpc",
+      "inherits": "real-openvino",
+      "displayName": "Real neuriplo OpenVINO + gRPC",
+      "binaryDir": "${sourceDir}/build/real-openvino-grpc",
+      "cacheVariables": {
+        "NEURIPLO_RUNTIME_ENABLE_GRPC": "ON"
+      }
+    },
+    {
+      "name": "real-executorch",
+      "inherits": "real-onnx",
+      "displayName": "Real neuriplo ExecuTorch",
+      "binaryDir": "${sourceDir}/build/real-executorch",
+      "cacheVariables": {
+        "DEFAULT_BACKEND": "EXECUTORCH"
+      }
+    },
+    {
+      "name": "real-executorch-grpc",
+      "inherits": "real-executorch",
+      "displayName": "Real neuriplo ExecuTorch + gRPC",
+      "binaryDir": "${sourceDir}/build/real-executorch-grpc",
+      "cacheVariables": {
+        "NEURIPLO_RUNTIME_ENABLE_GRPC": "ON"
+      }
     }
   ],
   "buildPresets": [
@@ -124,7 +160,11 @@
     { "name": "real-multi", "configurePreset": "real-multi" },
     { "name": "real-plugin", "configurePreset": "real-plugin" },
     { "name": "grpc", "configurePreset": "grpc" },
-    { "name": "real-onnx-grpc", "configurePreset": "real-onnx-grpc" }
+    { "name": "real-onnx-grpc", "configurePreset": "real-onnx-grpc" },
+    { "name": "real-openvino", "configurePreset": "real-openvino" },
+    { "name": "real-openvino-grpc", "configurePreset": "real-openvino-grpc" },
+    { "name": "real-executorch", "configurePreset": "real-executorch" },
+    { "name": "real-executorch-grpc", "configurePreset": "real-executorch-grpc" }
   ],
   "testPresets": [
     {
@@ -173,6 +213,26 @@
     {
       "name": "real-onnx-grpc",
       "configurePreset": "real-onnx-grpc",
+      "output": { "outputOnFailure": true }
+    },
+    {
+      "name": "real-openvino",
+      "configurePreset": "real-openvino",
+      "output": { "outputOnFailure": true }
+    },
+    {
+      "name": "real-openvino-grpc",
+      "configurePreset": "real-openvino-grpc",
+      "output": { "outputOnFailure": true }
+    },
+    {
+      "name": "real-executorch",
+      "configurePreset": "real-executorch",
+      "output": { "outputOnFailure": true }
+    },
+    {
+      "name": "real-executorch-grpc",
+      "configurePreset": "real-executorch-grpc",
       "output": { "outputOnFailure": true }
     }
   ]

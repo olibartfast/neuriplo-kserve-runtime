@@ -7,6 +7,7 @@
 #include "Logging.hpp"
 #include "OpenAiCodec.hpp"
 #include "RequestPipeline.hpp"
+#include "RuntimeVersion.hpp"
 #include "Scheduler.hpp"
 #include "Tokenizer.hpp"
 
@@ -253,7 +254,10 @@ HttpResponse KServeRuntime::handle(const HttpRequest &request) const {
 }
 
 HttpResponse KServeRuntime::serverMetadata() const {
-    return json(200, R"({"name":"neuriplo-kserve-runtime","version":"0.2.0","extensions":[]})");
+    return json(200, Json{{"name", "neuriplo-kserve-runtime"},
+                          {"version", neuriplo_runtime::kVersion},
+                          {"extensions", Json::array()}}
+                         .dump());
 }
 
 HttpResponse KServeRuntime::live() const {

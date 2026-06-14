@@ -48,9 +48,10 @@ ctest --preset debug
 
 `debug` builds the runtime and unit test binary. `release` creates an optimized build.
 `lint` enables clang-tidy. `asan`, `ubsan`, and `tsan` build with sanitizer
-instrumentation. Real-neuriplo presets need a `../neuriplo` checkout on `develop`
-(`feature/multi-backend-registry` until PR #13 landed): `real-onnx` /
-`real-onnx-grpc` (single built-in ONNX Runtime), `real-multi` (built-in OpenCV DNN +
+instrumentation. Release metadata lives in `VERSION` (read by CMake) and
+`CHANGELOG.md` (Keep a Changelog format). On `release/*`, bump `VERSION`,
+update `CHANGELOG.md`, then merge to `master` and tag `vX.Y.Z`. Real-neuriplo presets
+need a `../neuriplo` checkout on `develop`: `real-onnx` / `real-onnx-grpc` (single built-in ONNX Runtime), `real-multi` (built-in OpenCV DNN +
 ONNX Runtime in one binary), and `real-plugin` (OpenCV DNN built-in plus ONNX Runtime
 as a dlopen plugin; its ctest preset sets `NEURIPLO_PLUGIN_DIR` to the build's
 `plugins/` directory). CI real-neuriplo jobs check out `neuriplo@develop` (PR #7).
@@ -114,8 +115,10 @@ Branch mapping for this repository:
 - `master` — production (`main` in GitFlow)
 - `develop` — integration branch for features
 - `feature/*` or `feat/*` — branch from `develop`, merge to `develop` via PR
-- `release/*` — branch from `develop`; merge to `master` (tagged) and `develop`
-- `hotfix/*` — branch from `master`; merge to `master` and `develop`
+- `release/*` — branch from `develop`; merge to `master` (tagged) and `develop`;
+  delete locally and on `origin`
+- `hotfix/*` — branch from `master`; merge to `master` and `develop`; delete
+  locally and on `origin`
 
 Do not commit feature work directly to `master`. Use PRs for merges into `develop` and
 `master`. If `develop` does not exist yet, create it from `master` before starting new

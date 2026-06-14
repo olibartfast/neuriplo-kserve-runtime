@@ -13,6 +13,7 @@
 #include "ModelStateMachine.hpp"
 #include "RequestPipeline.hpp"
 #include "RuntimeConfig.hpp"
+#include "RuntimeVersion.hpp"
 #include "Scheduler.hpp"
 #include "SchedulerMetrics.hpp"
 #include "StubExecutor.hpp"
@@ -443,7 +444,8 @@ TEST_CASE(e2e_server_metadata) {
     const auto resp = sendRawHttp(server.port(), httpGet(server.port(), "/v2"));
     REQUIRE_EQ(resp.status, 200);
     REQUIRE(resp.body.find(R"("name":"neuriplo-kserve-runtime")") != std::string::npos);
-    REQUIRE(resp.body.find(R"("version":"0.2.0")") != std::string::npos);
+    REQUIRE(resp.body.find(std::string(R"("version":")") + neuriplo_runtime::kVersion + '"') !=
+            std::string::npos);
     REQUIRE(resp.body.find(R"("extensions")") != std::string::npos);
 }
 
