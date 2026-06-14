@@ -1,0 +1,37 @@
+---
+description: Keep AGENTS.md in sync when plan or workflow docs change
+alwaysApply: true
+---
+
+# MANDATORY: Maintain AGENTS.md
+
+Update `AGENTS.md` in the **same task** when your work changes any trigger below.
+Do not wait for the user to ask. A small focused doc diff belongs in the same PR/commit
+as the code or plan change.
+
+## Triggers
+
+Update `AGENTS.md` when you:
+
+1. Add, complete, or materially edit `plan/STEP<N>.md` or `plan/NEXT_STEPS.md`
+2. Change build/test/lint commands, CMake presets, or CI validation steps
+3. Add mandatory agent workflow rules (new `.cursor/rules/*.mdc` or equivalent)
+4. Change repo layout, module boundaries, or default runtime invocation
+5. Introduce a cross-cutting architectural pattern (also update `plan/DESIGN_PATTERNS.md`)
+
+## What to sync
+
+- **Step range**: highest `plan/STEP<N>.md` that exists; point to `plan/NEXT_STEPS.md` for current status
+- **One-line current status**: e.g. "Steps 0–14 complete; see `plan/NEXT_STEPS.md`"
+- **Commands and conventions**: only sections affected by your change; do not rewrite unrelated prose
+
+## Do not
+
+- Duplicate `plan/NEXT_STEPS.md`, `plan/ROADMAP.md`, or full step snapshots inside `AGENTS.md`
+- Skip the update because the user did not mention `AGENTS.md`
+- Expand `AGENTS.md` with feature-level detail — keep it stable repo conventions plus pointers
+
+## Quick check before finishing
+
+If you touched `plan/`, `.cursor/rules/`, `CMakePresets.json`, `scripts/check-format.sh`, or
+`.github/workflows/`, re-read `AGENTS.md` and fix stale references before handing off.

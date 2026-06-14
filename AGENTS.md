@@ -116,8 +116,10 @@ Branch mapping for this repository:
 - `master` — production (`main` in GitFlow)
 - `develop` — integration branch for features
 - `feature/*` or `feat/*` — branch from `develop`, merge to `develop` via PR
-- `release/*` — branch from `develop`; merge to `master` (tagged) and `develop`
-- `hotfix/*` — branch from `master`; merge to `master` and `develop`
+- `release/*` — branch from `develop`; merge to `master` (tagged) and `develop`;
+  delete locally and on `origin`
+- `hotfix/*` — branch from `master`; merge to `master` and `develop`; delete
+  locally and on `origin`
 
 Do not commit feature work directly to `master`. Use PRs for merges into `develop` and
 `master`. If `develop` does not exist yet, create it from `master` before starting new
