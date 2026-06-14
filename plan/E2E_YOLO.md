@@ -58,22 +58,16 @@ neuriplo-infer
 
 ```bash
 # 1. Clone all components on their dev branches
-git clone -b neuriplo-kserve-runtime git@github.com:olibartfast/neuriplo.git
 git clone -b develop git@github.com:olibartfast/neuriplo-tasks.git
 git clone -b develop git@github.com:olibartfast/neuriplo-infer.git
 git clone git@github.com:olibartfast/neuriplo-kserve-runtime.git
 
-# 2. Build neuriplo first (shared lib)
-cd neuriplo
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build
-
-# 3. Build runtime with real neuriplo
-cd ../neuriplo-kserve-runtime
-cmake --preset real-onnx -DNEURIPLO_RUNTIME_NEURIPLO_SOURCE_DIR=../neuriplo
+# 2. Build runtime (neurip is auto-fetched via FetchContent; pin tag in versions.env)
+cd neuriplo-kserve-runtime
+cmake --preset real-onnx
 cmake --build --preset real-onnx
 
-# 4. Build neuriplo-tasks and neuriplo-infer (TBD — depends on their build system)
+# 3. Build neuriplo-tasks and neuriplo-infer (TBD — depends on their build system)
 cd ../neuriplo-tasks && <build>
 cd ../neuriplo-infer && <build>
 ```

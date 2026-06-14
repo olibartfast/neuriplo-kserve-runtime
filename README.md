@@ -43,21 +43,20 @@ ctest --preset debug
 ```
 
 The default build does not require `neuriplo`. To compile the real adapter
-against a sibling checkout:
-
-```bash
-cmake -S . -B build/real-neuriplo \
-  -DNEURIPLO_RUNTIME_ENABLE_REAL_NEURIPLO=ON \
-  -DNEURIPLO_RUNTIME_NEURIPLO_SOURCE_DIR=/path/to/neuriplo
-cmake --build build/real-neuriplo
-```
-
-For the local sibling checkout and ONNX Runtime smoke test:
+(neurip is auto-fetched from GitHub via CMake FetchContent; pin its tag in
+`versions.env`):
 
 ```bash
 cmake --preset real-onnx
 cmake --build --preset real-onnx
 ctest --preset real-onnx
+```
+
+If you need to iterate on neuriplo itself, point CMake at a local checkout:
+
+```bash
+cmake --preset real-onnx -DNEURIPLO_RUNTIME_NEURIPLO_SOURCE_DIR=/path/to/neuriplo
+cmake --build --preset real-onnx
 ```
 
 ### Unit tests

@@ -20,6 +20,24 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 include(FetchContent)
 
+# Pin third-party versions from a single source of truth.
+# Format: KEY=VALUE (one per line, blank lines and #-comments allowed).
+set(NEURIPLO_VERSION "develop")
+set(ONNX_RUNTIME_VERSION "")
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/versions.env")
+    file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/versions.env" _VERSIONS_ENV)
+    foreach(_LINE IN LISTS _VERSIONS_ENV)
+        string(STRIP "${_LINE}" _LINE)
+        if(_LINE MATCHES "^([A-Za-z_][A-Za-z0-9_]*)=(.*)$")
+            if("${CMAKE_MATCH_1}" STREQUAL "NEURIPLO_VERSION")
+                set(NEURIPLO_VERSION "${CMAKE_MATCH_2}")
+            elseif("${CMAKE_MATCH_1}" STREQUAL "ONNX_RUNTIME_VERSION")
+                set(ONNX_RUNTIME_VERSION "${CMAKE_MATCH_2}")
+            endif()
+        endif()
+    endforeach()
+endif()
+
 FetchContent_Declare(
     nlohmann_json
     URL https://github.com/nlohmann/json/releases/download/v3.12.0/json.tar.xz
@@ -32,8 +50,8 @@ option(NEURIPLO_RUNTIME_ENABLE_REAL_NEURIPLO "Build the real neuriplo adapter" O
 option(NEURIPLO_RUNTIME_ENABLE_GRPC "Build gRPC V2 support" OFF)
 set(NEURIPLO_RUNTIME_GRPC_PLUGIN "" CACHE FILEPATH
     "grpc_cpp_plugin path override for hosts where the gRPC package lacks the plugin binary")
-set(NEURIPLO_RUNTIME_NEURIPLO_SOURCE_DIR "../neuriplo" CACHE PATH
-    "Path to a local neuriplo checkout when real neuriplo support is enabled")
+set(NEURIPLO_RUNTIME_NEURIPLO_SOURCE_DIR "" CACHE PATH
+    "Local neuriplo checkout path (empty = auto-clone from GitHub)")
 set(NEURIPLO_SANITIZER "" CACHE STRING "Enable sanitizer instrumentation: address, thread, or undefined")
 set_property(CACHE NEURIPLO_SANITIZER PROPERTY STRINGS "" address thread undefined)
 
@@ -62,13 +80,31 @@ set(NEURIPLO_RUNTIME_SOURCES
 )
 
 if(NEURIPLO_RUNTIME_ENABLE_REAL_NEURIPLO)
-    if(NOT EXISTS "${NEURIPLO_RUNTIME_NEURIPLO_SOURCE_DIR}/CMakeLists.txt")
-        message(FATAL_ERROR "NEURIPLO_RUNTIME_NEURIPLO_SOURCE_DIR must point to a neuriplo checkout")
-    endif()
     find_package(OpenCV REQUIRED)
     find_package(glog REQUIRED)
     set(BUILD_INFERENCE_ENGINE_TESTS OFF CACHE BOOL "Disable neuriplo tests when embedded" FORCE)
-    add_subdirectory("${NEURIPLO_RUNTIME_NEURIPLO_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/neuriplo")
+
+    if(NEURIPLO_RUNTIME_NEURIPLO_SOURCE_DIR AND EXISTS "${NEURIPLO_RUNTIME_NEURIPLO_SOURCE_DIR}/CMakeLists.txt")
+        message(STATUS "Using local neuriplo checkout: ${NEURIPLO_RUNTIME_NEURIPLO_SOURCE_DIR}")
+        add_subdirectory("${NEURIPLO_RUNTIME_NEURIPLO_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/neuriplo")
+    else()
+        message(STATUS "Fetching neuriplo ${NEURIPLO_VERSION} from GitHub")
+        set(_NEURIPLO_CLONE_DIR "${FETCHCONTENT_BASE_DIR}/neurip-src")
+        if(NOT EXISTS "${_NEURIPLO_CLONE_DIR}/CMakeLists.txt")
+            execute_process(
+                COMMAND git clone --depth 1 --branch ${NEURIPLO_VERSION}
+                    https://github.com/olibartfast/neuriplo.git
+                    "${_NEURIPLO_CLONE_DIR}"
+                RESULT_VARIABLE _CLONE_RESULT
+            )
+            if(NOT _CLONE_RESULT EQUAL 0)
+                message(FATAL_ERROR "Failed to clone neuriplo (tag=${NEURIPLO_VERSION})")
+            endif()
+        endif()
+        set(NEURIPLO_RUNTIME_NEURIPLO_SOURCE_DIR "${_NEURIPLO_CLONE_DIR}")
+        message(STATUS "Using neuriplo at ${_NEURIPLO_CLONE_DIR}")
+        add_subdirectory("${_NEURIPLO_CLONE_DIR}" "${CMAKE_BINARY_DIR}/neuriplo")
+    endif()
 endif()
 
 if(NEURIPLO_RUNTIME_ENABLE_GRPC)
