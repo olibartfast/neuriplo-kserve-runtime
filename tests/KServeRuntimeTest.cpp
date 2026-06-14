@@ -4,6 +4,7 @@
 #include "ModelHandle.hpp"
 #include "ModelRegistry.hpp"
 #include "RuntimeConfig.hpp"
+#include "RuntimeVersion.hpp"
 #include "Test.hpp"
 
 #include <chrono>
@@ -123,7 +124,8 @@ TEST_CASE(kserve_runtime_returns_server_metadata) {
     const auto response = request(runtime, "GET", "/v2");
     REQUIRE_EQ(response.status, 200);
     REQUIRE(response.body.find(R"("name":"neuriplo-kserve-runtime")") != std::string::npos);
-    REQUIRE(response.body.find(R"("version":"0.2.0")") != std::string::npos);
+    REQUIRE(response.body.find(std::string(R"("version":")") + neuriplo_runtime::kVersion + '"') !=
+            std::string::npos);
 }
 
 TEST_CASE(kserve_runtime_returns_model_ready) {

@@ -26,8 +26,11 @@ Follow the [Atlassian GitFlow workflow](https://www.atlassian.com/git/tutorials/
    git checkout -b feature/my-change   # or feat/my-change
    ```
 3. **Finish features** via PR into `develop` (not `master`).
-4. **Releases** fork from `develop` as `release/x.y.z`. When ready, merge to `master` (tag version) and back to `develop`.
-5. **Hotfixes** fork from `master` only. When done, merge to both `master` and `develop`.
+4. **Releases** fork from `develop` as `release/x.y.z`. When ready, merge to
+   `master` (tag version) and back to `develop`; delete `release/*` locally and
+   on `origin` (see `gitflow-release-cleanup.mdc`).
+5. **Hotfixes** fork from `master` only. When done, merge to both `master` and
+   `develop`; delete `hotfix/*` locally and on `origin`.
 6. **Never** let `feature/*` merge directly to `master`.
 7. Use PRs for all merges into `develop` and `master`; keep branches short-lived.
 
