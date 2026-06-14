@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-06-14
+
 ### Added
 - `litert` registered as a neuriplo tensor backend, so a litert-enabled build
   (`-DDEFAULT_BACKEND=LITERT -DLITERT_DIR=...`) serves TFLite models over KServe
@@ -37,6 +39,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Multi-backend plugin mode (built-in plus dlopen backends in one process).
 - Dynamic batching, LLM scheduler path, metrics, and e2e smoke scripts.
 
-[Unreleased]: https://github.com/olibartfast/neuriplo-kserve-runtime/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/olibartfast/neuriplo-kserve-runtime/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/olibartfast/neuriplo-kserve-runtime/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/olibartfast/neuriplo-kserve-runtime/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/olibartfast/neuriplo-kserve-runtime/releases/tag/v0.1.0

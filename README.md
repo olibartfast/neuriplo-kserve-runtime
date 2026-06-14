@@ -7,21 +7,20 @@ V2 protocol surface, request admission, scheduling, batching, model lifecycle,
 and operational endpoints. The actual backend execution remains owned by
 [neuriplo].
 
-## Initial Scope
+## Runtime Scope
 
-- HTTP and gRPC KServe V2 health and metadata endpoints.
-- Single-model runtime process.
-- Bounded request handling.
-- Raw tensor inference through the stub executor by default, with optional
-  `neuriplo` executor wiring.
+- HTTP and optional gRPC KServe V2 health, metadata, and inference endpoints.
+- Multi-model registry with admin load, unload, reload, and version activation endpoints.
+- Bounded request handling with tensor and LLM scheduler paths.
+- Stub execution by default, with optional real `neuriplo` adapter wiring.
 - CMake-based C++ build.
 
-## Planned Flow
+## Request Flow
 
-1. KServe / client
+1. KServe client
 2. `neuriplo-kserve-runtime`
-3. model registry
-4. scheduler
+3. model registry and lifecycle snapshot
+4. scheduler and executor
 5. [neuriplo] backend instance
 6. KServe V2 response
 

@@ -50,9 +50,8 @@ ctest --preset debug
 `lint` enables clang-tidy. `asan`, `ubsan`, and `tsan` build with sanitizer
 instrumentation. Release metadata lives in `VERSION` (read by CMake) and
 `CHANGELOG.md` (Keep a Changelog format). On `release/*`, bump `VERSION`,
-update `CHANGELOG.md`, then merge to `master` and tag `vX.Y.Z`. Real-neuriplo presets need a `../neuriplo` checkout on `develop`
-(`feature/multi-backend-registry` until PR #13 landed): `real-onnx` /
-`real-onnx-grpc` (single built-in ONNX Runtime), `real-multi` (built-in OpenCV DNN +
+update `CHANGELOG.md`, then merge to `master` and tag `vX.Y.Z`. Real-neuriplo presets
+need a `../neuriplo` checkout on `develop`: `real-onnx` / `real-onnx-grpc` (single built-in ONNX Runtime), `real-multi` (built-in OpenCV DNN +
 ONNX Runtime in one binary), and `real-plugin` (OpenCV DNN built-in plus ONNX Runtime
 as a dlopen plugin; its ctest preset sets `NEURIPLO_PLUGIN_DIR` to the build's
 `plugins/` directory). CI real-neuriplo jobs check out `neuriplo@develop` (PR #7).
