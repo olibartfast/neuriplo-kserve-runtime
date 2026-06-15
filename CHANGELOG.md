@@ -20,7 +20,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 - `versions.env` -- single source of truth for third-party dependency versions
-  (`NEURIPLO_VERSION`, `ONNX_RUNTIME_VERSION`).
+  (`NEURIPLO_VERSION`).
 
 ## [0.3.0] - 2026-06-14
 
