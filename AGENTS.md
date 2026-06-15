@@ -49,8 +49,10 @@ ctest --preset debug
 `debug` builds the runtime and unit test binary. `release` creates an optimized build.
 `lint` enables clang-tidy. `asan`, `ubsan`, and `tsan` build with sanitizer
 instrumentation. Release metadata lives in `VERSION` (read by CMake) and
-`CHANGELOG.md` (Keep a Changelog format). On `release/*`, bump `VERSION`,
-update `CHANGELOG.md`, then merge to `master` and tag `vX.Y.Z`. Real-neuriplo presets
+`CHANGELOG.md` (Keep a Changelog format). Run `scripts/release-patch.sh` to
+execute a GitFlow patch release (bumps `VERSION`, updates `CHANGELOG.md`,
+merges to `master`, tags `vX.Y.Z`, and merges back to `develop`). Use
+`--dry-run` to preview. Real-neuriplo presets
 auto-clone neuriplo from GitHub (tag pinned in `versions.env`) into
 `build/<preset>/_deps/neurip-src/`: `real-onnx` / `real-onnx-grpc` (single built-in
 ONNX Runtime), `real-multi` (built-in OpenCV DNN + ONNX Runtime in one binary), and
