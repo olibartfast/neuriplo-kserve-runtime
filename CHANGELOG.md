@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-06-15
+
 ## [0.3.1] - 2026-06-14
 
 ### Changed
@@ -20,7 +22,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 - `versions.env` -- single source of truth for third-party dependency versions
-  (`NEURIPLO_VERSION`, `ONNX_RUNTIME_VERSION`).
+  (`NEURIPLO_VERSION`).
 
 ## [0.3.0] - 2026-06-14
 
@@ -55,7 +57,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Multi-backend plugin mode (built-in plus dlopen backends in one process).
 - Dynamic batching, LLM scheduler path, metrics, and e2e smoke scripts.
 
-[Unreleased]: https://github.com/olibartfast/neuriplo-kserve-runtime/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/olibartfast/neuriplo-kserve-runtime/compare/v0.3.2...HEAD
 [0.3.0]: https://github.com/olibartfast/neuriplo-kserve-runtime/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/olibartfast/neuriplo-kserve-runtime/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/olibartfast/neuriplo-kserve-runtime/releases/tag/v0.1.0
+[0.3.2]: https://github.com/olibartfast/neuriplo-kserve-runtime/compare/v0.3.1...v0.3.2
