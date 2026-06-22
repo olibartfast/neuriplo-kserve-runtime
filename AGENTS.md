@@ -89,6 +89,13 @@ git ls-files 'src/*.cpp' 'src/*.hpp' 'tests/*.cpp' 'tests/*.hpp' \
 scripts/check-format.sh
 ```
 
+## Hyperlink verification
+
+When editing documentation (`README.md`, `plan/*.md`) with hyperlinks:
+- Verify all relative links resolve to existing files in the repo.
+- Verify absolute GitHub URLs are reachable.
+- Prefer absolute GitHub blob/tree URLs over fragile cross-repo relative paths.
+
 ## Coding Style & Naming Conventions
 
 Use 4-space indentation and the repository `.clang-format` profile. Types and classes
