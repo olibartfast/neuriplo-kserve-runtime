@@ -109,7 +109,21 @@ std::optional<std::vector<InputTensor>> orderedInputs(const ModelMetadata &metad
             error = invalidArgument("unsupported datatype for neuriplo input: " + input.name);
             return std::nullopt;
         }
-        if (input.shape != metadata_input->shape) {
+        // A negative metadata dimension is the dynamic-axis marker and accepts
+        // any concrete extent -- encoded-image inputs declare [1, -1] because
+        // their byte length varies per request. Mirrors shapeMatches() in the
+        // KServe codec; exact equality here rejected every dynamic-input model.
+        bool shape_ok = input.shape.size() == metadata_input->shape.size();
+        if (shape_ok) {
+            for (size_t dim = 0; dim < input.shape.size(); ++dim) {
+                if (input.shape[dim] < 0 || (metadata_input->shape[dim] >= 0 &&
+                                             input.shape[dim] != metadata_input->shape[dim])) {
+                    shape_ok = false;
+                    break;
+                }
+            }
+        }
+        if (!shape_ok) {
             error = invalidArgument("invalid shape for neuriplo input: " + input.name);
             return std::nullopt;
         }
