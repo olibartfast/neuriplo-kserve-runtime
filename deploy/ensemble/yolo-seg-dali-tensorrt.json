@@ -1,0 +1,25 @@
+{
+  "steps": [
+    {
+      "kind": "model",
+      "name": "pre",
+      "model_name": "yolo_pre",
+      "output_map": {"preprocessed": "images", "IMAGE_SHAPE": "FRAME_SIZE"}
+    },
+    {
+      "kind": "model",
+      "name": "seg",
+      "model_name": "yolo26seg",
+      "input_map": {"images": "images"}
+    },
+    {
+      "kind": "postprocess",
+      "name": "post",
+      "task_type": "yolo26seg",
+      "envelope": "mask",
+      "confidence_threshold": 0.30,
+      "nms_threshold": 0.45,
+      "input_map": {"output0": "output0", "output1": "output1", "FRAME_SIZE": "FRAME_SIZE"}
+    }
+  ]
+}

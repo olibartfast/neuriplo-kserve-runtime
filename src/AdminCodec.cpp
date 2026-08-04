@@ -77,11 +77,19 @@ void applyCommonFields(const Json &json, RuntimeConfig &config) {
     readString(json, "plugin_dir", config.plugin_dir);
     readInputSizes(json, config);
     readString(json, "model_path", config.model_path);
+    // A pipeline graph may be sent inline as an object (the natural way to write
+    // it in a load body) or as a JSON string; both reach the parser as text.
+    if (json.contains("pipeline_graph")) {
+        config.pipeline_graph = json["pipeline_graph"].is_string()
+                                    ? json["pipeline_graph"].get<std::string>()
+                                    : json["pipeline_graph"].dump();
+    }
     readString(json, "storage_uri", config.storage_uri);
     readString(json, "scheduler_strategy", config.scheduler_strategy);
     readSizeT(json, "instances", config.instances);
     readSizeT(json, "max_queue_size", config.max_queue_size);
     readInt64(json, "request_timeout_ms", config.request_timeout_ms);
+    readBool(json, "use_gpu", config.use_gpu);
     readBool(json, "dynamic_batching_enabled", config.dynamic_batching_enabled);
     readSizeT(json, "max_batch_size", config.max_batch_size);
     readInt64(json, "max_queue_delay_us", config.max_queue_delay_us);

@@ -40,7 +40,14 @@ bool shapeMatches(const Json &shape, const TensorMetadata &metadata) {
             return false;
         }
         const auto dimension = shape[i].get<int64_t>();
-        if (dimension < 0 || dimension != metadata.shape[i]) {
+        if (dimension < 0) {
+            return false;
+        }
+        // A negative dimension in the model's metadata is KServe's dynamic-axis
+        // marker and accepts any concrete extent. Encoded-image inputs are the
+        // first models here to declare one: their byte length varies per
+        // request.
+        if (metadata.shape[i] >= 0 && dimension != metadata.shape[i]) {
             return false;
         }
     }

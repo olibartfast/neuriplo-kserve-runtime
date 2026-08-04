@@ -525,6 +525,11 @@ class ModelScheduler final : public Scheduler {
             result.response = split_responses.at(index);
             if (!result.response.ok) {
                 result.ok = false;
+                // Surface the executor's error through the SchedulerResult
+                // fields too: transports report those on failure, and leaving
+                // them empty redacts the real message into "internal error".
+                result.error_code = result.response.error_code;
+                result.error_message = result.response.error_message;
             }
             fulfillResult(pending, std::move(result));
         }
@@ -585,6 +590,9 @@ class ModelScheduler final : public Scheduler {
         result.response = std::move(response);
         if (!result.response.ok) {
             result.ok = false;
+            // Same as the batch path: keep the executor's error visible.
+            result.error_code = result.response.error_code;
+            result.error_message = result.response.error_message;
         }
         fulfillResult(pending, std::move(result));
     }

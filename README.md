@@ -13,6 +13,9 @@ and operational endpoints. The actual backend execution remains owned by
 - Multi-model registry with admin load, unload, reload, and version activation endpoints.
 - Bounded request handling with tensor and LLM scheduler paths.
 - Stub execution by default, with optional real `neuriplo` adapter wiring.
+- Pipeline (ensemble) models: an ordered graph of preprocess, model, and
+  postprocess steps served as one model, so clients can send an encoded image
+  and receive decoded results. See [deploy/ensemble/README.md](deploy/ensemble/README.md).
 - CMake-based C++ build.
 
 ## Request Flow

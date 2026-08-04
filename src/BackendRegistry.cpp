@@ -2,6 +2,7 @@
 
 #include "NeuriploAdapter.hpp"
 #include "NeuriploExecutor.hpp"
+#include "PipelineExecutor.hpp"
 #include "StubExecutor.hpp"
 
 #include <algorithm>
@@ -21,6 +22,16 @@ void registerDefaultBackends() {
             {"stub", BackendKind::Tensor, false,
              [](const RuntimeConfig &config, std::string &error) {
                  return makeStubExecutor(config, error);
+             }},
+            // Pipeline (ensemble) models are registered so admin loads and
+            // backend listings recognise them, but they are never built through
+            // this factory: an ensemble needs a resolver for the models its
+            // graph references, which ModelRegistry supplies.
+            {pipelineBackendId(), BackendKind::Tensor, false,
+             [](const RuntimeConfig &, std::string &error) -> std::unique_ptr<Executor> {
+                 error = "pipeline models must be loaded through the model registry, which "
+                         "supplies the graph's model resolver";
+                 return nullptr;
              }},
             {"onnx_runtime", BackendKind::Tensor, true,
              [](const RuntimeConfig &config, std::string &error) {
@@ -55,6 +66,14 @@ void registerDefaultBackends() {
                  return makeNeuriploExecutor(config, error);
              }},
             {"litert", BackendKind::Tensor, true,
+             [](const RuntimeConfig &config, std::string &error) {
+                 return makeNeuriploExecutor(config, error);
+             }},
+            // GPU preprocessing rather than inference: a DALI "model" is a
+            // serialized pipeline that decodes and preprocesses an encoded
+            // image. It is a tensor backend here because a pipeline step
+            // consumes it exactly like any other model.
+            {"dali", BackendKind::Tensor, true,
              [](const RuntimeConfig &config, std::string &error) {
                  return makeNeuriploExecutor(config, error);
              }},
