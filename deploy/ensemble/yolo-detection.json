@@ -1,0 +1,22 @@
+{
+  "steps": [
+    {
+      "kind": "preprocess",
+      "name": "pre",
+      "task_type": "yolo26"
+    },
+    {
+      "kind": "model",
+      "name": "detect",
+      "model_name": "yolo"
+    },
+    {
+      "kind": "postprocess",
+      "name": "post",
+      "task_type": "yolo26",
+      "envelope": "detection",
+      "confidence_threshold": 0.25,
+      "nms_threshold": 0.45
+    }
+  ]
+}

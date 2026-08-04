@@ -66,6 +66,11 @@ class ModelRegistry {
     size_t retiredSchedulerCount() const;
 
   private:
+    static bool isPipelineConfig(const RuntimeConfig &config);
+    // Builds pipeline executors up front, outside the registry lock, and
+    // returns a factory that hands them to the lifecycle. Must be called
+    // without models_mutex_ held.
+    ExecutorFactory makePipelineFactory(const RuntimeConfig &config);
     bool loadModelLocked(const std::string &model_name, const RuntimeConfig &config,
                          ExecutorFactory factory);
     ModelSlot *findSlotMutable(const std::string &model_name);

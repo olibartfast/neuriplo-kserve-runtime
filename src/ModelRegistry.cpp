@@ -1,7 +1,10 @@
 #include "ModelRegistry.hpp"
 
 #include "BackendRegistry.hpp"
+#include "PipelineExecutor.hpp"
 
+#include <algorithm>
+#include <memory>
 #include <utility>
 
 namespace {
@@ -73,7 +76,47 @@ bool ModelRegistry::loadModelLocked(const std::string &model_name, const Runtime
     return true;
 }
 
+bool ModelRegistry::isPipelineConfig(const RuntimeConfig &config) {
+    return config.backend == pipelineBackendId();
+}
+
+// Pipeline executors are built here, before the registry lock is taken, because
+// building one resolves the models its graph references -- and those lookups
+// take the same lock. Handing the finished executors to the lifecycle through a
+// factory keeps the load path itself unchanged.
+ModelRegistry::ExecutorFactory ModelRegistry::makePipelineFactory(const RuntimeConfig &config) {
+    PipelineStepResolver resolver = [this](const std::string &model_name,
+                                           const std::string &model_version) {
+        return model_version.empty() ? findHandle(model_name)
+                                     : findHandleVersion(model_name, model_version);
+    };
+
+    auto prebuilt = std::make_shared<std::vector<std::unique_ptr<Executor>>>();
+    auto build_error = std::make_shared<std::string>();
+    const size_t instances = std::max<size_t>(config.instances, 1);
+    for (size_t instance = 0; instance < instances; ++instance) {
+        auto executor = makePipelineExecutor(config, resolver, *build_error);
+        if (!executor) {
+            break;
+        }
+        prebuilt->push_back(std::move(executor));
+    }
+
+    auto next = std::make_shared<size_t>(0);
+    return [prebuilt, build_error, next](const RuntimeConfig &,
+                                         std::string &error) -> std::unique_ptr<Executor> {
+        if (*next >= prebuilt->size()) {
+            error = build_error->empty() ? "pipeline executor unavailable" : *build_error;
+            return nullptr;
+        }
+        return std::move((*prebuilt)[(*next)++]);
+    };
+}
+
 bool ModelRegistry::loadModel(const RuntimeConfig &config) {
+    if (isPipelineConfig(config)) {
+        return loadModel(config, makePipelineFactory(config));
+    }
     return loadModel(config, defaultExecutorFactory);
 }
 
@@ -104,6 +147,9 @@ bool ModelRegistry::unloadModel(const std::string &model_name) {
 }
 
 bool ModelRegistry::reload(const std::string &model_name, const RuntimeConfig &config) {
+    if (isPipelineConfig(config)) {
+        return reload(model_name, config, makePipelineFactory(config));
+    }
     return reload(model_name, config, defaultExecutorFactory);
 }
 
@@ -137,6 +183,13 @@ bool ModelRegistry::reload(const RuntimeConfig &config, ExecutorFactory factory)
 
 bool ModelRegistry::switchVersion(const std::string &model_name, const std::string &version,
                                   const RuntimeConfig &config) {
+    // Same reason as load and reload: the registered ensemble backend factory
+    // deliberately fails, because building a pipeline needs a resolver for the
+    // models its graph references. Without this branch, activating a version of
+    // an ensemble always fails.
+    if (isPipelineConfig(config)) {
+        return switchVersion(model_name, version, config, makePipelineFactory(config));
+    }
     return switchVersion(model_name, version, config, defaultExecutorFactory);
 }
 
