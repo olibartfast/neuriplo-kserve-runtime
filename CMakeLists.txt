@@ -23,6 +23,7 @@ include(FetchContent)
 # Pin third-party versions from a single source of truth.
 # Format: KEY=VALUE (one per line, blank lines and #-comments allowed).
 set(NEURIPLO_VERSION "develop")
+set(NEURIPLO_TASKS_VERSION "develop")
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/versions.env")
     file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/versions.env" _VERSIONS_ENV)
     foreach(_LINE IN LISTS _VERSIONS_ENV)
@@ -30,6 +31,8 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/versions.env")
         if(_LINE MATCHES "^([A-Za-z_][A-Za-z0-9_]*)=(.*)$")
             if("${CMAKE_MATCH_1}" STREQUAL "NEURIPLO_VERSION")
                 set(NEURIPLO_VERSION "${CMAKE_MATCH_2}")
+            elseif("${CMAKE_MATCH_1}" STREQUAL "NEURIPLO_TASKS_VERSION")
+                set(NEURIPLO_TASKS_VERSION "${CMAKE_MATCH_2}")
             endif()
         endif()
     endforeach()
@@ -44,11 +47,17 @@ FetchContent_MakeAvailable(nlohmann_json)
 
 option(NEURIPLO_ENABLE_CLANG_TIDY "Run clang-tidy during builds" OFF)
 option(NEURIPLO_RUNTIME_ENABLE_REAL_NEURIPLO "Build the real neuriplo adapter" OFF)
+# Task-layer preprocess/postprocess steps for pipeline (ensemble) models. OFF
+# keeps the runtime's dependency graph exactly as it is without ensembles;
+# model-step chaining works either way. See ADR 0011.
+option(NEURIPLO_RUNTIME_ENABLE_TASKS "Build task-layer pipeline steps" OFF)
 option(NEURIPLO_RUNTIME_ENABLE_GRPC "Build gRPC V2 support" OFF)
 set(NEURIPLO_RUNTIME_GRPC_PLUGIN "" CACHE FILEPATH
     "grpc_cpp_plugin path override for hosts where the gRPC package lacks the plugin binary")
 set(NEURIPLO_RUNTIME_NEURIPLO_SOURCE_DIR "" CACHE PATH
     "Local neuriplo checkout path (empty = auto-clone from GitHub)")
+set(NEURIPLO_RUNTIME_TASKS_SOURCE_DIR "" CACHE PATH
+    "Local neuriplo-tasks checkout path (empty = fetch the pinned tag from GitHub)")
 set(NEURIPLO_SANITIZER "" CACHE STRING "Enable sanitizer instrumentation: address, thread, or undefined")
 set_property(CACHE NEURIPLO_SANITIZER PROPERTY STRINGS "" address thread undefined)
 
@@ -66,6 +75,9 @@ set(NEURIPLO_RUNTIME_SOURCES
     src/MetricsRegistry.cpp
     src/ModelLifecycle.cpp
     src/ModelRegistry.cpp
+    src/PipelineConfig.cpp
+    src/PipelineEnvelope.cpp
+    src/PipelineExecutor.cpp
     src/SchedulerRetireQueue.cpp
     src/ModelScheduler.cpp
     src/NeuriploAdapterDefault.cpp
@@ -172,9 +184,36 @@ if(NEURIPLO_RUNTIME_ENABLE_GRPC)
     )
 endif()
 
+if(NEURIPLO_RUNTIME_ENABLE_TASKS)
+    list(APPEND NEURIPLO_RUNTIME_SOURCES src/PipelineStepsTasks.cpp)
+else()
+    list(APPEND NEURIPLO_RUNTIME_SOURCES src/PipelineStepsDisabled.cpp)
+endif()
+
 add_library(neuriplo-kserve-runtime-core STATIC ${NEURIPLO_RUNTIME_SOURCES})
 target_include_directories(neuriplo-kserve-runtime-core PUBLIC src ${CMAKE_BINARY_DIR}/generated)
 target_link_libraries(neuriplo-kserve-runtime-core PUBLIC nlohmann_json::nlohmann_json)
+
+if(NEURIPLO_RUNTIME_ENABLE_TASKS)
+    # vision-stb only: the runtime decodes encoded images without OpenCV.
+    set(NEURIPLO_TASKS_WITH_OPENCV OFF CACHE BOOL "" FORCE)
+    set(BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    if(NEURIPLO_RUNTIME_TASKS_SOURCE_DIR AND EXISTS "${NEURIPLO_RUNTIME_TASKS_SOURCE_DIR}/CMakeLists.txt")
+        message(STATUS "Using local neuriplo-tasks checkout: ${NEURIPLO_RUNTIME_TASKS_SOURCE_DIR}")
+        set(FETCHCONTENT_SOURCE_DIR_NEURIPLO-TASKS "${NEURIPLO_RUNTIME_TASKS_SOURCE_DIR}" CACHE PATH "" FORCE)
+    endif()
+    FetchContent_Declare(
+        neuriplo-tasks
+        GIT_REPOSITORY https://github.com/olibartfast/neuriplo-tasks.git
+        GIT_TAG        ${NEURIPLO_TASKS_VERSION}
+    )
+    FetchContent_MakeAvailable(neuriplo-tasks)
+    target_compile_definitions(neuriplo-kserve-runtime-core PUBLIC NEURIPLO_RUNTIME_WITH_TASKS)
+    target_link_libraries(neuriplo-kserve-runtime-core PUBLIC
+        neuriplo-tasks
+        neuriplo-tasks::vision-stb
+    )
+endif()
 
 if(NEURIPLO_RUNTIME_ENABLE_REAL_NEURIPLO)
     target_compile_definitions(neuriplo-kserve-runtime-core PRIVATE NEURIPLO_RUNTIME_WITH_REAL_NEURIPLO)
@@ -235,6 +274,7 @@ add_executable(neuriplo-kserve-runtime-tests
     tests/ModelRegistryTest.cpp
     tests/MultiModelRegistryTest.cpp
     tests/NeuriploPlatformE2eTest.cpp
+    tests/PipelineTest.cpp
     tests/SchedulerRetireQueueTest.cpp
     tests/ModelStateMachineTest.cpp
     tests/NeuriploExecutorTest.cpp

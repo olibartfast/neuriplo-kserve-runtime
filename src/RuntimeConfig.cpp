@@ -195,6 +195,8 @@ RuntimeConfig parseRuntimeConfig(int argc, char **argv, const RuntimeEnvironment
         } else if (arg == "--preferred-batch-sizes") {
             config.preferred_batch_sizes =
                 parsePreferredBatchSizes(requireValue(i, argc, argv, arg));
+        } else if (arg == "--use-gpu") {
+            config.use_gpu = parseBoolFlag(requireValue(i, argc, argv, arg), arg);
         } else if (arg == "--log-payloads") {
             config.log_payloads = parseBoolFlag(requireValue(i, argc, argv, arg), arg);
         } else if (arg == "--scheduler-strategy") {
