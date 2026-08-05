@@ -136,9 +136,24 @@ curl -X POST localhost:8080/v2/admin/models/load -d '{
   "input_sizes": [[3, 640, 640]]}'
 ```
 
-The DALI model emits the preprocessed tensor plus `IMAGE_SHAPE` (the decoder's
-native height, width, channels); the postprocess step accepts that layout for
-`FRAME_SIZE` directly. Pipelines are authored offline by
+The DALI model emits the preprocessed tensor plus the source dimensions as
+INT64 (height, width), which is both what the built-in `postprocess` step wants
+for `FRAME_SIZE` and what the GPU postprocessing operators consume.
+
+For an all-GPU ensemble, chain a second DALI model that postprocesses on the
+GPU, so results never touch the host between steps:
+
+```bash
+curl -X POST localhost:8080/v2/admin/models/load -d '{
+  "model_name": "yolo_post", "backend": "dali", "use_gpu": true,
+  "model_path": "/models/yolo_post/1/pipeline.dali|plugin=/models/libyolo26_seg_dali.so|outnames=NUM_DETECTIONS,BOXES,SCORES,CLASSES,MASK_OFFSETS,MASK_DATA",
+  "input_sizes": [[300, 38], [2], [32, 160, 160]]}'
+```
+
+`input_sizes` follows the pipeline's declared external-input order (query the
+loaded model's metadata to see it). Measured on YOLO26m-seg with TensorRT FP16,
+server-side: CPU pre+post 144.5 ms, GPU pre + CPU post 119.8 ms, GPU pre+post
+69.9 ms. Pipelines are authored offline by
 `export/dali/generate_yolo_pipeline.py` in the neuriplo repo -- inference-time
 execution is pure C++ through the DALI C API.
 

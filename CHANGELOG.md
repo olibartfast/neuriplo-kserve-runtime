@@ -23,6 +23,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   refuse to load with an explicit message.
 - `pipeline_graph` in the admin load body, for supplying a graph inline instead
   of by path.
+- All-GPU ensembles: chaining a DALI preprocessing model, a TensorRT engine,
+  and a DALI GPU postprocessing model runs the whole request on the GPU. On
+  YOLO26m-seg the server-side pipeline goes from 144.5 ms (CPU pre and post)
+  to 69.9 ms, 2.07x. The source-dimensions tensor is INT64 (height, width) so
+  one preprocessing output feeds either postprocess path.
 - `deploy/ensemble/yolo-seg-dali-tensorrt.json`: worked DALI -> TensorRT ->
   postprocess graph, and launcher scripts (`scripts/serve-dali-trt.sh`,
   `scripts/serve-onnx-gpu.sh`) recording each configuration's runtime library

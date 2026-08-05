@@ -25,7 +25,9 @@ constexpr const char *kFrameSizeTensor = "FRAME_SIZE";
 // map boxes back onto the original frame, and making the dependency a graph
 // edge is what lets graph validation catch a postprocess step wired without it.
 TensorMetadata frameSizeTensor() {
-    return {kFrameSizeTensor, "INT32", {2}};
+    // INT64 (height, width): the same convention the GPU postprocessing
+    // operators consume, so one producer serves both postprocess paths.
+    return {kFrameSizeTensor, "INT64", {2}};
 }
 
 // Mirrors neuriplo-infer's setInputFormat: pick the layout from the shape,
@@ -177,8 +179,8 @@ class PreprocessStep : public PipelineStep {
             }
 
             auto frame_size = makeTensor(frameSizeTensor());
-            appendTensorScalar<int32_t>(frame_size.bytes, image.width());
-            appendTensorScalar<int32_t>(frame_size.bytes, image.height());
+            appendTensorScalar<int64_t>(frame_size.bytes, image.height());
+            appendTensorScalar<int64_t>(frame_size.bytes, image.width());
             step_outputs.push_back(std::move(frame_size));
             return true;
         } catch (const std::exception &exception) {
@@ -223,20 +225,18 @@ class PostprocessStep : public PipelineStep {
             return false;
         }
 
-        // FRAME_SIZE arrives in one of two layouts. The built-in preprocess step
-        // emits (width, height); a DALI pipeline emits the decoder's native
-        // (height, width, channels). Distinguishing them by element count keeps
-        // both producers usable without a translation step, and getting it wrong
-        // silently transposes every box on a non-square frame.
+        // FRAME_SIZE is INT64 (height, width). Getting the order wrong
+        // transposes every box on a non-square frame, so the layout is fixed
+        // rather than inferred.
         const auto &frame_size_tensor = step_inputs.back();
-        const size_t frame_size_elements = frame_size_tensor.bytes.size() / sizeof(int32_t);
-        if (frame_size_elements < 2) {
+        if (frame_size_tensor.bytes.size() < 2 * sizeof(int64_t)) {
             error = "postprocess step '" + step_.name + "' received a malformed FRAME_SIZE";
             return false;
         }
-        const bool hwc = frame_size_elements >= 3;
-        const auto frame_width = tensorScalarAt<int32_t>(frame_size_tensor.bytes, hwc ? 1 : 0);
-        const auto frame_height = tensorScalarAt<int32_t>(frame_size_tensor.bytes, hwc ? 0 : 1);
+        const auto frame_height =
+            static_cast<int>(tensorScalarAt<int64_t>(frame_size_tensor.bytes, 0));
+        const auto frame_width =
+            static_cast<int>(tensorScalarAt<int64_t>(frame_size_tensor.bytes, 1));
         if (frame_width <= 0 || frame_height <= 0) {
             error = "postprocess step '" + step_.name + "' received a non-positive FRAME_SIZE";
             return false;
