@@ -1,4 +1,5 @@
 #include "ModelRegistry.hpp"
+#include "NeuriploExecutor.hpp"
 #include "PipelineConfig.hpp"
 #include "PipelineExecutor.hpp"
 #include "PipelineSteps.hpp"
@@ -362,7 +363,7 @@ TEST_CASE(pipeline_runs_preprocess_model_postprocess_end_to_end) {
 
     // The empty-frame contract: a detection-free response still carries full
     // length arrays. A truncated MASK_OFFSETS here aborts any video whose first
-    // frame is empty, which is exactly the defect tritonic shipped.
+    // frame is empty.
     const auto *offsets = findOutput(scheduled.response.outputs, "MASK_OFFSETS");
     REQUIRE(offsets != nullptr);
     REQUIRE_EQ(offsets->bytes.size(), 101u * sizeof(int64_t));
@@ -562,4 +563,72 @@ TEST_CASE(scheduler_result_carries_executor_error_details) {
     REQUIRE(!scheduled.ok);
     REQUIRE_EQ(scheduled.error_code, "INVALID_ARGUMENT");
     REQUIRE(scheduled.error_message.find("strict executor") != std::string::npos);
+}
+
+// Equal element counts are not enough to justify a reshape: NHWC and NCHW share
+// a count and differ entirely in layout, so relabelling one as the other would
+// feed the model transposed data. Only leading unit dimensions may be adjusted.
+TEST_CASE(pipeline_refuses_to_reshape_across_incompatible_layouts) {
+    RuntimeConfig config;
+    config.model_name = "strict";
+    config.backend = "stub";
+    ModelRegistry registry(config, [](const RuntimeConfig &, std::string &) {
+        return std::make_unique<ShapeCheckingExecutor>();
+    });
+
+    const std::string graph = R"({"steps": [
+        {"kind": "model", "name": "only", "model_name": "strict"}
+    ]})";
+    REQUIRE(registry.loadModel(pipelineConfig(graph)));
+
+    // ShapeCheckingExecutor declares [3]. A [3,1] input has the same element
+    // count but is not a leading-unit-dimension difference, so it must NOT be
+    // silently restated as [3]; the executor rejects it.
+    ExecutionRequest request;
+    InputTensor input;
+    input.name = "input";
+    input.datatype = "FP32";
+    input.shape = {3, 1};
+    input.bytes = tensorBytesFromDoubles("FP32", {1.0, 2.0, 3.0});
+    request.inputs.push_back(std::move(input));
+
+    const auto handle = registry.findHandle("yolo_ensemble");
+    REQUIRE(handle != nullptr);
+    auto scheduled = handle->scheduler->submit(std::move(request));
+    REQUIRE(!scheduled.ok);
+    REQUIRE_EQ(scheduled.error_code, "INVALID_ARGUMENT");
+}
+
+// The dynamic-axis fix in NeuriploExecutor: a model declaring [1,-1] must
+// accept any concrete extent, and still reject a rank mismatch.
+TEST_CASE(pipeline_dynamic_axis_accepts_any_extent_and_rejects_rank_mismatch) {
+    ModelMetadata metadata;
+    metadata.inputs.push_back({"IMAGE", "UINT8", {1, -1}});
+
+    // Concrete extents of any size satisfy the dynamic axis.
+    for (const int64_t extent : {1, 37, 4096}) {
+        ExecutionRequest request;
+        InputTensor input;
+        input.name = "IMAGE";
+        input.datatype = "UINT8";
+        input.shape = {1, extent};
+        input.bytes.assign(static_cast<size_t>(extent), std::byte{0});
+        request.inputs.push_back(std::move(input));
+
+        ExecutionResponse error;
+        REQUIRE(neuriploOrderedInputs(metadata, request, error).has_value());
+    }
+
+    // A different rank is still a rejection, dynamic axis or not.
+    ExecutionRequest wrong_rank;
+    InputTensor input;
+    input.name = "IMAGE";
+    input.datatype = "UINT8";
+    input.shape = {64};
+    input.bytes.assign(64, std::byte{0});
+    wrong_rank.inputs.push_back(std::move(input));
+
+    ExecutionResponse error;
+    REQUIRE(!neuriploOrderedInputs(metadata, wrong_rank, error).has_value());
+    REQUIRE_EQ(error.error_code, "INVALID_ARGUMENT");
 }

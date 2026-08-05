@@ -152,9 +152,26 @@ class PipelineExecutor : public Executor {
     // Backends disagree about whether metadata shapes include the batch
     // dimension (ONNX Runtime reports [1,3,640,640], TensorRT [3,640,640]), so
     // a tensor produced by one step can carry a shape the next model's
-    // validation rejects even though the bytes are exactly right. Inside the
-    // pipeline the wiring is trusted: when the element counts agree, restate
-    // the tensor's shape in the target model's convention.
+    // validation rejects even though the bytes are exactly right.
+    //
+    // Only leading dimensions of extent 1 may be added or removed, and every
+    // remaining dimension must match exactly. Equal element counts are NOT
+    // sufficient: NHWC [640,640,3] and NCHW [3,640,640] have the same count and
+    // completely different memory layouts, and silently relabelling one as the
+    // other would feed the model transposed data.
+    static bool sameAfterDroppingLeadingOnes(const std::vector<int64_t> &left,
+                                             const std::vector<int64_t> &right) {
+        auto trim = [](const std::vector<int64_t> &shape) {
+            size_t begin = 0;
+            while (begin + 1 < shape.size() && shape[begin] == 1) {
+                ++begin;
+            }
+            return std::vector<int64_t>(shape.begin() + static_cast<std::ptrdiff_t>(begin),
+                                        shape.end());
+        };
+        return trim(left) == trim(right);
+    }
+
     static void adoptDeclaredShape(OutputTensor &tensor,
                                    const std::vector<TensorMetadata> &declared_inputs) {
         for (const auto &declared : declared_inputs) {
@@ -164,18 +181,12 @@ class PipelineExecutor : public Executor {
             if (declared.shape == tensor.shape) {
                 return;
             }
-            int64_t declared_count = 1;
             for (const auto dim : declared.shape) {
                 if (dim < 0) {
                     return; // dynamic axis: validation already accepts any extent
                 }
-                declared_count *= dim;
             }
-            int64_t tensor_count = 1;
-            for (const auto dim : tensor.shape) {
-                tensor_count *= dim > 0 ? dim : 1;
-            }
-            if (declared_count == tensor_count) {
+            if (sameAfterDroppingLeadingOnes(declared.shape, tensor.shape)) {
                 tensor.shape = declared.shape;
             }
             return;

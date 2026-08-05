@@ -1,7 +1,7 @@
 #include "PipelineSteps.hpp"
 
-// Envelope shapes are transcribed from the platform ensemble contract, which in
-// turn was transcribed from tritonic v0.4.0. The offset arrays are 101 entries
+// Envelope shapes are transcribed from the platform ensemble contract. The
+// offset arrays are 101 entries
 // (max detections + 1) and are always emitted at full length, including on a
 // frame with no detections -- a truncated offset array there aborts any video
 // whose first frame is empty.

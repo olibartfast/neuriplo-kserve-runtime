@@ -154,6 +154,12 @@ std::optional<std::vector<InputTensor>> orderedInputs(const ModelMetadata &metad
 
 } // namespace
 
+std::optional<std::vector<InputTensor>> neuriploOrderedInputs(const ModelMetadata &metadata,
+                                                              const ExecutionRequest &request,
+                                                              ExecutionResponse &error) {
+    return orderedInputs(metadata, request, error);
+}
+
 NeuriploExecutor::NeuriploExecutor(const RuntimeConfig &config,
                                    std::unique_ptr<NeuriploAdapter> adapter)
     : adapter_(std::move(adapter)) {
