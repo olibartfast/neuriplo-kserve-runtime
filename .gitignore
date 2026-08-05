@@ -5,3 +5,6 @@ compile_commands.json
 .agents/
 .antigravitycli/
 logs/
+
+# Local inference artifacts
+data/output/
