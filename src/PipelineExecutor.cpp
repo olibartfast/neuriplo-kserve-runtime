@@ -68,6 +68,19 @@ class PipelineExecutor : public Executor {
             entry.name = mapped(steps_.back().config.output_map, output.name);
             metadata_.outputs.push_back(std::move(entry));
         }
+
+        indexLastUse();
+    }
+
+    void indexLastUse() {
+        for (size_t index = 0; index < steps_.size(); ++index) {
+            for (const auto &declared : steps_[index].inputs) {
+                last_use_[mapped(steps_[index].config.input_map, declared.name)] = index;
+            }
+        }
+        for (const auto &declared : metadata_.outputs) {
+            last_use_.erase(declared.name);
+        }
     }
 
     const ModelMetadata &metadata() const override {
@@ -86,6 +99,7 @@ class PipelineExecutor : public Executor {
             values.emplace(input.name, std::move(tensor));
         }
 
+        size_t step_index = 0;
         for (const auto &step : steps_) {
             std::vector<OutputTensor> step_inputs;
             step_inputs.reserve(step.inputs.size());
@@ -97,9 +111,21 @@ class PipelineExecutor : public Executor {
                                    "pipeline step '" + step.config.name +
                                        "' is missing input tensor '" + graph_name + "'");
                 }
-                auto tensor = found->second;
-                tensor.name = declared.name;
-                step_inputs.push_back(std::move(tensor));
+                // Move rather than copy when no later step and no declared
+                // output needs this tensor again. Model tensors are megabytes
+                // (a 640x640 FP32 image is 4.9 MB), so a deep copy per step is
+                // a measurable share of pipeline latency.
+                const auto last = last_use_.find(graph_name);
+                if (last != last_use_.end() && last->second == step_index) {
+                    auto tensor = std::move(found->second);
+                    tensor.name = declared.name;
+                    values.erase(found);
+                    step_inputs.push_back(std::move(tensor));
+                } else {
+                    auto tensor = found->second;
+                    tensor.name = declared.name;
+                    step_inputs.push_back(std::move(tensor));
+                }
             }
 
             std::vector<OutputTensor> step_outputs;
@@ -121,6 +147,7 @@ class PipelineExecutor : public Executor {
                 produced.name = graph_name;
                 values[graph_name] = std::move(produced);
             }
+            ++step_index;
         }
 
         ExecutionResponse response;
@@ -233,6 +260,9 @@ class PipelineExecutor : public Executor {
     ModelMetadata metadata_;
     std::vector<Step> steps_;
     PipelineStepResolver resolver_;
+    // Index of the last step consuming each graph tensor; tensors leaving as
+    // model outputs are absent, since they must survive to the response.
+    std::unordered_map<std::string, size_t> last_use_;
 };
 
 // Metadata of the model step nearest to `index` in `direction`, which is the
