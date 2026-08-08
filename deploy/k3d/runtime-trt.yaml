@@ -1,0 +1,182 @@
+# TensorRT serving for the k3d "neuriplo" cluster.
+#
+# Nothing here names a model. The init container stages every *.onnx it carries,
+# the entrypoint converts each one and takes the model name from the filename,
+# and the runtime serves whatever the repository tree ends up containing. Adding
+# or removing a model means rebuilding the model image -- this manifest does not
+# change.
+#
+# Flow (see deploy/k3d/README.md):
+#   1. the init container copies its *.onnx files into a staging volume
+#   2. the serving container converts each one on this node's GPU
+#   3. engines land in a repository tree: /models/repo/<name>/<version>/model.plan
+#   4. the runtime serves the tree with --models=/models/repo
+#
+# Conversion happens in the serving container, not at image build time, because a
+# TensorRT engine is tied to the GPU, driver, and TensorRT version that built it.
+#
+# Model images just need their .onnx files under /artifacts. Several may be
+# staged by adding init containers with the same command; the file basename
+# becomes the served model name.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: neuriplo-model-repo
+  namespace: neuriplo
+  labels:
+    app.kubernetes.io/name: neuriplo-kserve-runtime
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: neuriplo-kserve-runtime
+  namespace: neuriplo
+  labels:
+    app: neuriplo-kserve-runtime
+    app.kubernetes.io/name: neuriplo-kserve-runtime
+    app.kubernetes.io/component: predictor
+spec:
+  replicas: 1
+  # Engine builds are slow -- measured at ~8.5 min for a 101 MB model and ~2 min
+  # for a 21 MB one on this node. The default 600s deadline marks the rollout
+  # failed mid-conversion, so it has to cover the same window as startupProbe.
+  progressDeadlineSeconds: 1800
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: neuriplo-kserve-runtime
+  template:
+    metadata:
+      labels:
+        app: neuriplo-kserve-runtime
+        app.kubernetes.io/name: neuriplo-kserve-runtime
+        app.kubernetes.io/component: predictor
+    spec:
+      runtimeClassName: nvidia
+      initContainers:
+        # Step 1: the model image stages itself. No command override here --
+        # staging is the image's own entrypoint, so the identical image works in
+        # docker-compose or a plain docker run (see deploy/compose/).
+        - name: stage-models
+          image: neuriplo-models:depth-v1
+          imagePullPolicy: Never
+          volumeMounts:
+            - name: staging
+              mountPath: /staging
+      containers:
+        # Steps 2-4: convert every staged ONNX, write the tree, serve the tree.
+        - name: runtime
+          image: neuriplo-kserve-runtime:trt-gpu
+          imagePullPolicy: Never
+          args:
+            - --host
+            - 0.0.0.0
+            - --port
+            - "8080"
+            - --use-gpu
+            - "true"
+            - --instances
+            - "1"
+            - --max-request-bytes
+            - "67108864"
+          env:
+            - name: STAGE_DIR
+              value: /staging
+            - name: MODEL_REPOSITORY
+              value: /models/repo
+            - name: MODEL_VERSION
+              value: "1"
+            - name: TRT_PRECISION
+              value: fp16
+            # No TRT_SHAPES: it is only valid for models exported with dynamic
+            # axes. trtexec rejects explicit shapes on a static ONNX.
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          # Conversion runs before the server binds. The startup probe carries
+          # that window so the liveness probe cannot restart the pod mid-build.
+          startupProbe:
+            httpGet:
+              path: /v2/health/live
+              port: http
+            periodSeconds: 10
+            failureThreshold: 120
+          readinessProbe:
+            httpGet:
+              path: /v2/health/ready
+              port: http
+            periodSeconds: 5
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /v2/health/live
+              port: http
+            periodSeconds: 20
+          resources:
+            limits:
+              nvidia.com/gpu: 1
+          volumeMounts:
+            - name: staging
+              mountPath: /staging
+            - name: models
+              mountPath: /models
+      volumes:
+        - name: staging
+          emptyDir: {}
+        # Persisted, not emptyDir: rebuilding the engines costs ~10 minutes on
+        # this node, and that would be paid on every pod replacement. The
+        # entrypoint skips conversion when an engine is already present, so a
+        # restart against a warm claim starts in seconds.
+        - name: models
+          persistentVolumeClaim:
+            claimName: neuriplo-model-repo
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: neuriplo-kserve-runtime
+  namespace: neuriplo
+  labels:
+    app: neuriplo-kserve-runtime
+    app.kubernetes.io/name: neuriplo-kserve-runtime
+spec:
+  type: ClusterIP
+  selector:
+    app: neuriplo-kserve-runtime
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+      protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: neuriplo-kserve-runtime
+  namespace: neuriplo
+  labels:
+    app: neuriplo-kserve-runtime
+    app.kubernetes.io/name: neuriplo-kserve-runtime
+spec:
+  ingressClassName: traefik
+  rules:
+    # Host-based, path-independent: every model is addressed by its own
+    # /v2/models/<name> route, so the ingress never names one.
+    - host: neuriplo.g5kd.localhost
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: neuriplo-kserve-runtime
+                port:
+                  name: http

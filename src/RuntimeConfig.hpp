@@ -14,7 +14,23 @@ struct RuntimeConfig {
     size_t max_request_bytes = 67108864;
     std::string model_name = "demo";
     std::string model_version = "1";
+    // True when the version was actually asked for (--model-version, the
+    // MODEL_VERSION env, or a repository tree's version directory) rather than
+    // left at the default. Only then does it override the version a backend
+    // reports for itself, which is otherwise authoritative.
+    bool model_version_explicit = false;
     std::string model_path;
+    // Root of a Triton-style model repository tree
+    // (<root>/<model>/<version>/<file>). When set, every model found under it is
+    // served and model_name/model_path/backend act only as defaults, since the
+    // tree supplies them per model.
+    std::string model_repository;
+    // "none"     - load every model in the repository at startup (default)
+    // "explicit" - load nothing at startup; the client loads and unloads
+    //              through /v2/repository/models/<name>/{load,unload}
+    // Explicit mode also contains damage: a model whose backend crashes on load
+    // cannot take the server down with it before it has even been asked for.
+    std::string model_control_mode = "none";
     std::string backend = "stub";
     // Run inference on the GPU when the selected backend supports it. Without
     // this the runtime could only ever serve on the CPU, whatever the backend
