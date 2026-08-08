@@ -38,6 +38,10 @@ class KServeRuntime {
                                           const InferSnapshot &handle) const;
     HttpResponse embeddings(const HttpRequest &request) const;
     HttpResponse handleAdmin(const HttpRequest &request) const;
+    // KServe V2 model repository extension. Spec-conformant surface over the
+    // same ModelRegistry that /v2/admin/models drives, so every model kind --
+    // including pipelines/ensembles -- is covered by the same code path.
+    HttpResponse handleRepository(const HttpRequest &request) const;
 
     std::optional<HttpResponse>
     validateInferModel(const std::string &model_name, const std::string &model_version,

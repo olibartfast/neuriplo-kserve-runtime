@@ -38,6 +38,23 @@ ModelRegistry::ModelRegistry(const RuntimeConfig &config, ExecutorFactory factor
     loadModel(config, std::move(factory));
 }
 
+ModelRegistry::ModelRegistry(const std::vector<RuntimeConfig> &configs)
+    : log_payloads_(configs.empty() ? false : configs.front().log_payloads),
+      tokens_per_char_(configs.empty() ? 0.25 : configs.front().tokens_per_char) {
+    // Ensembles are loaded after plain models because a pipeline's steps are
+    // resolved against models already in the registry.
+    for (const auto &config : configs) {
+        if (!isPipelineConfig(config)) {
+            loadModel(config);
+        }
+    }
+    for (const auto &config : configs) {
+        if (isPipelineConfig(config)) {
+            loadModel(config);
+        }
+    }
+}
+
 ModelSlot *ModelRegistry::findSlotMutable(const std::string &model_name) {
     const auto it = models_.find(model_name);
     return it == models_.end() ? nullptr : &it->second;
@@ -70,7 +87,14 @@ bool ModelRegistry::loadModelLocked(const std::string &model_name, const Runtime
 
     ModelSlot slot;
     slot.config = config;
-    lifecycle_.load(slot.handle, config, factory);
+    // An explicitly requested version is authoritative for what this slot
+    // serves -- that is what --model-version asks for and what a repository
+    // tree's version directory means. Left at its default, the version a
+    // backend reports for itself wins instead.
+    lifecycle_.load(slot.handle, config, factory,
+                    config.model_version_explicit && !config.model_version.empty()
+                        ? std::optional<std::string>(config.model_version)
+                        : std::nullopt);
     publishSnapshot(slot);
     models_.emplace(model_name, std::move(slot));
     return true;
@@ -253,6 +277,34 @@ bool ModelRegistry::completeUnload(const std::string &model_name) {
     slot->version_snapshots.clear();
     models_.erase(model_name);
     return true;
+}
+
+void ModelRegistry::setRepositoryCatalog(std::vector<RuntimeConfig> configs) {
+    std::unique_lock lock(models_mutex_);
+    catalog_.clear();
+    for (auto &config : configs) {
+        const auto name = config.model_name;
+        catalog_.emplace(name, std::move(config));
+    }
+}
+
+std::vector<std::string> ModelRegistry::catalogModels() const {
+    std::shared_lock lock(models_mutex_);
+    std::vector<std::string> names;
+    names.reserve(catalog_.size());
+    for (const auto &entry : catalog_) {
+        names.push_back(entry.first);
+    }
+    return names;
+}
+
+std::optional<RuntimeConfig> ModelRegistry::catalogConfig(const std::string &model_name) const {
+    std::shared_lock lock(models_mutex_);
+    const auto found = catalog_.find(model_name);
+    if (found == catalog_.end()) {
+        return std::nullopt;
+    }
+    return found->second;
 }
 
 std::vector<std::string> ModelRegistry::listModels() const {

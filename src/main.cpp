@@ -3,6 +3,7 @@
 #include "Logging.hpp"
 #include "MetricsRegistry.hpp"
 #include "ModelRegistry.hpp"
+#include "ModelRepository.hpp"
 #include "RuntimeConfig.hpp"
 #include "RuntimeVersion.hpp"
 
@@ -31,6 +32,7 @@ void printUsage(std::ostream &out) {
     out << "usage: neuriplo-kserve-runtime [--host 0.0.0.0] [--port 8080] "
            "[--grpc-port 9000] [--max-request-bytes 67108864] [--model-name demo] [--model-path "
            "path] "
+           "[--models path | --model-repository path] "
            "[--backend stub] [--plugin-dir path] [--max-queue-size 64] [--request-timeout-ms "
            "30000] "
            "[--instances 1] [--dynamic-batching-enabled false] [--max-batch-size 1] "
@@ -58,10 +60,42 @@ int main(int argc, char **argv) {
         if (!config.deployment.empty()) {
             metrics.setDeployment(config.deployment);
         }
-        ModelRegistry registry(config);
-        KServeRuntime runtime(registry, metrics);
-
         auto &logger = defaultLogger();
+
+        // Repository mode serves every model in the tree; single-model mode
+        // stays the default so existing deployments are unaffected.
+        std::optional<ModelRegistry> registry_storage;
+        if (config.model_repository.empty()) {
+            registry_storage.emplace(config);
+        } else {
+            std::vector<std::string> warnings;
+            const auto discovered = scanModelRepository(config.model_repository, config, warnings);
+            for (const auto &warning : warnings) {
+                logger.warn(warning);
+            }
+            for (const auto &model : discovered) {
+                logger.info("discovered model " + model.model_name + " version " +
+                            model.model_version + " backend " + model.backend + " at " +
+                            model.model_path);
+            }
+            if (config.model_control_mode == "explicit") {
+                // Start empty and let the client choose. Nothing is loaded, so a
+                // model whose backend crashes on load cannot prevent the server
+                // from coming up at all.
+                registry_storage.emplace(std::vector<RuntimeConfig>{});
+                logger.info("explicit model control: " + std::to_string(discovered.size()) +
+                            " model(s) available, none loaded; use POST "
+                            "/v2/repository/models/<name>/load");
+            } else {
+                // Deliberately built from the scan even when it found nothing:
+                // the server then reports not-ready instead of quietly serving
+                // a stub.
+                registry_storage.emplace(discovered);
+            }
+            registry_storage->setRepositoryCatalog(discovered);
+        }
+        ModelRegistry &registry = *registry_storage;
+        KServeRuntime runtime(registry, metrics);
         LogEvent startup;
         startup.severity = "info";
         startup.model = config.model_name;
