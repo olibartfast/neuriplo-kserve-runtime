@@ -21,10 +21,17 @@ bool isNumericVersion(const std::string &name) {
 // (weight blobs like OpenVINO's .bin, label files, notes) is ignored.
 const std::map<std::string, std::string> &extensionBackends() {
     static const std::map<std::string, std::string> map{
-        {".plan", "tensorrt"},          {".engine", "tensorrt"}, {".onnx", "onnx_runtime"},
-        {".torchscript", "libtorch"},   {".pt", "libtorch"},     {".tflite", "litert"},
-        {".pb", "libtensorflow"},       {".xml", "openvino"},    {".pte", "executorch"},
-        {".dali", "dali"},              {".json", pipelineBackendId()},
+        {".plan", "tensorrt"},
+        {".engine", "tensorrt"},
+        {".onnx", "onnx_runtime"},
+        {".torchscript", "libtorch"},
+        {".pt", "libtorch"},
+        {".tflite", "litert"},
+        {".pb", "libtensorflow"},
+        {".xml", "openvino"},
+        {".pte", "executorch"},
+        {".dali", "dali"},
+        {".json", pipelineBackendId()},
     };
     return map;
 }
