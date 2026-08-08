@@ -12,6 +12,26 @@
 
 namespace {
 
+// Accepts "--flag=value" by rewriting it to "--flag" "value" before parsing.
+// Unknown arguments throw, so without this the equals form -- which is how the
+// deployment procedure and most kubectl manifests write flags -- would abort
+// startup with "unknown argument" instead of being understood.
+std::vector<std::string> normalizeArguments(int argc, char **argv) {
+    std::vector<std::string> args;
+    args.reserve(static_cast<size_t>(argc));
+    for (int i = 0; i < argc; ++i) {
+        const std::string arg = argv[i];
+        const auto equals = arg.find('=');
+        if (arg.rfind("--", 0) == 0 && equals != std::string::npos && equals > 2) {
+            args.push_back(arg.substr(0, equals));
+            args.push_back(arg.substr(equals + 1));
+        } else {
+            args.push_back(arg);
+        }
+    }
+    return args;
+}
+
 std::string requireValue(int &index, int argc, char **argv, const std::string &flag) {
     if (index + 1 >= argc) {
         throw std::invalid_argument("missing value for " + flag);
@@ -142,16 +162,32 @@ RuntimeConfig parseRuntimeConfig(int argc, char **argv) {
 RuntimeConfig parseRuntimeConfig(int argc, char **argv, const RuntimeEnvironment &environment) {
     RuntimeConfig config;
 
+    const auto normalized = normalizeArguments(argc, argv);
+    std::vector<char *> normalized_argv;
+    normalized_argv.reserve(normalized.size());
+    for (const auto &arg : normalized) {
+        normalized_argv.push_back(const_cast<char *>(arg.c_str()));
+    }
+    argc = static_cast<int>(normalized_argv.size());
+    argv = normalized_argv.data();
+
     applyStringEnvironmentDefault(config.model_name, environment, "MODEL_NAME");
-    applyStringEnvironmentDefault(config.model_version, environment, "MODEL_VERSION");
+    if (const auto env_version = environment.get("MODEL_VERSION");
+        env_version.has_value() && !env_version->empty()) {
+        config.model_version = *env_version;
+        config.model_version_explicit = true;
+    }
     applyStringEnvironmentDefault(config.model_path, environment, "MODEL_PATH");
+    applyStringEnvironmentDefault(config.model_repository, environment, "MODEL_REPOSITORY");
+    applyStringEnvironmentDefault(config.model_control_mode, environment, "MODEL_CONTROL_MODE");
     applyStringEnvironmentDefault(config.backend, environment, "BACKEND");
     applyStringEnvironmentDefault(config.plugin_dir, environment, "NEURIPLO_PLUGIN_DIR");
     applyStringEnvironmentDefault(config.storage_uri, environment, "STORAGE_URI");
     applyStringEnvironmentDefault(config.deployment, environment, "DEPLOYMENT");
     applySizeEnvironmentDefault(config.max_request_bytes, environment, "MAX_REQUEST_BYTES");
     applyDoubleEnvironmentDefault(config.tokens_per_char, environment, "TOKENS_PER_CHAR");
-    if (config.model_path.empty() && environment.pathExists("/mnt/models")) {
+    if (config.model_path.empty() && config.model_repository.empty() &&
+        environment.pathExists("/mnt/models")) {
         config.model_path = "/mnt/models";
     }
 
@@ -170,8 +206,13 @@ RuntimeConfig parseRuntimeConfig(int argc, char **argv, const RuntimeEnvironment
             config.model_name = requireValue(i, argc, argv, arg);
         } else if (arg == "--model-version") {
             config.model_version = requireValue(i, argc, argv, arg);
+            config.model_version_explicit = true;
         } else if (arg == "--model-path") {
             config.model_path = requireValue(i, argc, argv, arg);
+        } else if (arg == "--model-repository" || arg == "--models") {
+            config.model_repository = requireValue(i, argc, argv, arg);
+        } else if (arg == "--model-control-mode") {
+            config.model_control_mode = requireValue(i, argc, argv, arg);
         } else if (arg == "--backend") {
             config.backend = requireValue(i, argc, argv, arg);
         } else if (arg == "--plugin-dir") {
@@ -251,6 +292,17 @@ RuntimeConfig parseRuntimeConfig(int argc, char **argv, const RuntimeEnvironment
     }
     if (config.model_name.empty()) {
         throw std::invalid_argument("model name must not be empty");
+    }
+    if (config.model_control_mode != "none" && config.model_control_mode != "explicit") {
+        // Rejected rather than defaulted: silently falling back to "none" on a
+        // typo would load every model in the repository, which is the exact
+        // outcome explicit mode exists to avoid.
+        throw std::invalid_argument("model control mode must be 'none' or 'explicit', got: " +
+                                    config.model_control_mode);
+    }
+    if (config.model_control_mode == "explicit" && config.model_repository.empty()) {
+        throw std::invalid_argument(
+            "explicit model control mode requires --models/--model-repository");
     }
     if (config.max_request_bytes == 0 ||
         config.max_request_bytes > static_cast<size_t>(std::numeric_limits<int64_t>::max())) {

@@ -75,6 +75,7 @@ set(NEURIPLO_RUNTIME_SOURCES
     src/MetricsRegistry.cpp
     src/ModelLifecycle.cpp
     src/ModelRegistry.cpp
+    src/ModelRepository.cpp
     src/PipelineConfig.cpp
     src/PipelineEnvelope.cpp
     src/PipelineExecutor.cpp
@@ -270,6 +271,8 @@ add_executable(neuriplo-kserve-runtime-tests
     tests/LlmPathTest.cpp
     tests/LlmSchedulerTest.cpp
     tests/AdminEndpointTest.cpp
+    tests/RepositoryEndpointTest.cpp
+    tests/ModelRepositoryTest.cpp
     tests/ModelLifecycleTest.cpp
     tests/ModelRegistryTest.cpp
     tests/MultiModelRegistryTest.cpp

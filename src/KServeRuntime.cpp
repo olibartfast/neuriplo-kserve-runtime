@@ -208,6 +208,9 @@ HttpResponse KServeRuntime::handle(const HttpRequest &request) const {
     if (startsWith(request.path, "/v2/admin/")) {
         return handleAdmin(request);
     }
+    if (startsWith(request.path, "/v2/repository/")) {
+        return handleRepository(request);
+    }
 
     const auto route_tail = extractModelRouteTail(request.path);
     if (!route_tail.empty()) {
@@ -960,6 +963,130 @@ HttpResponse KServeRuntime::embeddings(const HttpRequest &request) const {
     resp.prompt_tokens = prompt_tokens;
 
     return json(200, embeddingResponseJson(resp));
+}
+
+HttpResponse KServeRuntime::handleRepository(const HttpRequest &request) const {
+    constexpr auto index_path = "/v2/repository/index";
+    constexpr auto models_prefix = "/v2/repository/models/";
+
+    if (request.path == index_path) {
+        if (request.method != "POST") {
+            return error(405, KServeErrors::InvalidArgument,
+                         "method not allowed: use POST /v2/repository/index");
+        }
+        // The index lists what the repository offers, not only what is loaded --
+        // in explicit control mode a client needs to see a model before it can
+        // ask for it. Unloaded catalog entries report UNAVAILABLE.
+        auto names = registry_.listModels();
+        for (const auto &name : registry_.catalogModels()) {
+            if (std::find(names.begin(), names.end(), name) == names.end()) {
+                names.push_back(name);
+            }
+        }
+        std::sort(names.begin(), names.end());
+
+        Json models = Json::array();
+        for (const auto &name : names) {
+            const auto snapshot = registry_.findHandle(name);
+            // A catalog entry with no slot is offered but not serving, which the
+            // extension spells UNAVAILABLE.
+            auto state = snapshot ? snapshot->state : ModelState::Unavailable;
+            // A slot reaches Ready before its scheduler necessarily is;
+            // reporting READY there would invite traffic that cannot be served.
+            if (state == ModelState::Ready && !snapshot->isReady()) {
+                state = ModelState::Unavailable;
+            }
+            Json entry;
+            entry["name"] = name;
+            auto version = registry_.defaultVersion(name).value_or(std::string());
+            if (version.empty()) {
+                if (const auto catalog = registry_.catalogConfig(name)) {
+                    version = catalog->model_version;
+                }
+            }
+            entry["version"] = version;
+            entry["state"] = modelStateName(state);
+            entry["reason"] =
+                snapshot && snapshot->load_error ? *snapshot->load_error : std::string();
+            models.push_back(std::move(entry));
+        }
+        return json(200, models.dump());
+    }
+
+    if (!startsWith(request.path, models_prefix)) {
+        return error(404, KServeErrors::NotFound, "repository route not found");
+    }
+
+    const auto tail = request.path.substr(std::string(models_prefix).size());
+    const auto slash = tail.find('/');
+    if (slash == std::string::npos) {
+        return error(404, KServeErrors::NotFound, "repository route not found");
+    }
+    const auto model_name = tail.substr(0, slash);
+    const auto action = tail.substr(slash + 1);
+    if (model_name.empty()) {
+        return error(400, KServeErrors::InvalidArgument, "model name is required");
+    }
+    if (request.method != "POST") {
+        return error(405, KServeErrors::InvalidArgument, "method not allowed: use POST");
+    }
+
+    if (action == "unload") {
+        if (registry_.unloadModel(model_name)) {
+            return json(200, "{}");
+        }
+        return error(404, KServeErrors::ModelNotFound, "model not found: " + model_name);
+    }
+
+    if (action != "load") {
+        return error(404, KServeErrors::NotFound, "repository route not found");
+    }
+
+    // The extension addresses models by name alone and expects the server to
+    // resolve that name against a model store. A repository tree is that store:
+    // its catalog entry supplies backend, path and version. Failing that, an
+    // already-loaded model reloads from the config it was last loaded with. A
+    // name in neither place must carry its config in the body, the same fields
+    // /v2/admin/models/load takes.
+    const auto loaded = registry_.modelConfig(model_name);
+    const auto catalog = registry_.catalogConfig(model_name);
+    if (!loaded && !catalog && request.body.empty()) {
+        return error(404, KServeErrors::ModelNotFound,
+                     "model is not in the repository and not loaded: " + model_name +
+                         "; provide its backend and model_path in the request body to load a "
+                         "model the repository does not contain");
+    }
+    // A loaded model's own config wins over the catalog so that a reload keeps
+    // any overrides it was last loaded with.
+    RuntimeConfig defaults =
+        loaded.has_value() ? *loaded : (catalog.has_value() ? *catalog : RuntimeConfig{});
+    const bool known = loaded.has_value();
+    const auto parsed = parseReloadModelRequest(request.body, defaults);
+    if (!parsed.ok) {
+        return error(400, KServeErrors::InvalidArgument, parsed.error_message);
+    }
+    RuntimeConfig config = parsed.config;
+    config.model_name = model_name;
+
+    const bool registered =
+        known ? registry_.reload(model_name, config) : registry_.loadModel(config);
+    if (registered) {
+        if (registry_.ready(model_name)) {
+            metrics_.recordModelLoadSuccess(model_name, config.backend);
+            return json(200, "{}");
+        }
+        // The slot registered but the executor never came up; surface the load
+        // error and drop the dead slot, matching the admin load path.
+        std::string message = "failed to load model: " + model_name;
+        if (const auto handle = registry_.findHandle(model_name); handle && handle->load_error) {
+            message = *handle->load_error;
+        }
+        registry_.unloadModel(model_name);
+        metrics_.recordModelLoadFailure(model_name, config.backend);
+        return error(409, KServeErrors::Unavailable, message);
+    }
+    metrics_.recordModelLoadFailure(model_name, config.backend);
+    return error(409, KServeErrors::Unavailable, "failed to load model: " + model_name);
 }
 
 HttpResponse KServeRuntime::handleAdmin(const HttpRequest &request) const {

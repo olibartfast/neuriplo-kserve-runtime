@@ -1,0 +1,76 @@
+# TensorRT serving image for neuriplo-kserve-runtime.
+#
+# Built for the deployment procedure in deploy/k3d/README.md: the serving
+# container converts a staged ONNX into a TensorRT engine on the node's own GPU,
+# writes it into a model repository tree, and serves the tree. That means
+# trtexec and the TensorRT runtime libraries must be present at serve time, not
+# only at build time -- hence the same NGC base in both stages.
+#
+# Build context expects two sibling checkouts:
+#   <context>/runtime/   neuriplo-kserve-runtime
+#   <context>/neuriplo/  neuriplo
+#
+#   docker build -f runtime/docker/Dockerfile.tensorrt -t neuriplo-kserve-runtime:trt-gpu <context>
+ARG NGC_TENSORRT_IMAGE=nvcr.io/nvidia/tensorrt:25.12-py3
+
+FROM ${NGC_TENSORRT_IMAGE} AS build
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        build-essential \
+        ca-certificates \
+        cmake \
+        git \
+        libgflags-dev \
+        libgoogle-glog-dev \
+        libopencv-dev \
+        ninja-build \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY neuriplo/ /src/neuriplo/
+COPY runtime/ /src/runtime/
+
+# TensorRT is deb-installed in this base, so its headers and libraries are
+# already on the default search paths; TENSORRT_DIR only has to point somewhere
+# valid for the backend's include/link directory entries.
+RUN cmake -S /src/runtime -B /build -G Ninja \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DNEURIPLO_RUNTIME_ENABLE_REAL_NEURIPLO=ON \
+        -DNEURIPLO_RUNTIME_NEURIPLO_SOURCE_DIR=/src/neuriplo \
+        -DDEFAULT_BACKEND=TENSORRT \
+        -DTENSORRT_DIR=/usr \
+        -DBUILD_INFERENCE_ENGINE_TESTS=OFF \
+    && cmake --build /build --target neuriplo-kserve-runtime
+
+FROM ${NGC_TENSORRT_IMAGE} AS runtime
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# curl is used by the readiness wait in the conversion entrypoint; the OpenCV and
+# glog runtimes are what the neuriplo backend links against.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+        libgflags-dev \
+        libgoogle-glog-dev \
+        libopencv-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# neuriplo builds as a shared library, so the binary needs it alongside.
+COPY --from=build /build/neuriplo/libneuriplo.so /usr/local/lib/libneuriplo.so
+RUN ldconfig
+
+COPY --from=build /build/neuriplo-kserve-runtime /usr/local/bin/neuriplo-kserve-runtime
+COPY runtime/deploy/k3d/trt-convert-entrypoint.sh /usr/local/bin/trt-convert-entrypoint.sh
+RUN chmod +x /usr/local/bin/trt-convert-entrypoint.sh
+
+ENV MODEL_REPOSITORY=/models/repo
+ENV STAGE_DIR=/staging
+
+EXPOSE 8080
+
+ENTRYPOINT ["/usr/local/bin/trt-convert-entrypoint.sh"]
+CMD ["--host", "0.0.0.0", "--port", "8080"]

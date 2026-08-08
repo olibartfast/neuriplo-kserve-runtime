@@ -1,0 +1,65 @@
+# The serving procedure without Kubernetes.
+#
+# Identical images, identical entrypoints, identical volume layout as
+# deploy/k3d/runtime-trt.yaml. The orchestrator only wires volumes together --
+# staging lives in the model image and conversion lives in the serving image, so
+# neither step depends on Kubernetes.
+#
+#   docker compose up
+#
+# Adding a model means rebuilding the model image. Nothing here names one.
+services:
+  # Kubernetes calls this an init container; compose calls it a service that
+  # must complete first. Same image, same default command.
+  stage-models:
+    image: neuriplo-models:depth-v1
+    volumes:
+      - staging:/staging
+
+  runtime:
+    image: neuriplo-kserve-runtime:trt-gpu
+    depends_on:
+      stage-models:
+        condition: service_completed_successfully
+    environment:
+      STAGE_DIR: /staging
+      MODEL_REPOSITORY: /models/repo
+      MODEL_VERSION: "1"
+      TRT_PRECISION: fp16
+      # No TRT_SHAPES: only valid for models exported with dynamic axes.
+    command:
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8080"
+      - --use-gpu
+      - "true"
+      - --instances
+      - "1"
+      - --max-request-bytes
+      - "67108864"
+    ports:
+      - "8080:8080"
+    volumes:
+      - staging:/staging
+      # Named volume rather than a throwaway: rebuilding engines is expensive,
+      # and the entrypoint skips conversion when one is already present.
+      - model-repo:/models/repo
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://127.0.0.1:8080/v2/health/ready"]
+      interval: 10s
+      # Matches the Kubernetes startupProbe budget: the first run builds every
+      # engine before the server binds, which takes minutes.
+      retries: 120
+      start_period: 10s
+
+volumes:
+  staging:
+  model-repo:
