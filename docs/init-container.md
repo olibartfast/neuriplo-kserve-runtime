@@ -1,17 +1,27 @@
 # Init container specification
 
-How a model repository is assembled before the runtime serves it: the roles, the
+How a model repository is assembled before a server serves it: the roles, the
 contract each role has to honour, how to add a backend, and how to run the whole
 thing with and without Kubernetes.
 
-The runtime itself has no opinion about any of this. It is pointed at a
+**Nothing here is specific to this runtime.** The output is a versioned model
+repository tree — `<model>/<version>/<file>` — which is the layout Triton,
+OpenVINO Model Server, and `neuriplo-kserve-runtime` all consume. The preparer
+builds that tree and exits; which server mounts the volume next is not its
+business. `deploy/k3d/runtime-triton.yaml` is the same procedure with stock
+upstream Triton as the server, and differs from the neuriplo deployment only in
+the server container and one environment variable.
+
+The runtime itself has no opinion about any of this either. It is pointed at a
 directory and serves what it finds (`src/ModelRepository.cpp`). Everything below
 describes how that directory comes to exist.
 
 - [Why there is a preparation step at all](#why-there-is-a-preparation-step-at-all)
 - [Roles](#roles)
+- [Serving it with something else](#serving-it-with-something-else)
 - [The contract](#the-contract)
-- [Writing a prepare step](#writing-a-prepare-step)
+- [Staging shapes](#staging-shapes)
+- [The dispatch](#the-dispatch)
 - [Managing models](#managing-models)
 - [Backends](#backends)
 - [Running it](#running-it)
@@ -43,25 +53,34 @@ Three roles, each owned by the image that performs it. This is the load-bearing
 part of the design: **no orchestrator describes a step**, it only wires volumes.
 
 ```
-┌──────────────────┐   /staging   ┌─────────────────────────────┐
-│ artifact image   │─────────────>│ serving image               │
-│                  │              │                             │
-│ CMD: stage its   │              │ ENTRYPOINT: prepare, then   │
-│ own files        │              │             exec the server │
-└──────────────────┘              └──────────────┬──────────────┘
-   deploy/models/Dockerfile                      │ /models/repo
-                                                 v
-                                    ┌─────────────────────────┐
-                                    │ model repository tree   │
-                                    │ <name>/<version>/<file> │
-                                    └─────────────────────────┘
+┌──────────────────┐  /staging  ┌──────────────────┐
+│ artifact image   │───────────>│ preparer image   │
+│                  │            │                  │
+│ CMD: stage its   │            │ compile / copy / │
+│ own files        │            │ rename, then exit│
+└──────────────────┘            └────────┬─────────┘
+ deploy/models/Dockerfile                │ /models/repo
+                                         v
+                          ┌─────────────────────────┐
+                          │ model repository tree   │
+                          │ <name>/<version>/<file> │
+                          └────────────┬────────────┘
+                                       │  mounted by
+                    ┌──────────────────┼──────────────────┐
+                    v                  v                  v
+            ┌───────────────┐  ┌───────────────┐  ┌───────────────┐
+            │ neuriplo      │  │ tritonserver  │  │ ovms          │
+            └───────────────┘  └───────────────┘  └───────────────┘
 ```
 
 | Role | Owned by | Implemented in |
 |---|---|---|
 | **Stage** — put raw artifacts where the preparer can see them | the artifact image's `CMD` | `deploy/models/Dockerfile` |
-| **Prepare** — compile/copy each artifact into the tree | the serving image's `ENTRYPOINT` | `deploy/k3d/trt-convert-entrypoint.sh` |
-| **Serve** — discover and serve the tree | the runtime binary | `src/ModelRepository.cpp` |
+| **Prepare** — compile/copy/rename each artifact into the tree | the preparer image's `ENTRYPOINT` | `deploy/prepare/prepare-repository.sh`, `deploy/prepare/Dockerfile` |
+| **Serve** — discover and serve the tree | whichever server mounts the volume | `src/ModelRepository.cpp` for this runtime |
+
+The third column of the last row is the only one that changes between
+deployments. Everything to the left of the tree is shared.
 
 ### Why staging is not an init-container `command:`
 
@@ -71,12 +90,112 @@ Kubernetes, a `service_completed_successfully` dependency under compose, and a
 `docker run` on a workstation — with no step description duplicated in three
 places and able to drift.
 
-The same argument applies to conversion. It is the serving image's `ENTRYPOINT`,
-not a `postStart` hook or a sidecar, so `docker run <serving image>` performs the
-whole procedure by itself.
+The same argument applies to conversion. It is the preparer image's `ENTRYPOINT`,
+not a `postStart` hook or a sidecar, so `docker run <preparer image>` performs
+the whole procedure by itself — and, because it is a step rather than a wrapper,
+it composes in front of a server nobody modified.
 
 The practical test: **adding or removing a model must not change any YAML.** It
 does not. Rebuild the artifact image, restart the pod.
+
+## Serving it with something else
+
+The preparer has two forms, and which one you want depends on whether the build
+needs the serving container's own hardware.
+
+| | `PREPARE_ONLY=true` | wrap (default) |
+|---|---|---|
+| What it does | builds the tree, exits 0 | builds the tree, then `exec`s `SERVER_EXEC` |
+| Runs as | a real init container | the serving image's `ENTRYPOINT` |
+| Server image | untouched, stock upstream | must contain the preparer |
+| Use when | anything — this is the general form | the build must happen inside the serving container |
+
+`PREPARE_ONLY` is the reusable form and the one to reach for. `deploy/prepare/Dockerfile`
+builds it as a standalone image that starts no server at all:
+
+```bash
+docker build -f deploy/prepare/Dockerfile -t neuriplo-prepare:trt .
+```
+
+Wrap form exists because the serving image already had TensorRT in it, which
+made it convenient — not because it is better. It is the narrower option.
+
+### Layouts
+
+Servers agree on `<model>/<version>/` and disagree on what the file inside is
+called. `REPOSITORY_LAYOUT` selects the convention:
+
+| Staged | `neuriplo` | `triton` | `ovms` |
+|---|---|---|---|
+| TensorRT engine | `model.plan` | `model.plan` | *refused* |
+| ONNX | `model.onnx` | `model.onnx` | `model.onnx` |
+| OpenVINO IR | `model.xml` + `model.bin` | `model.xml` + `model.bin` | `model.xml` + `model.bin` |
+| TorchScript | `model.torchscript` | `model.pt` | *refused* |
+| TensorFlow frozen graph | `model.pb` | `model.graphdef` | `model.pb` |
+| TFLite | `model.tflite` | *refused* | *refused* |
+| ExecuTorch | `model.pte` | *refused* | *refused* |
+| DALI | `model.dali` | `model.dali` | *refused* |
+| Ensemble graph | `model.json` | *refused* | *refused* |
+
+"Refused" is a hard startup error naming the layout and the format, raised
+*before* any conversion runs. The alternative — writing the file anyway — costs
+minutes of engine build and produces a model the server never mentions, since a
+filename it does not recognize is one it silently ignores.
+
+Triton's ensembles are declared in `config.pbtxt` with `platform: "ensemble"`
+rather than as a graph file, so a `.json` ensemble does not carry across. Stage
+a Triton ensemble in tree form instead.
+
+### Using it in front of Triton
+
+`deploy/k3d/runtime-triton.yaml`, in full:
+
+```yaml
+initContainers:
+  - name: stage-models          # unchanged artifact image
+    image: neuriplo-models:depth-v1
+  - name: prepare-repo
+    image: neuriplo-prepare:trt
+    env:
+      - {name: PREPARE_ONLY, value: "true"}
+      - {name: REPOSITORY_LAYOUT, value: triton}
+    resources: {limits: {nvidia.com/gpu: 1}}
+containers:
+  - name: tritonserver          # stock upstream, nothing added
+    image: nvcr.io/nvidia/tritonserver:25.12-py3
+    args: [tritonserver, --model-repository=/models/repo]
+```
+
+Two constraints that are easy to miss:
+
+- **The preparer needs the GPU.** A TensorRT engine is built against a real
+  device. Init containers run to completion before the main container starts, so
+  a single-GPU node is not contended — Kubernetes schedules on
+  `max(init, main)`, not their sum.
+- **TensorRT versions must match** between the preparer and the server. Triton
+  25.12 and the preparer's NGC base both ship TensorRT 10.14. A mismatch is
+  reported as a version error when the server loads the engine, well after the
+  build succeeded.
+
+Neither applies to a repository with no TensorRT in it, where preparation is
+only copying and renaming and a `busybox` base is enough:
+
+```bash
+docker build -f deploy/prepare/Dockerfile --build-arg BASE_IMAGE=busybox:glibc .
+```
+
+### Wrapping a different server
+
+If the build genuinely has to happen inside the serving container, `SERVER_EXEC`
+takes any command; the container's own arguments are appended to it.
+
+```yaml
+env:
+  - name: SERVER_EXEC
+    value: "tritonserver --model-repository=/models/repo"
+```
+
+Default is `neuriplo-kserve-runtime --models=$MODEL_REPOSITORY`.
 
 ## The contract
 
@@ -99,21 +218,44 @@ container on every start.
 
 ### Environment
 
-Consumed by the reference prepare step (`deploy/k3d/trt-convert-entrypoint.sh`):
+Consumed by `deploy/prepare/prepare-repository.sh`:
 
 | Variable | Default | Meaning |
 |---|---|---|
 | `STAGE_DIR` | `/staging` | where staged artifacts are read from |
-| `MODEL_REPOSITORY` | `/models/repo` | repository root to build and then serve |
-| `MODEL_VERSION` | `1` | version directory to write into |
+| `MODEL_REPOSITORY` | `/models/repo` | repository root to build |
+| `MODEL_VERSION` | `1` | version directory for flat-form artifacts |
+| `REPOSITORY_LAYOUT` | `neuriplo` | filename convention of the server that will read the tree: `neuriplo`, `triton`, `ovms` |
+| `PREPARE_ONLY` | `false` | build and exit instead of starting a server |
+| `SERVER_EXEC` | `neuriplo-kserve-runtime --models=$MODEL_REPOSITORY` | command to `exec` in wrap form |
+| `ONNX_BACKEND` | `tensorrt` | what a staged `.onnx` becomes: `tensorrt` (compile) or `onnx_runtime` (copy) |
 | `TRT_PRECISION` | `fp16` | `fp16`, `fp32`, or `best` |
 | `TRT_SHAPES` | unset | `trtexec` shape spec — **dynamic-axis models only** |
 | `TRT_EXTRA_ARGS` | unset | extra `trtexec` arguments, word-split deliberately |
 | `TRT_FALLBACK_ONNX` | `false` | serve the ONNX if `trtexec` is missing |
+| `PREPARE_IGNORE_UNKNOWN` | `false` | skip unrecognized staged files instead of failing |
 
 `MODEL_REPOSITORY` is also read directly by the runtime as an alias for
 `--models` (`src/RuntimeConfig.cpp`), so the prepare step and the server agree on
 the root without the manifest stating it twice.
+
+**Per-model overrides.** A heterogeneous repository can hold one static and one
+dynamic model, which a single global `TRT_SHAPES` cannot express — set it and the
+static model's conversion fails outright. Append the model name uppercased, with
+non-alphanumerics replaced by underscores:
+
+```yaml
+env:
+  - name: TRT_SHAPES_RAFT_LARGE      # raft-large.onnx, dynamic axes
+    value: "input:1x3x480x640"
+  - name: TRT_PRECISION_YOLO26N_DEPTH
+    value: fp32
+```
+
+`TRT_SHAPES`, `TRT_PRECISION`, and `TRT_EXTRA_ARGS` all take the suffix. A
+per-model value wins over the global; the global applies to everything else.
+Still no model name in any *manifest structure* — only in a variable whose value
+is the operator's business.
 
 ### Invariants a prepare step must honour
 
@@ -134,60 +276,90 @@ These are what make the step safe to re-run, which it will be on every restart:
 5. **Derive the model name from the filename.** Never from a variable the
    manifest sets. This is what keeps the deployment model-agnostic.
 
-## Writing a prepare step
+## Staging shapes
 
-`deploy/k3d/trt-convert-entrypoint.sh` is the reference implementation. Its
-shape generalizes:
+`deploy/prepare/prepare-repository.sh` accepts two, and a staging directory may
+mix them freely.
 
-```sh
-set -eu
+### Flat
 
-# 1. Refuse to start on an empty staging dir rather than serving nothing.
-#    An empty repository is indistinguishable from a broken volume mount.
+One file per model. The filename is the model name; the extension selects what
+happens to it.
 
-for source in "$STAGE_DIR"/*.<ext>; do
-    [ -f "$source" ] || continue          # 2. no-match glob is a literal string
-
-    name=$(basename "$source" .<ext>)     # 3. filename becomes the model name
-    target_dir="$MODEL_REPOSITORY/$name/$MODEL_VERSION"
-    mkdir -p "$target_dir"
-
-    [ -f "$target_dir/model.<out>" ] && continue    # 4. idempotent
-
-    <compile> "$source" -o "$target_dir/model.<out>.tmp"
-    mv "$target_dir/model.<out>.tmp" "$target_dir/model.<out>"   # 5. atomic
-done
-
-exec neuriplo-kserve-runtime --models="$MODEL_REPOSITORY" "$@"    # 6.
 ```
+/staging/detector.onnx        ->  detector/1/model.plan       (compiled)
+/staging/ecdet.pte            ->  ecdet/1/model.pte           (copied)
+/staging/segmenter.xml        ->  segmenter/1/model.xml       (copied)
+/staging/segmenter.bin        ->  segmenter/1/model.bin       (companion)
+/staging/ecdet.pbtxt          ->  ecdet/config.pbtxt          (overlay)
+/staging/yolo_ensemble.json   ->  yolo_ensemble/1/model.json  (copied)
+```
+
+The version is `MODEL_VERSION` for everything.
+
+### Tree
+
+Already repository-shaped, and copied through without interpretation.
+
+```
+/staging/raft/3/model.plan    ->  raft/3/model.plan
+/staging/raft/3/labels.txt    ->  raft/3/labels.txt
+/staging/raft/config.pbtxt    ->  raft/config.pbtxt
+```
+
+This is the escape hatch. A model that needs a version other than
+`MODEL_VERSION`, extra files beside the model, or several versions at once
+expresses it directly, rather than this script growing a config language to
+describe the same thing indirectly.
+
+## The dispatch
+
+| Staged | Becomes | Action |
+|---|---|---|
+| `.onnx` | `model.plan` | `trtexec` compile (or `model.onnx` when `ONNX_BACKEND=onnx_runtime`) |
+| `.plan`, `.engine` | `model.plan` | copy — a prebuilt engine, valid only if built on this node |
+| `.xml` | `model.xml` + `model.bin` | copy both; **the `.bin` is renamed to match**, because OpenVINO resolves weights by basename |
+| `.pte`, `.tflite`, `.torchscript`, `.pt`, `.pb`, `.dali`, `.json` | `model.<ext>` | copy |
+| `.bin` | — | consumed with its `.xml`; an orphan is an error |
+| `.pbtxt` | `<model>/config.pbtxt` | copy beside the version directory |
+| anything else | — | **error**, unless `PREPARE_IGNORE_UNKNOWN=true` |
+
+The last row is deliberate. Silently ignoring an unrecognized artifact produces a
+repository quietly missing a model, and the failure then surfaces as a 404 from a
+client long after the cause is out of sight.
 
 The output extension is the only thing that selects the backend. Write
 `model.plan` and the model is served by TensorRT; write `model.onnx` and it is
 served by ONNX Runtime. No flag, no manifest change, no registry entry — the
 extension **is** the declaration (`backendForModelFile`, `src/ModelRepository.cpp`).
 
-### Heterogeneous repositories
+### Atomicity across multi-file models
 
-A tree may hold models of different backends and different tasks. Nothing in the
-design requires them to be uniform: the scanner resolves each model directory
-independently.
+Each model version is built in `<model>/.prepare-tmp.<version>.<pid>/` and
+published by renaming that directory into place. A per-file `.tmp` rename would
+be enough for a single-file model but not for OpenVINO's `.xml` + `.bin`, where a
+crash between the two renames leaves a model that loads without weights. Stale
+temp directories are removed before anything is scanned, so a run killed partway
+through can never have its leftovers published by a later pass.
 
-The reference entrypoint handles exactly one input format (`*.onnx` → `.plan`).
-To prepare a mixed staging directory, dispatch on the input extension and let
-portable formats fall through as copies:
+### Adding a format
 
-```sh
-case "$source" in
-    *.onnx)   trtexec --onnx="$source" --saveEngine="$target/model.plan.tmp" ;;
-    *.pte|*.tflite|*.xml|*.bin|*.dali)
-              cp "$source" "$target/" ;;   # portable; nothing to compile
-    *)        echo "unhandled artifact: $source" >&2; exit 1 ;;
-esac
+Add an arm to the `case` in `prepare_flat`, and an arm to the recognized-extension
+list in the main loop. If the format needs no compilation, that is one line each.
+Then add a case to `scripts/test-prepare-repository.sh`.
+
+### Testing it
+
+```bash
+scripts/test-prepare-repository.sh
 ```
 
-Note the last arm. Silently ignoring an unrecognized artifact produces a
-repository that is missing a model with no error anywhere — the failure surfaces
-much later as a 404 from a client.
+No GPU, no TensorRT, no runtime binary: `trtexec` and `neuriplo-kserve-runtime`
+are replaced by stubs on `PATH` that record how they were called. What is under
+test is the dispatch and the tree it produces, so it runs on an ordinary CI
+runner. It covers heterogeneous staging, idempotency across restarts, atomicity
+under a failed conversion, stale temp directories, orphaned weights, unknown
+artifacts, per-model overrides, and refusal to serve an empty repository.
 
 ### The build must contain the backends the tree needs
 
@@ -388,8 +560,11 @@ dies at startup on a missing shared object.
 | Symptom | Cause | Fix |
 |---|---|---|
 | `Static model does not take explicit shapes` | `TRT_SHAPES` set for an ONNX with fixed dims | unset it; it is for dynamic-axis exports only |
-| `error: no .onnx files staged in /staging` | artifact image staged nothing, or the volume is not shared | check both containers mount the same staging volume |
-| `trtexec not found in PATH` | serving image has no TensorRT | use `:trt-gpu`; `:onnx-gpu` cannot build engines |
+| `error: no servable artifacts staged in /staging` | artifact image staged nothing, or the volume is not shared | check both containers mount the same staging volume |
+| `error: unrecognized staged file` | an artifact with no dispatch arm | add an arm, or set `PREPARE_IGNORE_UNKNOWN=true` |
+| `error: <f>.bin ... no matching .xml` | OpenVINO weights staged without the model | stage both, with the same basename |
+| `error: <f>.pbtxt has no matching model` | overlay staged for a model that is not in the tree | check the basenames agree |
+| `trtexec not found in PATH` | serving image has no TensorRT | use `:trt-gpu`, or set `ONNX_BACKEND=onnx_runtime` |
 | Rollout reported failed while logs show conversion running | `progressDeadlineSeconds` shorter than the build | raise it above the startup-probe budget |
 | Pod restarts every few minutes during first start | liveness probe firing before the server binds | that window belongs to `startupProbe` |
 | `cannot open shared object file: libneuriplo.so` | build stage copied the binary but not the library | `COPY --from=build` the `.so` and run `ldconfig` |
