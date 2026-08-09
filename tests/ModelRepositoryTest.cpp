@@ -140,6 +140,44 @@ TEST_CASE(model_repository_ignores_openvino_weight_blob_without_its_xml) {
     REQUIRE(!warnings.empty());
 }
 
+// Regression: version directories were compared with std::stoull, which throws
+// std::out_of_range on a digit string larger than the type can hold. The
+// exception escaped the scan and aborted startup, so one absurd directory name
+// took down every other model in the repository.
+TEST_CASE(model_repository_handles_version_larger_than_any_integer_type) {
+    const TempRepository repo("huge-version");
+    repo.addModelFile("m", "1", "model.onnx");
+    repo.addModelFile("m", "99999999999999999999999999", "model.onnx");
+
+    std::vector<std::string> warnings;
+    const auto configs = scanModelRepository(repo.root(), defaults(), warnings);
+    REQUIRE_EQ(configs.size(), 1);
+    REQUIRE_EQ(configs[0].model_version, std::string("99999999999999999999999999"));
+}
+
+TEST_CASE(model_repository_oversized_version_does_not_stop_other_models) {
+    const TempRepository repo("huge-version-mixed");
+    repo.addModelFile("good", "1", "model.onnx");
+    repo.addModelFile("huge", "1", "model.onnx");
+    repo.addModelFile("huge", "184467440737095516150", "model.onnx");
+
+    std::vector<std::string> warnings;
+    const auto configs = scanModelRepository(repo.root(), defaults(), warnings);
+    REQUIRE_EQ(configs.size(), 2);
+}
+
+TEST_CASE(model_repository_compares_versions_numerically_not_lexically) {
+    const TempRepository repo("version-order");
+    repo.addModelFile("m", "007", "model.onnx");
+    repo.addModelFile("m", "10", "model.onnx");
+
+    std::vector<std::string> warnings;
+    const auto configs = scanModelRepository(repo.root(), defaults(), warnings);
+    REQUIRE_EQ(configs.size(), 1);
+    // Leading zeros must not make "007" outrank "10".
+    REQUIRE_EQ(configs[0].model_version, std::string("10"));
+}
+
 TEST_CASE(model_repository_prefers_engine_over_the_onnx_it_was_built_from) {
     const TempRepository repo("prefers-engine");
     repo.addModelFile("m", "1", "model.onnx");

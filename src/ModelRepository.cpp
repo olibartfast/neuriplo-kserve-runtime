@@ -89,6 +89,27 @@ std::vector<std::string> sortedEntries(const fs::path &dir, bool directories) {
     return names;
 }
 
+// Compares two all-digit version names without converting them to an integer.
+// A directory name can hold more digits than any integer type, and std::stoull
+// would throw std::out_of_range on it -- escaping the scan and aborting startup,
+// which is precisely the "warn and skip" contract this file promises. Comparing
+// the digits directly also means an oversized version still sorts correctly
+// instead of being discarded.
+bool isHigherVersion(const std::string &candidate, const std::string &current) {
+    const auto significantDigits = [](const std::string &value) {
+        const auto first = value.find_first_not_of('0');
+        return first == std::string::npos ? std::string("0") : value.substr(first);
+    };
+
+    const auto lhs = significantDigits(candidate);
+    const auto rhs = significantDigits(current);
+    if (lhs.size() != rhs.size()) {
+        return lhs.size() > rhs.size();
+    }
+    // Equal digit counts, so lexicographic order is numeric order.
+    return lhs > rhs;
+}
+
 // Highest numeric version directory, which is the one served.
 std::string latestVersion(const fs::path &model_dir) {
     std::string best;
@@ -96,7 +117,7 @@ std::string latestVersion(const fs::path &model_dir) {
         if (!isNumericVersion(name)) {
             continue;
         }
-        if (best.empty() || std::stoull(name) > std::stoull(best)) {
+        if (best.empty() || isHigherVersion(name, best)) {
             best = name;
         }
     }
