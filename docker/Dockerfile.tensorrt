@@ -48,8 +48,8 @@ FROM ${NGC_TENSORRT_IMAGE} AS runtime
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# curl is used by the readiness wait in the conversion entrypoint; the OpenCV and
-# glog runtimes are what the neuriplo backend links against.
+# curl serves the container healthcheck; the OpenCV and glog runtimes are what
+# the neuriplo backend links against.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
@@ -64,13 +64,13 @@ COPY --from=build /build/neuriplo/libneuriplo.so /usr/local/lib/libneuriplo.so
 RUN ldconfig
 
 COPY --from=build /build/neuriplo-kserve-runtime /usr/local/bin/neuriplo-kserve-runtime
-COPY runtime/deploy/k3d/trt-convert-entrypoint.sh /usr/local/bin/trt-convert-entrypoint.sh
-RUN chmod +x /usr/local/bin/trt-convert-entrypoint.sh
+COPY runtime/deploy/prepare/prepare-repository.sh /usr/local/bin/prepare-repository.sh
+RUN chmod +x /usr/local/bin/prepare-repository.sh
 
 ENV MODEL_REPOSITORY=/models/repo
 ENV STAGE_DIR=/staging
 
 EXPOSE 8080
 
-ENTRYPOINT ["/usr/local/bin/trt-convert-entrypoint.sh"]
+ENTRYPOINT ["/usr/local/bin/prepare-repository.sh"]
 CMD ["--host", "0.0.0.0", "--port", "8080"]

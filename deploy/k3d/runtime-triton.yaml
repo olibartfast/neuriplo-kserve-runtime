@@ -1,0 +1,191 @@
+# Triton served from a repository built by the same preparer.
+#
+# Exists to demonstrate that the init-container design is not tied to
+# neuriplo-kserve-runtime. Compared with runtime-trt.yaml the artifact image, the
+# preparer, the volume layout, and the procedure are identical; only the server
+# container and REPOSITORY_LAYOUT differ. No model is named here either.
+#
+#   1. stage-models  copies its *.onnx into a shared staging volume
+#   2. prepare-repo  compiles each one on this node's GPU and writes the tree
+#                    with Triton's filename conventions, then exits
+#   3. tritonserver  mounts the finished tree and serves it
+#
+# Step 2 is a true init container: it starts no server, so the thing that builds
+# the repository and the thing that serves it are separate images that share
+# only a volume.
+#
+# Prerequisites:
+#   docker build -f deploy/prepare/Dockerfile -t neuriplo-prepare:trt .
+#   k3d image import neuriplo-prepare:trt -c neuriplo
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: triton-model-repo
+  namespace: neuriplo
+  labels:
+    app.kubernetes.io/name: tritonserver
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tritonserver
+  namespace: neuriplo
+  labels:
+    app: tritonserver
+    app.kubernetes.io/name: tritonserver
+    app.kubernetes.io/component: predictor
+spec:
+  replicas: 1
+  # Engine builds are slow -- measured at ~8.5 min for a 101 MB model on this
+  # node. Here the build is an init container, so the deadline has to cover it
+  # before Triton has even started.
+  progressDeadlineSeconds: 1800
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: tritonserver
+  template:
+    metadata:
+      labels:
+        app: tritonserver
+        app.kubernetes.io/name: tritonserver
+        app.kubernetes.io/component: predictor
+    spec:
+      runtimeClassName: nvidia
+      initContainers:
+        # Step 1: unchanged from the neuriplo deployment. The artifact image
+        # stages itself and knows nothing about which server will serve it.
+        - name: stage-models
+          image: neuriplo-models:depth-v1
+          imagePullPolicy: Never
+          volumeMounts:
+            - name: staging
+              mountPath: /staging
+
+        # Step 2: build the tree, then exit. PREPARE_ONLY is already the image
+        # default; it is restated here because it is the property that makes this
+        # an init container rather than a wrapper.
+        - name: prepare-repo
+          image: neuriplo-prepare:trt
+          imagePullPolicy: Never
+          env:
+            - name: PREPARE_ONLY
+              value: "true"
+            - name: REPOSITORY_LAYOUT
+              value: triton
+            - name: STAGE_DIR
+              value: /staging
+            - name: MODEL_REPOSITORY
+              value: /models/repo
+            - name: MODEL_VERSION
+              value: "1"
+            - name: TRT_PRECISION
+              value: fp16
+          # A TensorRT engine is built against a specific GPU, so the builder
+          # needs the real device. Init containers run to completion before the
+          # main container starts, so the node's single GPU is never contended:
+          # Kubernetes schedules on max(init, main), not their sum.
+          resources:
+            limits:
+              nvidia.com/gpu: 1
+          volumeMounts:
+            - name: staging
+              mountPath: /staging
+            - name: models
+              mountPath: /models
+
+      containers:
+        # Step 3: stock upstream Triton. It receives a finished repository and
+        # has no idea anything prepared it.
+        #
+        # The tag must carry the same TensorRT version the preparer used --
+        # 25.12 on both sides here. An engine built against a different TensorRT
+        # is rejected at load time with a version mismatch.
+        - name: tritonserver
+          image: nvcr.io/nvidia/tritonserver:25.12-py3
+          args:
+            - tritonserver
+            - --model-repository=/models/repo
+            - --http-port=8000
+            - --grpc-port=8001
+            - --metrics-port=8002
+          ports:
+            - name: http
+              containerPort: 8000
+              protocol: TCP
+            - name: grpc
+              containerPort: 8001
+              protocol: TCP
+            - name: metrics
+              containerPort: 8002
+              protocol: TCP
+          # Triton speaks the same KServe v2 health routes, so the probes are the
+          # ones the neuriplo deployment uses. Conversion already finished in the
+          # init container, so this startup budget only covers Triton's own load.
+          startupProbe:
+            httpGet:
+              path: /v2/health/ready
+              port: http
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            httpGet:
+              path: /v2/health/ready
+              port: http
+            periodSeconds: 5
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /v2/health/live
+              port: http
+            periodSeconds: 20
+          resources:
+            limits:
+              nvidia.com/gpu: 1
+          volumeMounts:
+            - name: models
+              mountPath: /models
+              readOnly: true
+
+      volumes:
+        - name: staging
+          emptyDir: {}
+        # Persisted for the same reason as the neuriplo deployment: rebuilding
+        # engines costs minutes that would otherwise be paid on every pod
+        # replacement, and the preparer skips a model that is already built.
+        - name: models
+          persistentVolumeClaim:
+            claimName: triton-model-repo
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: tritonserver
+  namespace: neuriplo
+  labels:
+    app: tritonserver
+    app.kubernetes.io/name: tritonserver
+spec:
+  type: ClusterIP
+  selector:
+    app: tritonserver
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http
+      protocol: TCP
+    - name: grpc
+      port: 8001
+      targetPort: grpc
+      protocol: TCP
+    - name: metrics
+      port: 8002
+      targetPort: metrics
+      protocol: TCP
