@@ -365,9 +365,22 @@ artifacts, per-model overrides, and refusal to serve an empty repository.
 
 A prepare step that writes a `.plan`, a `.pte`, and an `.xml` produces a
 repository that a TensorRT-only build cannot serve. `NEURIPLO_BACKENDS` selects
-which backends are compiled in (`DEFAULT_BACKEND` sets the default among them);
-models whose backend is absent fail to load. This is currently the sharpest
-limit on heterogeneous serving — the `trt-gpu` image is a single-backend build.
+which backends are compiled in (`DEFAULT_BACKEND` sets the default among them).
+This is currently the sharpest limit on heterogeneous serving — the `trt-gpu`
+image is a single-backend build.
+
+Discovery does **not** check whether a backend is compiled in; it only maps the
+extension. So a model whose backend is missing is still discovered, logged, and
+added to the catalog, and the failure arrives later:
+
+```
+POST /v2/repository/models/<name>/load
+409  {"error":{"code":"UNAVAILABLE","message":"real neuriplo support is not enabled; ..."}}
+```
+
+Worth knowing because it means the index is a statement about the *repository*,
+not about what this binary can actually run. A model listed `UNAVAILABLE` may be
+perfectly well-formed and simply have no backend here.
 
 ## Managing models
 
@@ -568,7 +581,8 @@ dies at startup on a missing shared object.
 | Rollout reported failed while logs show conversion running | `progressDeadlineSeconds` shorter than the build | raise it above the startup-probe budget |
 | Pod restarts every few minutes during first start | liveness probe firing before the server binds | that window belongs to `startupProbe` |
 | `cannot open shared object file: libneuriplo.so` | build stage copied the binary but not the library | `COPY --from=build` the `.so` and run `ldconfig` |
-| Model missing from `/v2/repository/index` | its backend is not compiled into the image, or its extension is unmapped | check `NEURIPLO_BACKENDS`; see the unmapped-backend list above |
+| Model absent from `/v2/repository/index` entirely | its extension is unmapped, or the version directory holds nothing recognized — discovery skipped it | startup logs `no recognized model file under <dir>; skipping`; see the unmapped-backend list above |
+| Model listed `UNAVAILABLE`, and `load` returns 409 | discovery maps by extension and never checks whether the backend is compiled in, so the model is catalogued and only fails when something asks for it | check `NEURIPLO_BACKENDS` / `DEFAULT_BACKEND`; the 409 body names the missing support |
 | Server exits on startup, no model loads | a backend segfaulted during load | `--model-control-mode explicit` contains the blast radius |
 
 Discovery decisions are logged at startup — one `discovered model <name> version
