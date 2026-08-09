@@ -5,6 +5,11 @@ installed. With KServe present, prefer `deploy/kserve/`, where
 `ClusterServingRuntime` carries the runtime name and `InferenceService` carries
 the model name.
 
+For the design behind these manifests -- the role each image plays, the contract
+a prepare step has to honour, how to add a backend, and the failure modes -- see
+[docs/init-container.md](../../docs/init-container.md). This page is the k3d
+deployment; that one is the specification.
+
 ## Files
 
 | File | Purpose |
