@@ -126,6 +126,30 @@ jobs:
       - name: Run curl smoke test
         run: scripts/e2e-stub.sh
 
+  prepare-repository:
+    name: Model repository preparer
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # No GPU, no TensorRT, no runtime binary: the test stubs trtexec and the
+      # server on PATH, because what is under test is the dispatch and the tree
+      # it produces.
+      - name: Install shellcheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+      - name: Lint prepare scripts
+        run: shellcheck deploy/prepare/prepare-repository.sh scripts/test-prepare-repository.sh
+      - name: Run preparer tests
+        run: scripts/test-prepare-repository.sh
+      # The preparer is a portable /bin/sh script, and the serving image's shell
+      # is busybox ash rather than bash. Run the suite a second time with dash as
+      # /bin/sh so a bashism cannot pass here and fail in the container.
+      - name: Install dash
+        run: sudo apt-get install -y dash
+      - name: Re-run under dash
+        run: |
+          sudo ln -sf /bin/dash /bin/sh
+          scripts/test-prepare-repository.sh
+
   real-onnx-grpc:
     name: Real neuriplo ONNX + gRPC build and test
     runs-on: ubuntu-latest

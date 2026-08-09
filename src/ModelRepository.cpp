@@ -38,10 +38,11 @@ const std::map<std::string, std::string> &extensionBackends() {
 
 // Order used when one version directory holds artifacts for several backends,
 // which is normal for a repository that keeps every export of a model side by
-// side. Earliest wins. A config.pbtxt `backend:` line overrides this, and so
-// does NEURIPLO_REPOSITORY_BACKEND_PRIORITY, because no fixed order can be
-// right for every deployment -- an OpenVINO host and a CUDA host want opposite
-// answers from the same directory.
+// side. Earliest wins, and NEURIPLO_REPOSITORY_BACKEND_PRIORITY overrides it,
+// because no fixed order can be right for every deployment -- an OpenVINO host
+// and a CUDA host want opposite answers from the same directory. A config.pbtxt
+// does not participate: it is an I/O name overlay only (see applyConfigPbtxt in
+// RealNeuriploAdapter.cpp), not a Triton model config.
 const char *kDefaultBackendPriority = "tensorrt,onnx_runtime,openvino,executorch,litert,"
                                       "libtorch,libtensorflow,dali,ensemble";
 

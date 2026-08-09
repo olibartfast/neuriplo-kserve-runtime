@@ -5,13 +5,25 @@ installed. With KServe present, prefer `deploy/kserve/`, where
 `ClusterServingRuntime` carries the runtime name and `InferenceService` carries
 the model name.
 
+For the design behind these manifests -- the role each image plays, the contract
+a prepare step has to honour, how to add a backend, and the failure modes -- see
+[docs/init-container.md](../../docs/init-container.md). This page is the k3d
+deployment; that one is the specification.
+
 ## Files
 
 | File | Purpose |
 |---|---|
-| `runtime-trt.yaml` | TensorRT serving: convert on the node, serve a model repository tree. Names no model. |
-| `trt-convert-entrypoint.sh` | The conversion-then-serve entrypoint, baked into `neuriplo-kserve-runtime:trt-gpu`. |
+| `runtime-trt.yaml` | TensorRT serving: prepare on the node, serve a model repository tree. Names no model. |
+| `runtime-triton.yaml` | The same procedure with stock upstream Triton as the server. |
+| `../prepare/prepare-repository.sh` | Builds the repository tree. Server-agnostic. |
+| `../prepare/Dockerfile` | The preparer as a standalone init-container image. |
 | `../compose/docker-compose.yml` | The same flow without Kubernetes. |
+
+`runtime-trt.yaml` and `runtime-triton.yaml` differ in the server container and
+one environment variable (`REPOSITORY_LAYOUT`). The artifact image, the
+preparer, the volume layout, and the procedure are identical — which is the
+point: the repository tree is the interface, not the runtime.
 
 ## Nothing here is model-specific, and nothing requires Kubernetes
 
