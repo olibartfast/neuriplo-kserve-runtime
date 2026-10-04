@@ -56,7 +56,16 @@ int main(int argc, char **argv) {
     try {
         const auto config = parseRuntimeConfig(argc, argv);
         MetricsRegistry metrics;
-        metrics.setModelVersion(config.model_version);
+        if (config.model_repository.empty()) {
+            // Single-model mode: config.model_version IS the one model's
+            // version. In repository mode this global label would mislabel
+            // every discovered model with whichever one's version happened
+            // to be set last; each model's own version is attached to its
+            // own metric lines instead (KServeRuntime::metricsPage() calls
+            // setSchedulerMetrics(name, version, ...) per model, which
+            // MetricsRegistry::renderMetrics() now reads per model).
+            metrics.setModelVersion(config.model_version);
+        }
         if (!config.deployment.empty()) {
             metrics.setDeployment(config.deployment);
         }
@@ -65,11 +74,15 @@ int main(int argc, char **argv) {
         // Repository mode serves every model in the tree; single-model mode
         // stays the default so existing deployments are unaffected.
         std::optional<ModelRegistry> registry_storage;
+        // Declared at this scope (not just inside the else-branch below) so
+        // the per-model load metrics after the registry is built can still
+        // report each discovered model's own outcome.
+        std::vector<RuntimeConfig> discovered;
         if (config.model_repository.empty()) {
             registry_storage.emplace(config);
         } else {
             std::vector<std::string> warnings;
-            const auto discovered = scanModelRepository(config.model_repository, config, warnings);
+            discovered = scanModelRepository(config.model_repository, config, warnings);
             for (const auto &warning : warnings) {
                 logger.warn(warning);
             }
@@ -81,8 +94,10 @@ int main(int argc, char **argv) {
             if (config.model_control_mode == "explicit") {
                 // Start empty and let the client choose. Nothing is loaded, so a
                 // model whose backend crashes on load cannot prevent the server
-                // from coming up at all.
-                registry_storage.emplace(std::vector<RuntimeConfig>{});
+                // from coming up at all. explicit_control_mode=true so an empty
+                // registry still reports ready.
+                registry_storage.emplace(std::vector<RuntimeConfig>{},
+                                         /*explicit_control_mode=*/true, config);
                 logger.info("explicit model control: " + std::to_string(discovered.size()) +
                             " model(s) available, none loaded; use POST "
                             "/v2/repository/models/<name>/load");
@@ -90,7 +105,7 @@ int main(int argc, char **argv) {
                 // Deliberately built from the scan even when it found nothing:
                 // the server then reports not-ready instead of quietly serving
                 // a stub.
-                registry_storage.emplace(discovered);
+                registry_storage.emplace(discovered, /*explicit_control_mode=*/false, config);
             }
             registry_storage->setRepositoryCatalog(discovered);
         }
@@ -98,12 +113,34 @@ int main(int argc, char **argv) {
         KServeRuntime runtime(registry, metrics);
         LogEvent startup;
         startup.severity = "info";
-        startup.model = config.model_name;
-        startup.backend = config.backend;
+        if (config.model_repository.empty()) {
+            // Single-model mode: there is exactly one model/backend to name.
+            startup.model = config.model_name;
+            startup.backend = config.backend;
+        }
+        // Repository mode has no single model/backend to report here -- the
+        // per-model "discovered model ..." lines above (and the per-model load
+        // metrics below) are the accurate record instead of a phantom
+        // "demo"/"stub" entry that was never actually loaded.
         startup.message = "runtime starting";
         logger.event(startup);
 
-        metrics.recordModelLoadSuccess(config.model_name, config.backend);
+        if (config.model_repository.empty()) {
+            metrics.recordModelLoadSuccess(config.model_name, config.backend);
+        } else if (config.model_control_mode != "explicit") {
+            // Record each discovered model's own outcome and version, rather
+            // than one phantom success metric for the top-level defaults
+            // (which were never actually loaded in repository mode).
+            for (const auto &model : discovered) {
+                if (registry.ready(model.model_name)) {
+                    metrics.recordModelLoadSuccess(model.model_name, model.backend);
+                } else {
+                    metrics.recordModelLoadFailure(model.model_name, model.backend);
+                }
+            }
+        }
+        // Explicit mode loads nothing at startup, so nothing is recorded here;
+        // /v2/repository/models/<name>/load records its own outcome.
 
         HttpServer server(
             config.host, config.port,

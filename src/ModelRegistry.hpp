@@ -42,8 +42,19 @@ class ModelRegistry {
     ModelRegistry(const RuntimeConfig &config, ExecutorFactory factory);
     // Repository mode: every model discovered in the tree is loaded. A failed
     // model registers as Failed rather than aborting the server, so one bad
-    // entry cannot take the whole repository down.
-    explicit ModelRegistry(const std::vector<RuntimeConfig> &configs);
+    // entry cannot take the whole repository down -- and, unlike single-model
+    // mode, a Failed slot does not make allReady() report the server not
+    // ready either: it is reported through /v2/repository/index (state
+    // UNAVAILABLE with its reason) instead. `explicit_control_mode` is true
+    // only for --model-control-mode explicit, where the registry
+    // deliberately starts (and may return to) empty; allReady() then reports
+    // ready on an empty registry instead of forever not-ready. `defaults`
+    // supplies log_payloads/tokens_per_char when `configs` is empty (explicit
+    // mode at startup, or a repository scan that found nothing), since there
+    // is then no config in the vector to read them from.
+    explicit ModelRegistry(const std::vector<RuntimeConfig> &configs,
+                           bool explicit_control_mode = false,
+                           const RuntimeConfig &defaults = RuntimeConfig{});
 
     // Returns true iff, after this call, `config.model_name` is a slot this
     // call itself resolved (built, successfully or not) or a concurrent
@@ -112,6 +123,13 @@ class ModelRegistry {
     bool logPayloads() const;
     double tokensPerChar() const;
     size_t retiredSchedulerCount() const;
+    // True for the repository-mode constructors (both "none" and
+    // "explicit" --model-control-mode), false for single-model mode. Lets a
+    // caller with exactly one model loaded (e.g. a one-model repository, or
+    // explicit mode with one model loaded) tell that apart from genuine
+    // single-model mode, where "the" global model version IS that model's
+    // version.
+    bool repositoryMode() const;
 
   private:
     static bool isPipelineConfig(const RuntimeConfig &config);
@@ -172,4 +190,7 @@ class ModelRegistry {
     mutable std::atomic<std::size_t> load_waiters_{0};
     bool log_payloads_ = false;
     double tokens_per_char_ = 0.25;
+    // Set by the repository-mode (vector) constructors only; see allReady().
+    bool repository_mode_ = false;
+    bool explicit_control_mode_ = false;
 };

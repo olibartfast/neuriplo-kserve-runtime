@@ -1,7 +1,9 @@
+#include "AdminCodec.hpp"
 #include "BackendRegistry.hpp"
 #include "KServeRuntime.hpp"
 #include "MetricsRegistry.hpp"
 #include "ModelRegistry.hpp"
+#include "PipelineExecutor.hpp"
 #include "RuntimeConfig.hpp"
 #include "Test.hpp"
 
@@ -344,4 +346,38 @@ TEST_CASE(admin_endpoint_delete_during_reload_in_progress_returns_409_not_404) {
     gate->second.notify_all();
     reloader.join();
     REQUIRE(registry.ready("demo"));
+}
+
+// A-7: an ensemble load body that does not itself ask for batching must not
+// inherit a server-wide dynamic-batching default (CLI flags, or a prior
+// model's config used as `defaults` here) -- it would otherwise fail to load
+// for a reason the request never mentioned.
+TEST_CASE(ensemble_load_does_not_inherit_dynamic_batching_default) {
+    RuntimeConfig defaults;
+    defaults.backend = "stub";
+    defaults.dynamic_batching_enabled = true;
+    defaults.max_batch_size = 8;
+
+    const auto parsed =
+        parseLoadModelRequest(std::string(R"({"model_name":"ens","backend":")") +
+                                  pipelineBackendId() + R"(","pipeline_graph":{"steps":[]}})",
+                              defaults);
+    REQUIRE(parsed.ok);
+    REQUIRE(!parsed.config.dynamic_batching_enabled);
+    REQUIRE_EQ(parsed.config.max_batch_size, static_cast<size_t>(1));
+}
+
+// Only an explicit per-model request for batching on an ensemble is still
+// rejected (downstream, by PipelineExecutor) -- the codec must not silently
+// force it off once the request itself names the field.
+TEST_CASE(ensemble_load_keeps_explicit_batching_request_for_rejection) {
+    RuntimeConfig defaults;
+    defaults.backend = "stub";
+
+    const auto parsed = parseLoadModelRequest(
+        std::string(R"({"model_name":"ens","backend":")") + pipelineBackendId() +
+            R"(","pipeline_graph":{"steps":[]},"max_batch_size":4})",
+        defaults);
+    REQUIRE(parsed.ok);
+    REQUIRE_EQ(parsed.config.max_batch_size, static_cast<size_t>(4));
 }

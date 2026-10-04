@@ -404,3 +404,185 @@ TEST_CASE(repository_unload_of_a_still_loading_model_returns_409_not_404) {
     loader.join();
     REQUIRE(registry.ready("slow"));
 }
+
+// P2-B2 B-4: explicit control mode starts (and may return to) empty by
+// design; the server must be ready to accept load requests rather than
+// forever 503.
+TEST_CASE(explicit_control_mode_empty_registry_is_ready) {
+    MetricsRegistry metrics;
+    ModelRegistry registry(std::vector<RuntimeConfig>{}, /*explicit_control_mode=*/true);
+    KServeRuntime runtime(registry, metrics);
+    REQUIRE_EQ(runtime.handle(repositoryRequest("GET", "/v2/health/ready")).status, 200);
+}
+
+// P2-B2 B-5: a Failed model in repository mode is reported via
+// /v2/repository/index (not readiness); a good model alongside it keeps the
+// server ready.
+TEST_CASE(repository_mode_failed_model_does_not_block_readiness) {
+    MetricsRegistry metrics;
+    RuntimeConfig bad;
+    bad.model_name = "bad";
+    bad.backend = "no_such_backend";
+    RuntimeConfig good;
+    good.model_name = "good";
+    good.backend = "stub";
+    ModelRegistry registry(std::vector<RuntimeConfig>{bad, good});
+    KServeRuntime runtime(registry, metrics);
+
+    REQUIRE(!registry.ready("bad"));
+    REQUIRE(registry.ready("good"));
+    REQUIRE_EQ(runtime.handle(repositoryRequest("GET", "/v2/health/ready")).status, 200);
+
+    const auto index = runtime.handle(repositoryRequest("POST", "/v2/repository/index"));
+    const auto bad_pos = index.body.find("\"name\":\"bad\"");
+    REQUIRE(bad_pos != std::string::npos);
+    // The KServe model-repository extension has no FAILED state: a failed
+    // load reports UNAVAILABLE, same as a catalogued-but-unloaded model --
+    // the reason field is what actually explains why.
+    REQUIRE(index.body.find("\"state\":\"UNAVAILABLE\"", bad_pos) != std::string::npos);
+    const auto reason_key = index.body.find("\"reason\":\"", bad_pos);
+    REQUIRE(reason_key != std::string::npos);
+    const auto reason_value_start = reason_key + std::string("\"reason\":\"").size();
+    REQUIRE(reason_value_start < index.body.size());
+    REQUIRE(index.body[reason_value_start] != '"'); // non-empty reason string
+}
+
+// P2-B2 B-5: single-model mode keeps strict readiness -- there is only one
+// model, so its failure is the server's failure.
+TEST_CASE(single_model_mode_failed_model_blocks_readiness) {
+    MetricsRegistry metrics;
+    RuntimeConfig bad;
+    bad.model_name = "bad";
+    bad.backend = "no_such_backend";
+    ModelRegistry registry(bad);
+    KServeRuntime runtime(registry, metrics);
+    REQUIRE_EQ(runtime.handle(repositoryRequest("GET", "/v2/health/ready")).status, 503);
+}
+
+// P2-B2 B-7: explicit mode's empty-vector construction must still honor the
+// CLI's log_payloads/tokens_per_char, not silently default them.
+TEST_CASE(explicit_control_mode_honors_log_payloads_and_tokens_per_char) {
+    RuntimeConfig defaults;
+    defaults.log_payloads = true;
+    defaults.tokens_per_char = 0.5;
+    ModelRegistry registry(std::vector<RuntimeConfig>{}, /*explicit_control_mode=*/true, defaults);
+    REQUIRE(registry.logPayloads());
+    REQUIRE_EQ(registry.tokensPerChar(), 0.5);
+}
+
+// P2-B2 B-10: {"ready":true} filters the index down to currently-serving
+// models.
+TEST_CASE(repository_index_ready_filter_returns_only_ready_entries) {
+    MetricsRegistry metrics;
+    ModelRegistry registry(demoConfig());
+    RuntimeConfig other = demoConfig();
+    other.model_name = "other";
+    registry.setRepositoryCatalog({other});
+    KServeRuntime runtime(registry, metrics);
+
+    const auto response =
+        runtime.handle(repositoryRequest("POST", "/v2/repository/index", R"({"ready":true})"));
+    REQUIRE_EQ(response.status, 200);
+    REQUIRE(response.body.find("\"name\":\"demo\"") != std::string::npos);
+    REQUIRE(response.body.find("\"name\":\"other\"") == std::string::npos);
+}
+
+// P2-B2 B-10: a malformed body is a client error, not a silently-ignored
+// filter.
+TEST_CASE(repository_index_rejects_invalid_json_body) {
+    MetricsRegistry metrics;
+    ModelRegistry registry(demoConfig());
+    KServeRuntime runtime(registry, metrics);
+    const auto response =
+        runtime.handle(repositoryRequest("POST", "/v2/repository/index", "{not json"));
+    REQUIRE_EQ(response.status, 400);
+}
+
+// P2-B2 B-20: the action is checked before the method -- an unknown action is
+// a 404 regardless of what method was used, not a 405.
+TEST_CASE(repository_unknown_action_returns_404_for_any_method) {
+    MetricsRegistry metrics;
+    ModelRegistry registry(demoConfig());
+    KServeRuntime runtime(registry, metrics);
+    const auto response =
+        runtime.handle(repositoryRequest("GET", "/v2/repository/models/demo/frobnicate"));
+    REQUIRE_EQ(response.status, 404);
+}
+
+// P2-B2 B-20: a known action with the wrong method is METHOD_NOT_ALLOWED, not
+// INVALID_ARGUMENT.
+TEST_CASE(repository_load_wrong_method_uses_method_not_allowed_code) {
+    MetricsRegistry metrics;
+    ModelRegistry registry(demoConfig());
+    KServeRuntime runtime(registry, metrics);
+    const auto response =
+        runtime.handle(repositoryRequest("GET", "/v2/repository/models/demo/load"));
+    REQUIRE_EQ(response.status, 405);
+    REQUIRE(response.body.find("METHOD_NOT_ALLOWED") != std::string::npos);
+}
+
+// C5: each model's metric lines must carry its own version label, not a
+// single global one -- a repository serving models at different versions
+// would otherwise mislabel every model but one.
+TEST_CASE(metrics_render_uses_each_models_own_version_label) {
+    MetricsRegistry metrics;
+    metrics.setSchedulerMetrics("a", "1", {});
+    metrics.setSchedulerMetrics("b", "2", {});
+    metrics.recordInferRequest("a", "POST", 200, 0, 0, 0);
+    metrics.recordInferRequest("b", "POST", 200, 0, 0, 0);
+
+    const auto body = metrics.renderMetrics();
+    // Label keys render alphabetically: model, status, version.
+    REQUIRE(body.find(R"(model="a",status="200",version="1")") != std::string::npos);
+    REQUIRE(body.find(R"(model="b",status="200",version="2")") != std::string::npos);
+    // The bug this guards against: "a" mislabeled with "b"'s (or the global)
+    // version.
+    REQUIRE(body.find(R"(model="a",status="200",version="2")") == std::string::npos);
+}
+
+// C6: a model name reaching the index is not guaranteed to be valid UTF-8
+// (it can come from a repository directory name or an admin load body); the
+// index must not throw -- it replaces invalid sequences and still returns
+// 200.
+TEST_CASE(repository_index_does_not_throw_on_non_utf8_model_name) {
+    MetricsRegistry metrics;
+    ModelRegistry registry(demoConfig());
+    KServeRuntime runtime(registry, metrics);
+
+    std::string bad_name = "bad";
+    bad_name.push_back(static_cast<char>(0xFF));
+    bad_name.push_back(static_cast<char>(0xFE));
+
+    const auto load = runtime.handle(repositoryRequest(
+        "POST", "/v2/repository/models/" + bad_name + "/load", R"({"backend":"stub"})"));
+    REQUIRE_EQ(load.status, 200);
+
+    const auto index = runtime.handle(repositoryRequest("POST", "/v2/repository/index"));
+    REQUIRE_EQ(index.status, 200);
+}
+
+// F2: a one-model repository (or explicit mode with one model loaded) has
+// models.size() == 1 just like genuine single-model mode, but the global
+// metrics.setModelVersion() label is the CLI/default version, not
+// necessarily this model's own -- metricsPage() must use the model's own
+// version here, not fall back to the global label the way single-model mode
+// correctly does.
+TEST_CASE(metrics_page_one_model_repository_uses_the_models_own_version) {
+    RuntimeConfig config = demoConfig();
+    config.model_version = "3";
+    config.model_version_explicit = true;
+    ModelRegistry registry(std::vector<RuntimeConfig>{config});
+    REQUIRE(registry.ready("demo"));
+    REQUIRE_EQ(registry.listModels().size(), static_cast<size_t>(1));
+
+    MetricsRegistry metrics;
+    // The CLI/default version, deliberately different from the model's own
+    // "3", so a mislabel is unmistakable.
+    metrics.setModelVersion("1");
+    KServeRuntime runtime(registry, metrics);
+
+    const auto response = runtime.handle(repositoryRequest("GET", "/metrics"));
+    REQUIRE_EQ(response.status, 200);
+    REQUIRE(response.body.find(R"(model="demo",version="3")") != std::string::npos);
+    REQUIRE(response.body.find(R"(model="demo",version="1")") == std::string::npos);
+}

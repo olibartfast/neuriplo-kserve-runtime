@@ -234,6 +234,9 @@ POST /v2/models/{model_name}/infer
 GET  /v2/models/{model_name}/versions/{version}
 GET  /v2/models/{model_name}/versions/{version}/ready
 POST /v2/models/{model_name}/versions/{version}/infer
+POST /v2/repository/index
+POST /v2/repository/models/{model_name}/load
+POST /v2/repository/models/{model_name}/unload
 GET  /metrics
 ```
 
