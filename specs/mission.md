@@ -78,9 +78,9 @@ operational: exact commands, supported paths, known exclusions.
 
 ## Assumptions to Confirm
 
-- [A-1] The first-milestone non-goals in [specs/history/target-design.md](history/target-design.md) (no auth/TLS beyond
+- [A-1] The standing non-goals above (no auth/TLS beyond
   reverse-proxy friendliness, no ModelMesh replacement, no distributed model
-  cache) still hold. The same file's "no multi-model hot reload" no longer does:
+  cache) still hold. "No multi-model hot reload" no longer does:
   Step 14 shipped it.
 - [A-2] The conservative custom `modelFormat: neuriplo` stays the only KServe
   format advertised; automatic selection for `onnx`, `openvino`, `tensorrt`, or

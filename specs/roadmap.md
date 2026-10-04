@@ -123,10 +123,12 @@ Each needs a packet before work starts.
 
 **Status: Planned, scale-triggered**
 
-Async HTTP reactor, zero-copy tensor buffers, arena/PMR allocators, and
+Async HTTP reactor, zero-copy tensor buffers, arena/PMR allocators,
+`std::expected`-style result types at executor/scheduler boundaries, and
 multi-datatype gRPC codec. Each starts only on its trigger: connection
 concurrency above O(100) for the reactor (epoll/io_uring), copy overhead visible
 in profiling for zero-copy buffers, allocation churn under load for arena/PMR,
+error-handling bugs for structured result types,
 and client demand for INT8/FP16 in the gRPC codec.
 
 ## Infrastructure and Cross-Repo Notes
@@ -145,5 +147,18 @@ succeeded, and neuriplo-infer's 22/22 tests passed.
 - [A-10] The Step 15 status in `AGENTS.md` ("on `feature/step-15-raw-output`")
   is stale, because the raw output path is already used by the adapter.
 - [A-11] Phase 4 and 5 ordering is a working sequence, not a commitment.
+
+## Standing risks
+
+- Backend thread-safety is per-backend and not uniformly documented upstream.
+- Tensor dtype mapping must stay explicit and tested; silent widening is the
+  failure mode.
+- Dynamic batching can silently change output splitting if compatibility rules
+  are relaxed carelessly.
+- LLM scheduling is not tensor batching. Token, context, cancellation, and
+  memory-pressure policies have to stay explicit.
+- Pulling server dependencies into `neuriplo` core, or the task layer into the
+  default runtime build, would create dependency creep. The
+  `NEURIPLO_RUNTIME_ENABLE_TASKS=OFF` default is the guard.
 
 _Revision: 2026-10-04 - initial brownfield roadmap._
