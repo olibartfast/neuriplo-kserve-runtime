@@ -107,4 +107,4 @@ completes on destruction.
 - Reload/unload return without joining retired scheduler workers.
 - In-flight requests on a retired scheduler finish; workers join off the hot path.
 - Step 13 (control plane / data plane split) is complete; Step 14 builds on it
-  (see `plan/STEP14.md`).
+  (see `specs/history/steps/STEP14.md`).

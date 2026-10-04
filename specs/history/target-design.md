@@ -1,5 +1,8 @@
 # neuriplo-kserve-runtime Roadmap
 
+> Note: original milestone target design, kept as reference. The live roadmap is
+> [specs/roadmap.md](../roadmap.md).
+
 ## Goal
 
 Build a production-oriented, KServe-compatible C++ inference runtime that serves
@@ -117,8 +120,8 @@ The roadmap is organized as implementation steps. Each completed step should
 have a matching `STEP<N>.md` snapshot that records what was actually built and
 validated. Work-in-progress step planning should use `STEP<N>_WIP.md`.
 
-Steps 12+ and the E2E integration plan are in `plan/NEXT_STEPS.md` and
-`plan/E2E_YOLO.md`.
+Steps 12+ and the E2E integration plan are in `specs/roadmap.md` and
+`specs/procedures/e2e-yolo.md`.
 
 ```text
 Step 0: Scaffold
@@ -135,7 +138,7 @@ Step 10: LLM Path Completion
 Step 11: Deployment Validation
 ```
 
-Current architecture patterns are documented in `plan/DESIGN_PATTERNS.md`. That file
+Current architecture patterns are documented in `specs/architecture.md`. That file
 records what exists today; this section records what to grow into and when.
 
 ## Architecture And Design Pattern Evolution
@@ -1296,12 +1299,12 @@ Performance checks:
 7. Add llama.cpp and Cactus LLM support as a dedicated scheduling policy, not
    as ordinary dynamic batching.
 8. Prefer correctness and stable protocol behavior before optimizing transport.
-9. Evolve architecture using `plan/DESIGN_PATTERNS.md` for current patterns and the
+9. Evolve architecture using `specs/architecture.md` for current patterns and the
    "Architecture And Design Pattern Evolution" section for target patterns.
 
 ## Production Readiness Gap Analysis
 
-Steps 0–8 are completed and have snapshot documents (plan/STEP0–plan/STEP8.md). Steps
+Steps 0–8 are completed and have snapshot documents (specs/history/steps/STEP0.md to STEP8.md). Steps
 9–11 are planned to close remaining gaps. This section records what remains
 before this is a production-facing serving runtime, annotated with the step
 that addresses each gap.
