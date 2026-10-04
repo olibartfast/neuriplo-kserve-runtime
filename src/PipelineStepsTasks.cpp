@@ -20,6 +20,178 @@ namespace {
 
 constexpr const char *kFrameSizeTensor = "FRAME_SIZE";
 
+// Cap on the pixel count a preprocess step will decode. An attacker-supplied
+// JPEG/PNG can declare dimensions far beyond anything the header bytes
+// actually carry (a "decompression bomb"): a few hundred bytes can declare a
+// 30000x30000 image, which the decoder would then allocate ~2.7 GB for. Baked
+// in rather than left to the decoder, because the decoder's own allocation is
+// the thing this cap exists to avoid ever reaching.
+constexpr int64_t kPipelineMaxDecodedPixels = 64LL * 1024LL * 1024LL; // 64 megapixels
+
+// Reads the declared width/height straight out of a PNG, JPEG, or BMP header,
+// without decoding, so a declared-huge image can be rejected before the
+// decoder allocates its pixel buffer. Returns false when the bytes are not a
+// recognized header of one of those formats (truncated, a different format,
+// or not an image at all) -- the caller then falls through to the normal
+// decode path, which rejects those on its own terms. TGA has no signature to
+// detect it by, so a declared-huge TGA is not caught here (left as a known
+// gap: see the roadmap follow-up for this cap).
+bool decodedImageDimensions(const uint8_t *data, size_t size, int64_t &width, int64_t &height) {
+    static constexpr uint8_t kPngSignature[8] = {0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A};
+    if (size >= 8 && std::memcmp(data, kPngSignature, sizeof(kPngSignature)) == 0) {
+        // Walk chunks rather than assuming IHDR is the first one: Apple's
+        // CgBI PNGs (iOS app-bundle PNGs, which stb_image's PNG decoder
+        // accepts) insert a private "CgBI" chunk before IHDR -- and nothing
+        // bounds how many of those a file can have. No separate chunk-count
+        // limit is needed: every chunk this loop skips over advances `offset`
+        // by at least 12 bytes (length + type + crc, even with no chunk
+        // data), so the walk is already bounded by `size`.
+        size_t offset = 8;
+        while (offset + 12 <= size) {
+            const auto chunk_length = (static_cast<uint32_t>(data[offset]) << 24) |
+                                      (static_cast<uint32_t>(data[offset + 1]) << 16) |
+                                      (static_cast<uint32_t>(data[offset + 2]) << 8) |
+                                      static_cast<uint32_t>(data[offset + 3]);
+            if (std::memcmp(data + offset + 4, "IHDR", 4) == 0) {
+                if (offset + 16 > size) {
+                    return false; // truncated IHDR
+                }
+                // IHDR data: 4-byte width then 4-byte height, both
+                // big-endian, starting right after the 4-byte length and
+                // 4-byte "IHDR" type.
+                width = (static_cast<int64_t>(data[offset + 8]) << 24) |
+                        (static_cast<int64_t>(data[offset + 9]) << 16) |
+                        (static_cast<int64_t>(data[offset + 10]) << 8) |
+                        static_cast<int64_t>(data[offset + 11]);
+                height = (static_cast<int64_t>(data[offset + 12]) << 24) |
+                         (static_cast<int64_t>(data[offset + 13]) << 16) |
+                         (static_cast<int64_t>(data[offset + 14]) << 8) |
+                         static_cast<int64_t>(data[offset + 15]);
+                return true;
+            }
+            // length(4) + type(4) + data(chunk_length) + crc(4).
+            offset += 12 + static_cast<size_t>(chunk_length);
+        }
+        return false;
+    }
+
+    if (size >= 2 && data[0] == 0xFF) {
+        // JPEG: walk marker segments until a Start-Of-Frame marker, which
+        // carries the frame's height/width right after its own length field.
+        // Matches stb_image's stbi__get_marker exactly:
+        //  - SOI itself may be preceded by extra 0xFF fill bytes, and so may
+        //    any later marker code (the JPEG spec allows padding before the
+        //    real marker byte); both are skipped rather than treated as the
+        //    marker.
+        //  - The very first marker read after SOI must be a real marker
+        //    (junk there is an error, same as stb); every later one may be
+        //    preceded by non-0xFF junk bytes too, left over by some encoders
+        //    between segments, which stb skips one byte at a time while
+        //    scanning for the next marker.
+        size_t soi_offset = 0;
+        while (soi_offset < size && data[soi_offset] == 0xFF) {
+            ++soi_offset;
+        }
+        if (soi_offset >= size || data[soi_offset] != 0xD8) {
+            return false; // not a JPEG after all
+        }
+
+        size_t offset = soi_offset + 1;
+        bool first_marker = true;
+        while (offset < size) {
+            if (data[offset] != 0xFF) {
+                if (first_marker) {
+                    return false; // junk right after SOI: stb rejects this too
+                }
+                ++offset; // junk between segments: skip it byte by byte
+                continue;
+            }
+            size_t code_offset = offset + 1;
+            while (code_offset < size && data[code_offset] == 0xFF) {
+                ++code_offset; // skip fill bytes before the real marker code
+            }
+            if (code_offset >= size) {
+                return false; // truncated
+            }
+            const uint8_t marker = data[code_offset];
+            first_marker = false;
+            if (marker == 0x01 || (marker >= 0xD0 && marker <= 0xD9)) {
+                offset = code_offset + 1; // markers with no payload (RSTn, TEM, EOI)
+                continue;
+            }
+            const bool is_sof = marker >= 0xC0 && marker <= 0xCF && marker != 0xC4 &&
+                                marker != 0xC8 && marker != 0xCC;
+            if (is_sof) {
+                if (code_offset + 7 >= size) {
+                    return false; // truncated before height/width
+                }
+                height = (static_cast<int64_t>(data[code_offset + 4]) << 8) |
+                         static_cast<int64_t>(data[code_offset + 5]);
+                width = (static_cast<int64_t>(data[code_offset + 6]) << 8) |
+                        static_cast<int64_t>(data[code_offset + 7]);
+                return true;
+            }
+            if (code_offset + 2 >= size) {
+                return false;
+            }
+            const size_t segment_length = (static_cast<size_t>(data[code_offset + 1]) << 8) |
+                                          static_cast<size_t>(data[code_offset + 2]);
+            if (segment_length < 2) {
+                return false;
+            }
+            offset = code_offset + 1 + segment_length;
+        }
+        return false;
+    }
+
+    if (size >= 18 && data[0] == 'B' && data[1] == 'M') {
+        // BMP: the DIB header-size field at offset 14 says which header
+        // follows, and that determines where width/height live. stb_image's
+        // BMP decoder accepts exactly five header sizes: the old
+        // BITMAPCOREHEADER (12), which stores unsigned 16-bit width/height
+        // right after it, and BITMAPINFOHEADER and its later revisions
+        // (40, 56, 108, 124), which all share the signed 32-bit width/height
+        // layout at offsets 18/22. Anything else is a header stb itself does
+        // not decode.
+        const uint32_t header_size =
+            static_cast<uint32_t>(data[14]) | (static_cast<uint32_t>(data[15]) << 8) |
+            (static_cast<uint32_t>(data[16]) << 16) | (static_cast<uint32_t>(data[17]) << 24);
+        if (header_size == 12) {
+            if (size < 22) {
+                return false; // truncated
+            }
+            width = static_cast<int64_t>(data[18]) | (static_cast<int64_t>(data[19]) << 8);
+            height = static_cast<int64_t>(data[20]) | (static_cast<int64_t>(data[21]) << 8);
+            return true;
+        }
+        if (header_size == 40 || header_size == 56 || header_size == 108 || header_size == 124) {
+            if (size < 26) {
+                return false; // truncated
+            }
+            // Width/height are signed 32-bit little-endian. A negative height
+            // means the rows are stored top-down; only the magnitude matters
+            // for a pixel count. Negating INT32_MIN overflows a 32-bit int,
+            // so the sign flip happens after widening to int64_t, where that
+            // value is always representable and the negation cannot overflow.
+            const auto read_i32_le = [data](size_t at) -> int64_t {
+                const uint32_t bits = static_cast<uint32_t>(data[at]) |
+                                      (static_cast<uint32_t>(data[at + 1]) << 8) |
+                                      (static_cast<uint32_t>(data[at + 2]) << 16) |
+                                      (static_cast<uint32_t>(data[at + 3]) << 24);
+                return static_cast<int64_t>(static_cast<int32_t>(bits));
+            };
+            const int64_t raw_width = read_i32_le(18);
+            const int64_t raw_height = read_i32_le(22);
+            width = raw_width < 0 ? -raw_width : raw_width;
+            height = raw_height < 0 ? -raw_height : raw_height;
+            return true;
+        }
+        return false; // a header size stb_image does not recognize
+    }
+
+    return false; // unrecognized header
+}
+
 // The source image's pixel dimensions travel through the graph as an explicit
 // tensor rather than as hidden state on the step: postprocessing needs them to
 // map boxes back onto the original frame, and making the dependency a graph
@@ -156,7 +328,30 @@ class PreprocessStep : public PipelineStep {
         try {
             const auto *bytes =
                 reinterpret_cast<const uint8_t *>(step_inputs[0].bytes.data()); // NOLINT
-            const auto image = neuriplo_tasks::decodeImage(bytes, step_inputs[0].bytes.size(), 3);
+            const auto byte_count = step_inputs[0].bytes.size();
+
+            // Reject a declared-huge image before the decoder allocates its
+            // pixel buffer. A header we cannot parse (undecodable, or not a
+            // PNG/JPEG at all) falls through to decodeImage unchanged, which
+            // rejects it on its own terms.
+            int64_t declared_width = 0;
+            int64_t declared_height = 0;
+            // Division rather than multiplication: declared_width * declared_height
+            // can overflow a signed int64_t (PNG dimensions are full uint32, so
+            // both operands can be near 2^32), which is undefined behaviour. The
+            // error message is built only from the bounded inputs, never from
+            // their product.
+            if (decodedImageDimensions(bytes, byte_count, declared_width, declared_height) &&
+                declared_width > 0 && declared_height > 0 &&
+                declared_width > kPipelineMaxDecodedPixels / declared_height) {
+                error = "preprocess step '" + step_.name +
+                        "' rejected an encoded image declaring " + std::to_string(declared_width) +
+                        "x" + std::to_string(declared_height) + " pixels, over the " +
+                        std::to_string(kPipelineMaxDecodedPixels) + "-pixel cap";
+                return false;
+            }
+
+            const auto image = neuriplo_tasks::decodeImage(bytes, byte_count, 3);
 
             auto task = neuriplo_tasks::TaskFactory::createTaskInstance(
                 step_.task_type, model_info_, buildTaskConfig(step_));
@@ -227,10 +422,18 @@ class PostprocessStep : public PipelineStep {
 
         // FRAME_SIZE is INT64 (height, width). Getting the order wrong
         // transposes every box on a non-square frame, so the layout is fixed
-        // rather than inferred.
+        // rather than inferred. The datatype is checked explicitly rather than
+        // inferred from byte length: a wrongly-typed producer (e.g. INT32 or
+        // FP32) can coincidentally supply exactly 16 bytes and pass a
+        // byte-length-only check while every value inside is read as the
+        // wrong type.
         const auto &frame_size_tensor = step_inputs.back();
-        if (frame_size_tensor.bytes.size() < 2 * sizeof(int64_t)) {
-            error = "postprocess step '" + step_.name + "' received a malformed FRAME_SIZE";
+        if (frame_size_tensor.datatype != "INT64" ||
+            frame_size_tensor.bytes.size() < 2 * sizeof(int64_t)) {
+            error = "postprocess step '" + step_.name +
+                    "' requires FRAME_SIZE as INT64 with at least 2 elements, got datatype '" +
+                    frame_size_tensor.datatype + "' with " +
+                    std::to_string(frame_size_tensor.bytes.size()) + " bytes";
             return false;
         }
         const auto frame_height =
@@ -278,27 +481,45 @@ class PostprocessStep : public PipelineStep {
 
     std::vector<DecodedDetection>
     collect(const std::vector<neuriplo_tasks::Result> &results) const {
-        std::vector<DecodedDetection> detections;
+        // Every result first, unsorted and uncapped.
+        std::vector<DecodedDetection> all;
+        all.reserve(results.size());
         for (const auto &result : results) {
-            if (detections.size() >= static_cast<size_t>(kPipelineMaxDetections)) {
-                break;
-            }
             if (const auto *segmentation =
                     std::get_if<neuriplo_tasks::InstanceSegmentation>(&result)) {
-                detections.push_back({static_cast<int32_t>(segmentation->bbox.x),
-                                      static_cast<int32_t>(segmentation->bbox.y),
-                                      static_cast<int32_t>(segmentation->bbox.width),
-                                      static_cast<int32_t>(segmentation->bbox.height),
-                                      segmentation->class_confidence,
-                                      static_cast<int32_t>(segmentation->class_id), segmentation});
+                all.push_back({static_cast<int32_t>(segmentation->bbox.x),
+                               static_cast<int32_t>(segmentation->bbox.y),
+                               static_cast<int32_t>(segmentation->bbox.width),
+                               static_cast<int32_t>(segmentation->bbox.height),
+                               segmentation->class_confidence,
+                               static_cast<int32_t>(segmentation->class_id), segmentation});
             } else if (const auto *detection = std::get_if<neuriplo_tasks::Detection>(&result)) {
-                detections.push_back({static_cast<int32_t>(detection->bbox.x),
-                                      static_cast<int32_t>(detection->bbox.y),
-                                      static_cast<int32_t>(detection->bbox.width),
-                                      static_cast<int32_t>(detection->bbox.height),
-                                      detection->class_confidence,
-                                      static_cast<int32_t>(detection->class_id), nullptr});
+                all.push_back({static_cast<int32_t>(detection->bbox.x),
+                               static_cast<int32_t>(detection->bbox.y),
+                               static_cast<int32_t>(detection->bbox.width),
+                               static_cast<int32_t>(detection->bbox.height),
+                               detection->class_confidence,
+                               static_cast<int32_t>(detection->class_id), nullptr});
             }
+        }
+
+        // The task layer's NMS does not promise score order, so capping while
+        // scanning in task order kept whichever `kPipelineMaxDetections`
+        // happened to come first and silently dropped higher-scoring
+        // detections that came later. pipelineTopScoreIndices ranks by score
+        // before the cap is applied.
+        std::vector<float> scores;
+        scores.reserve(all.size());
+        for (const auto &detection : all) {
+            scores.push_back(detection.score);
+        }
+        const auto ranked =
+            pipelineTopScoreIndices(scores, static_cast<size_t>(kPipelineMaxDetections));
+
+        std::vector<DecodedDetection> detections;
+        detections.reserve(ranked.size());
+        for (const auto index : ranked) {
+            detections.push_back(all[index]);
         }
         return detections;
     }

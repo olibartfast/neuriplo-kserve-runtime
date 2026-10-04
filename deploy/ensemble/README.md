@@ -68,7 +68,7 @@ Step fields:
 |---|---|---|
 | `kind` | all | `model`, `preprocess`, or `postprocess` |
 | `name` | all | unique within the graph |
-| `model_name` | model | a model loaded in this runtime |
+| `model_name` | model | a model loaded in this runtime; not this pipeline's own name, and not another ensemble -- nested ensembles are rejected |
 | `model_version` | model | optional; defaults to the model's default version |
 | `task_type` | pre/post | neuriplo-tasks model-type string, e.g. `yolo26` |
 | `envelope` | postprocess | `detection`, `mask`, or `polygon` |
@@ -88,6 +88,19 @@ A graph without a postprocess step is a passthrough ensemble: the server
 preprocesses, the client postprocesses exactly as it does for a directly served
 model. That is the mode where the client also needs the inner model's metadata,
 since the ensemble's own metadata only describes an encoded image.
+
+This is the graph a client started with `--postprocess_mode=cpu` needs: outputs
+are the raw model outputs, not a decoded envelope, because postprocessing runs
+on the client instead of in this ensemble.
+
+```json
+{
+  "steps": [
+    {"kind": "preprocess", "name": "pre",    "task_type": "yolo26"},
+    {"kind": "model",      "name": "detect", "model_name": "yolo"}
+  ]
+}
+```
 
 ## Envelope cost
 
@@ -110,13 +123,17 @@ hull of its instance, not a tight contour around it.
 ## Rules worth knowing
 
 - **The source image size travels as a tensor.** A preprocess step emits
-  `FRAME_SIZE` (INT32, `[2]`, width then height) alongside the model input, and
+  `FRAME_SIZE` (INT64, `[2]`, height then width) alongside the model input, and
   a postprocess step consumes it to map boxes back onto the original frame.
   Making it a graph edge is what lets graph validation catch a postprocess step
   wired without it.
 - **Model steps resolve per request.** A referenced model can be reloaded
   underneath a loaded pipeline. One that is missing or not ready yields
   `MODEL_NOT_READY` rather than a dangling handle.
+- **Nested ensembles are not supported.** A model step may not name its own
+  pipeline or another ensemble; both are rejected at load, and the same check
+  applies to a reload, so a pipeline cannot be made to reference itself by
+  reloading it with a graph that points back at its own name.
 - **Pipelines never batch.** `max_batch_size` is 1 by contract; encoded images
   have no common shape. Loading a pipeline with dynamic batching configured
   fails outright.
@@ -141,7 +158,10 @@ INT64 (height, width), which is both what the built-in `postprocess` step wants
 for `FRAME_SIZE` and what the GPU postprocessing operators consume.
 
 For an all-GPU ensemble, chain a second DALI model that postprocesses on the
-GPU, so results never touch the host between steps:
+GPU. The compute for each step still runs on the GPU, but results are staged
+through host memory between steps -- the runtime copies each step's output
+tensor out before handing it to the next step as an input -- rather than
+staying device-resident end to end:
 
 ```bash
 curl -X POST localhost:8080/v2/admin/models/load -d '{
