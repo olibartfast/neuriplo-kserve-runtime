@@ -306,6 +306,7 @@ class RealNeuriploAdapter final : public NeuriploAdapter {
         EngineOptions options;
         options.model_path = config.model_path;
         options.backend_id = toNeuriploBackendId(config.backend);
+        options.use_gpu = config.use_gpu;
         options.plugin_dir = config.plugin_dir;
         options.input_sizes = config.input_sizes;
         engine_ = setup_inference_engine(options);

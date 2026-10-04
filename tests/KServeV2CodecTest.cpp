@@ -5,8 +5,11 @@
 #include "Test.hpp"
 
 #include <cstddef>
+#include <cstdint>
 #include <cstring>
 #include <string>
+#include <utility>
+#include <vector>
 
 namespace {
 
@@ -65,6 +68,21 @@ RuntimeConfig stubConfig() {
     config.model_name = "demo";
     config.backend = "stub";
     return config;
+}
+
+ModelMetadata dynamicImageMetadata() {
+    ModelMetadata model;
+    model.name = "demo";
+    model.versions = {"1"};
+    model.platform = "test";
+    model.inputs.push_back({"IMAGE", "UINT8", {1, -1}});
+    model.outputs.push_back({"output", "FP32", {1, 1}});
+    return model;
+}
+
+std::string imageBody(const std::string &shape, const std::string &data) {
+    return R"({"inputs":[{"name":"IMAGE","shape":)" + shape + R"(,"datatype":"UINT8","data":)" +
+           data + "}]}";
 }
 
 } // namespace
@@ -240,4 +258,86 @@ TEST_CASE(kserve_v2_codec_serializes_executor_response_with_id) {
     REQUIRE(response.find(R"("model_version":"1")") != std::string::npos);
     REQUIRE(response.find(R"("id":"request-1")") != std::string::npos);
     REQUIRE(response.find(R"("shape":[1,1000])") != std::string::npos);
+}
+
+TEST_CASE(kserve_v2_codec_dynamic_dim_accepts_json_data) {
+    const auto parsed =
+        parseInferenceRequest(imageBody("[1,5]", "[1,2,3,4,5]"), dynamicImageMetadata());
+    REQUIRE(parsed.ok);
+    REQUIRE_EQ(parsed.request.inputs.size(), static_cast<size_t>(1));
+    REQUIRE((parsed.request.inputs[0].shape == std::vector<int64_t>{1, 5}));
+}
+
+TEST_CASE(kserve_v2_codec_dynamic_dim_accepts_binary_extension) {
+    const std::string header =
+        R"({"inputs":[{"name":"IMAGE","shape":[1,5],"datatype":"UINT8","parameters":{"binary_data_size":5}}]})";
+    std::string body = header;
+    body.append("\x01\x02\x03\x04\x05", 5);
+
+    const auto parsed = parseInferenceRequest(body, dynamicImageMetadata(), header.size());
+    REQUIRE(parsed.ok);
+    REQUIRE_EQ(parsed.request.inputs.size(), static_cast<size_t>(1));
+    REQUIRE((parsed.request.inputs[0].shape == std::vector<int64_t>{1, 5}));
+    REQUIRE_EQ(parsed.request.inputs[0].bytes.size(), static_cast<size_t>(5));
+}
+
+TEST_CASE(kserve_v2_codec_dynamic_dim_is_not_bound_by_first_request) {
+    const auto metadata = dynamicImageMetadata();
+    const auto first = parseInferenceRequest(imageBody("[1,3]", "[1,2,3]"), metadata);
+    REQUIRE(first.ok);
+    REQUIRE((first.request.inputs[0].shape == std::vector<int64_t>{1, 3}));
+    const auto second = parseInferenceRequest(imageBody("[1,7]", "[1,2,3,4,5,6,7]"), metadata);
+    REQUIRE(second.ok);
+    REQUIRE((second.request.inputs[0].shape == std::vector<int64_t>{1, 7}));
+}
+
+TEST_CASE(kserve_v2_codec_dynamic_dim_rejects_bad_requests) {
+    const auto metadata = dynamicImageMetadata();
+    const std::string shape_error = "invalid shape for input: IMAGE";
+    const std::vector<std::pair<std::string, std::string>> rows = {
+        {imageBody("[5]", "[1,2,3,4,5]"), shape_error},
+        {imageBody("[1,5,1]", "[1,2,3,4,5]"), shape_error},
+        {imageBody("[1,-1]", "[1,2,3,4,5]"), shape_error},
+        {imageBody("[1]", "[1]"), shape_error},
+        {imageBody("[1,5.5]", "[1,2,3,4,5]"), shape_error},
+        {imageBody(R"([1,"5"])", "[1,2,3,4,5]"), shape_error},
+        {imageBody("[2,5]", "[1,2,3,4,5,6,7,8,9,10]"), shape_error},
+        {imageBody("[1,5]", "[1,2,3,4]"), "input data element count mismatch for input: IMAGE"},
+    };
+    for (const auto &row : rows) {
+        const auto parsed = parseInferenceRequest(row.first, metadata);
+        REQUIRE(!parsed.ok);
+        REQUIRE(parsed.error_message.find(row.second) != std::string::npos);
+    }
+}
+
+TEST_CASE(kserve_v2_codec_concrete_dims_stay_strict) {
+    ModelMetadata model = dynamicImageMetadata();
+    model.inputs[0].shape = {1, 3};
+    const auto parsed = parseInferenceRequest(imageBody("[1,4]", "[1,2,3,4]"), model);
+    REQUIRE(!parsed.ok);
+    REQUIRE(parsed.error_message.find("invalid shape for input: IMAGE") != std::string::npos);
+    REQUIRE(parseInferenceRequest(imageBody("[1,3]", "[1,2,3]"), model).ok);
+}
+
+// A dynamic leading axis accepts any declared extent, including one so large
+// that the shape's element-count product overflows size_t. The previous
+// unchecked product sometimes wrapped around to exactly zero, which the
+// "expected_elements != 0" bypass (there to tolerate a genuine zero-extent
+// shape) then read as nothing to check at all, instead of a request to
+// reject outright.
+TEST_CASE(kserve_v2_codec_rejects_an_overflowing_shape_product) {
+    ModelMetadata model;
+    model.name = "demo";
+    model.versions = {"1"};
+    model.platform = "test";
+    model.inputs.push_back({"images", "FP32", {-1, 3, 640, 640}});
+    model.outputs.push_back({"output", "FP32", {1, 1}});
+
+    // 2^50 * 3 * 640 * 640 overflows a 64-bit size_t.
+    const std::string body = R"({"inputs":[{"name":"images","shape":[1125899906842624,3,640,640],)"
+                             R"("datatype":"FP32","data":[]}]})";
+    const auto parsed = parseInferenceRequest(body, model);
+    REQUIRE(!parsed.ok);
+    REQUIRE(parsed.error_message.find("images") != std::string::npos);
 }

@@ -48,6 +48,21 @@ struct SchedulerResult {
     uint64_t execution_latency_ns = 0;
     uint64_t total_latency_ns = 0;
     uint64_t batch_size = 0;
+
+    // Takes an executor response and mirrors its failure onto this result.
+    //
+    // Transports read error_code/error_message on failure, not the nested
+    // response, so a path that sets ok = false without copying them redacts
+    // the real error into a generic "internal error". Every scheduler path
+    // adopts a response through here so none can forget.
+    void adopt(ExecutionResponse executor_response) {
+        response = std::move(executor_response);
+        if (!response.ok) {
+            ok = false;
+            error_code = response.error_code;
+            error_message = response.error_message;
+        }
+    }
 };
 
 class Scheduler {

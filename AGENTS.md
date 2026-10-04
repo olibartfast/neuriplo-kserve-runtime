@@ -5,20 +5,25 @@
 This repository is a C++17 KServe-compatible runtime. Runtime sources live in `src/`,
 with `main.cpp` wiring configuration, model registry, KServe routing, and the HTTP
 server. Unit tests live in `tests/` and are registered through CTest. Build presets are
-defined in `CMakePresets.json`; CI is defined in `.github/workflows/ci.yml`. Local editor
-debug tasks are under `.vscode/`.
+defined in `CMakePresets.json`; CI is defined in `.github/workflows/ci.yml`.
 
-Read `plan/NEXT_STEPS.md` for current project status and the active work track. Steps 0–14
-and the multi-backend track are complete; Step 15 (raw output hot path) adapter work is on
-`feature/step-15-raw-output` and needs neuriplo PR #14 on `develop` for real-* CI. Completed step snapshots live in `plan/STEP0.md` through
-`plan/STEP14.md` (extend the range when a new `plan/STEP<N>.md` is added). Use `plan/STEP<N>_WIP.md` only for in-progress step work.
-`plan/STEP0.md` remains useful historical context for the original scaffold assumptions.
+Read `specs/roadmap.md` for current project status and the active work track. Steps 0–14
+and the multi-backend track are complete; see the roadmap phases for the Step 15 raw
+output path and later work. Steps 0–14 are recorded as retrospective packets under
+`specs/` (index in `specs/README.md`). New work gets a dated packet under `specs/`; git
+history and `CHANGELOG.md` are the implementation record.
 
-Treat `plan/ROADMAP.md` as the target roadmap and step snapshots as the implementation
-record. For architecture work, read `plan/DESIGN_PATTERNS.md` for patterns in use today and
-the "Architecture And Design Pattern Evolution" section in `plan/ROADMAP.md` for planned
-patterns. Prefer extending existing Strategy/factory/adapter boundaries over adding new
-frameworks unless the roadmap calls for them.
+Treat `specs/roadmap.md` phases as the target sequence and `specs/architecture.md` as
+the patterns in use today. Prefer extending existing Strategy/factory/adapter boundaries
+over adding new frameworks unless the roadmap calls for them.
+
+## Specs And Planning Entry Point
+
+`specs/` is the project constitution (`mission.md`, `tech-stack.md`, `roadmap.md`) and the
+planning entry point; start there.
+Active work that is multi-phase, changes public behavior or architecture, or has low
+reversibility needs a dated `specs/YYYY-MM-DD-feature-name/` packet (requirements, plan,
+validation) before implementation; cross-repo work uses a neuriplo-platform packet.
 
 ## MANDATORY: Agent Guide Maintenance
 
@@ -27,11 +32,27 @@ matching `AGENTS.md` section in the same PR/commit — do not wait for the user 
 
 Triggers:
 
-- New or completed `plan/STEP<N>.md`, or material edits to `plan/NEXT_STEPS.md`
+- New dated `specs/` packets, or material edits to `specs/roadmap.md`
 - Build, test, lint, or CI command/preset changes
-- New `.cursor/rules/*.mdc` or other mandatory workflow rules
+- New mandatory agent workflow rules
 - Repo layout, module boundaries, or default runtime invocation changes
-- New cross-cutting architectural patterns (also update `plan/DESIGN_PATTERNS.md`)
+- New cross-cutting architectural patterns (also update `specs/architecture.md`)
+
+What to sync:
+
+- One-line current status (e.g. "Steps 0–15 complete; see `specs/roadmap.md`")
+- Commands and conventions in the sections your change affects; only those
+  sections, do not rewrite unrelated prose
+
+Do not:
+
+- Duplicate `specs/roadmap.md`, `specs/mission.md`, or packet content inside `AGENTS.md`
+- Skip the update because the user did not mention `AGENTS.md`
+- Expand `AGENTS.md` with feature-level detail — keep it stable repo conventions plus pointers
+
+Quick check before finishing: if you touched `specs/`, `CMakePresets.json`,
+`scripts/check-format.sh`, or `.github/workflows/`, re-read `AGENTS.md` and fix
+stale references before handing off.
 
 Keep `AGENTS.md` as stable conventions and pointers. Do not duplicate full roadmap or step
 snapshot content here.
@@ -80,6 +101,9 @@ cmake --build --preset lint --parallel
 ```
 
 When C++ behavior changes, also run `ctest --preset debug` before pushing.
+Treat a failed local format check as a blocker — same severity as a failing test.
+Run `scripts/check-format.sh` on every change touching `src/` or `tests/`; do not
+push when CI lint/format would fail.
 
 Quick format fix for tracked sources:
 
@@ -88,6 +112,13 @@ git ls-files 'src/*.cpp' 'src/*.hpp' 'tests/*.cpp' 'tests/*.hpp' \
   | xargs clang-format -i
 scripts/check-format.sh
 ```
+
+## Hyperlink verification
+
+When editing documentation (`README.md`, `specs/**/*.md`) with hyperlinks:
+- Verify all relative links resolve to existing files in the repo.
+- Verify absolute GitHub URLs are reachable.
+- Prefer absolute GitHub blob/tree URLs over fragile cross-repo relative paths.
 
 ## Coding Style & Naming Conventions
 
@@ -101,6 +132,30 @@ code (`Scheduler`, `Executor`, `NeuriploAdapter`). Run formatting before submitt
 ```bash
 scripts/check-format.sh
 ```
+
+## MANDATORY: Model Metadata From Model Or config.pbtxt — Never Backend Hardcoding
+
+The runtime advertises model metadata from two sources, in Triton's order:
+
+1. **The model file**, when the backend can introspect it (ONNX, TensorRT
+   engine, OpenVINO IR self-describe names/dtypes — "auto-complete").
+2. **`config.pbtxt`**, when the model format carries no names (ExecuTorch
+   `.pte`). `RealNeuriploAdapter::applyConfigPbtxt()` parses `input[]`/`output[]`
+   name + `data_type` and overlays them onto backend metadata **by index**
+   (counts must match; mismatch logs a warning and keeps backend metadata).
+
+Rules:
+
+- If a model needs a named contract the backend cannot introspect, add a
+  `config.pbtxt` beside it (`<model>/config.pbtxt`, model at
+  `<model>/1/model.ext`). Do NOT edit the backend in `../neuriplo` to emit a
+  specific model's names — a past "fix" hardcoded one model's tensor names into
+  the generic backend and mislabeled every model of the same I/O arity. The
+  correct layer is the serving config, as Triton does it.
+- Only generate `config.pbtxt` for backends that actually need it (name-less
+  formats). Self-describing backends must not depend on a generated config.
+- Keep `pbtxtTypeToKserve` in sync with the KServe datatype strings clients
+  expect (`TYPE_FP32` → `FP32`, etc.).
 
 ## Testing Guidelines
 
@@ -126,7 +181,38 @@ Branch mapping for this repository:
 
 Do not commit feature work directly to `master`. Use PRs for merges into `develop` and
 `master`. If `develop` does not exist yet, create it from `master` before starting new
-feature branches.
+feature branches:
+
+```bash
+git checkout master && git pull
+git checkout -b develop && git push -u origin develop
+```
+
+Agent checklist before push:
+
+- Confirm the current branch type matches the work (feature vs hotfix vs release).
+- Confirm the merge target is correct (`develop` for features, `master` only for
+  release/hotfix completion).
+- Rebase or merge latest `develop` into long-lived feature branches before opening a PR.
+
+Release/hotfix branch cleanup (after merge to `master`, tag, and back-merge to
+`develop`): the **`master` tag** (`vX.Y.Z`) is the immutable release ref — do not
+leave finished branches on the remote, and do not use a lingering remote release
+branch as the release record.
+
+```bash
+git checkout develop
+git branch -d release/0.7.0
+git push origin --delete release/0.7.0
+```
+
+Agent checklist when a release is complete:
+
+1. Merged `release/X.Y.Z` → `master`; tagged `vX.Y.Z`; pushed `master` and tag.
+2. Merged `release/X.Y.Z` → `develop` (bump dev `VERSION` if the repo does that);
+   pushed `develop`.
+3. Deleted the branch locally and on `origin`.
+4. Confirmed `git branch -a | grep release` shows no finished release branch.
 
 ## Commit & Pull Request Guidelines
 
@@ -141,6 +227,21 @@ Feature PRs target `develop`; release and hotfix PRs target `master` (and back-m
 
 Do not commit model files, secrets, tokens, or generated `build*/` directories. Keep
 runtime defaults safe for local development, and document any new network-facing options
-in `README.md` and tests. Update `plan/DESIGN_PATTERNS.md` when introducing a new
-cross-cutting architectural pattern, update `plan/ROADMAP.md` when changing planned
+in `README.md` and tests. Update `specs/architecture.md` when introducing a new
+cross-cutting architectural pattern, update `specs/roadmap.md` when changing planned
 architecture direction, and sync this file per "Agent Guide Maintenance" above.
+
+## Editor Debug (No Checked-In Editor Config)
+
+This repo keeps no editor debug configuration in version control. The two debug
+invocations below are the portable equivalents — run them under `gdb` (or wire
+them into the local editor of your choice, uncommitted):
+
+```bash
+# Debug the runtime (stub backend, demo model on 8080):
+gdb --args ./build/debug/neuriplo-kserve-runtime \
+  --host 127.0.0.1 --port 8080 --model-name demo --backend stub
+
+# Debug the unit tests:
+gdb --args ./build/debug/neuriplo-kserve-runtime-tests
+```
