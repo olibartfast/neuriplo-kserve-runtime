@@ -1,14 +1,14 @@
 # Neuriplo KServe Runtime Roadmap
 
 > Status: living brownfield roadmap, reconstructed on 2026-10-04 from
-> `history/target-design.md`, the former next-steps file, and `CHANGELOG.md`. Phase order after
+> the former target design, the former next-steps file, and `CHANGELOG.md`. Phase order after
 > the current phase is a working sequence to be confirmed.
 
-This roadmap is scoped to the KServe runtime. The former planning folder now lives
-here: step snapshots are in `history/steps/` (`STEP0.md` to `STEP14.md`), the
-original target design is `history/target-design.md`, design patterns are in
-`architecture.md`, and procedures are in `procedures/`. Step status that was in
-the former next-steps file is merged into the phases below.
+This roadmap is scoped to the KServe runtime. Design patterns are in
+`architecture.md`. The step snapshots (`STEP0.md` to `STEP14.md`), the original
+target design and the YOLO e2e procedure were removed from the tree; they remain
+in git history at [e77f6f0](https://github.com/olibartfast/neuriplo-kserve-runtime/tree/e77f6f0/specs/). Step status that was in the former
+next-steps file is merged into the phases below.
 
 ## Status Key
 
@@ -40,7 +40,7 @@ items or backfill packets for completed work.
 Scaffold, KServe packaging, V2 protocol, model registry and executors, atomic
 neuriplo integration, scheduler, dynamic batching, observability, LLM backends
 and path completion, production hardening, and deployment validation. Record:
-[history/target-design.md](history/target-design.md), `history/steps/STEP0.md` to `STEP11.md`.
+the target design and `STEP0.md` to `STEP11.md` in [git history](https://github.com/olibartfast/neuriplo-kserve-runtime/tree/e77f6f0/specs/history).
 
 ## Phase 1 - Platform E2E and Production Track (Steps 12-14)
 
@@ -48,8 +48,8 @@ and path completion, production hardening, and deployment validation. Record:
 
 YOLO end-to-end through neuriplo-infer, HTTP and gRPC parity, control/data
 plane split, and multi-model hot reload with zero-downtime version switch.
-Record: [procedures/e2e-yolo.md](procedures/e2e-yolo.md),
-`history/steps/STEP12.md` to `STEP14.md`.
+Record: the YOLO e2e procedure and `STEP12.md` to `STEP14.md` in
+[git history](https://github.com/olibartfast/neuriplo-kserve-runtime/tree/e77f6f0/specs/).
 
 Summary: Step 12 ran real neuriplo-infer to KServe HTTP to runtime to neuriplo
 (ONNX Runtime) to YOLO, with gRPC parity (`real-onnx-grpc`, `scripts/e2e-yolo.sh`).
