@@ -87,6 +87,29 @@ behavior changes. `scripts/e2e-yolo.sh` and `scripts/e2e-multi-backend.sh`
 need a real model or a local GPU host and are manual checks. Documentation
 edits must keep relative links resolving.
 
+Performance checks that matter: p50/p95/p99 and queue latency
+(`tests/BenchmarkTest.cpp` holds the stub baseline), throughput under
+concurrency, batching throughput improvement, and memory stability under
+repeated requests.
+
+### YOLO end-to-end validation
+
+`scripts/e2e-yolo.sh` exercises the whole platform against a real YOLO model:
+model presence, `real-onnx-grpc` build, startup, readiness, neuriplo-sourced
+metadata, HTTP inference, model-labelled metrics, gRPC parity, and the
+`neuriplo-infer` gRPC client path.
+
+It needs a sibling `neuriplo-infer` checkout (model at
+`../neuriplo-infer/models/e2e/yolo26s.onnx`) and serves on ports 19090 (HTTP)
+and 19091 (gRPC).
+
+Contract under test: `yolo26` maps to the `YOLO_NMS_FREE` task contract — the
+postprocessor consumes `tensors[0]` shaped `[batch, detections, 6]` as
+`(x1, y1, x2, y2, score, class)` with a confidence filter and no NMS.
+`yolo26s.onnx` reports input `images` `[1,3,640,640]` FP32 and output `output0`
+`[1,300,6]` FP32. To serve the decode server-side instead, use a pipeline
+(ensemble) model (`deploy/ensemble/`).
+
 ## Assumptions to Confirm
 
 - [A-6] CI exercises `debug`, `lint`, sanitizers, Valgrind, `grpc`, the stub
