@@ -319,3 +319,25 @@ TEST_CASE(kserve_v2_codec_concrete_dims_stay_strict) {
     REQUIRE(parsed.error_message.find("invalid shape for input: IMAGE") != std::string::npos);
     REQUIRE(parseInferenceRequest(imageBody("[1,3]", "[1,2,3]"), model).ok);
 }
+
+// A dynamic leading axis accepts any declared extent, including one so large
+// that the shape's element-count product overflows size_t. The previous
+// unchecked product sometimes wrapped around to exactly zero, which the
+// "expected_elements != 0" bypass (there to tolerate a genuine zero-extent
+// shape) then read as nothing to check at all, instead of a request to
+// reject outright.
+TEST_CASE(kserve_v2_codec_rejects_an_overflowing_shape_product) {
+    ModelMetadata model;
+    model.name = "demo";
+    model.versions = {"1"};
+    model.platform = "test";
+    model.inputs.push_back({"images", "FP32", {-1, 3, 640, 640}});
+    model.outputs.push_back({"output", "FP32", {1, 1}});
+
+    // 2^50 * 3 * 640 * 640 overflows a 64-bit size_t.
+    const std::string body = R"({"inputs":[{"name":"images","shape":[1125899906842624,3,640,640],)"
+                             R"("datatype":"FP32","data":[]}]})";
+    const auto parsed = parseInferenceRequest(body, model);
+    REQUIRE(!parsed.ok);
+    REQUIRE(parsed.error_message.find("images") != std::string::npos);
+}

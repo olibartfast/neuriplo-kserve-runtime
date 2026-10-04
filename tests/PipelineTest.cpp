@@ -7,6 +7,8 @@
 #include "Test.hpp"
 
 #include <algorithm>
+#include <cmath>
+#include <limits>
 #include <memory>
 #include <string>
 
@@ -315,6 +317,37 @@ const OutputTensor *findOutput(const std::vector<OutputTensor> &outputs, const s
     return nullptr;
 }
 
+// Builds a bare preprocess step over a 640x640 FP32 model and runs it on
+// `bytes` as the encoded image. Returns the step's run() result; `error` is
+// set exactly as the step set it.
+bool runPreprocessOn(std::vector<std::byte> bytes, std::string &error) {
+    ModelMetadata neighbour;
+    neighbour.inputs.push_back({"images", "FP32", {1, 3, 640, 640}});
+    neighbour.outputs.push_back({"output0", "FP32", {1, 84, 8400}});
+
+    PipelineStepConfig step;
+    step.kind = PipelineStepKind::Preprocess;
+    step.name = "pre";
+    step.task_type = "yolo26";
+
+    std::string build_error;
+    auto built = makeBuiltinPipelineStep(step, neighbour, build_error);
+    if (!built) {
+        error = "build failed: " + build_error;
+        return false;
+    }
+
+    std::vector<OutputTensor> step_inputs;
+    OutputTensor image;
+    image.name = pipelineImageInputName();
+    image.datatype = pipelineImageInputDatatype();
+    image.bytes = std::move(bytes);
+    step_inputs.push_back(std::move(image));
+
+    std::vector<OutputTensor> step_outputs;
+    return built->run(step_inputs, step_outputs, error);
+}
+
 } // namespace
 
 TEST_CASE(pipeline_runs_preprocess_model_postprocess_end_to_end) {
@@ -377,6 +410,282 @@ TEST_CASE(pipeline_runs_preprocess_model_postprocess_end_to_end) {
     const auto *scores = findOutput(scheduled.response.outputs, "SCORES");
     REQUIRE(scores != nullptr);
     REQUIRE_EQ(scores->bytes.size(), 100u * sizeof(float));
+}
+
+// A decompression bomb: a handful of header bytes can declare an image far
+// bigger than anything the request body actually carries, and the decoder
+// would allocate a buffer for the declared size before ever reading the rest.
+// The cap must reject this from the header alone, before decodeImage runs.
+TEST_CASE(pipeline_preprocess_rejects_a_declared_huge_image_without_decoding) {
+    // A PNG signature + IHDR chunk declaring 30000x30000 (900M pixels, over
+    // the 64 MP cap). No further bytes are needed: rejection must happen
+    // before the decoder reads past the header.
+    const std::vector<std::byte> bytes = {
+        std::byte{0x89}, std::byte{0x50}, std::byte{0x4E}, std::byte{0x47}, std::byte{0x0D},
+        std::byte{0x0A}, std::byte{0x1A}, std::byte{0x0A}, std::byte{0x00}, std::byte{0x00},
+        std::byte{0x00}, std::byte{0x0D}, std::byte('I'),  std::byte('H'),  std::byte('D'),
+        std::byte('R'),  std::byte{0x00}, std::byte{0x00}, std::byte{0x75}, std::byte{0x30},
+        std::byte{0x00}, std::byte{0x00}, std::byte{0x75}, std::byte{0x30},
+    };
+
+    std::string error;
+    REQUIRE(!runPreprocessOn(bytes, error));
+    REQUIRE(error.find("30000") != std::string::npos);
+}
+
+// The PNG width/height fields are full uint32, so a maximally-declared image
+// (0xFFFFFFFF x 0xFFFFFFFF) must be rejected without the cap check's
+// width*height overflowing a signed int64_t -- a UBSan build is how this
+// regresses silently: the comparison used to multiply before comparing,
+// which is undefined behaviour here even though the test still happens to
+// "pass" without a sanitizer.
+TEST_CASE(pipeline_preprocess_rejects_a_png_with_maximal_declared_dimensions) {
+    const std::vector<std::byte> bytes = {
+        std::byte{0x89}, std::byte{0x50}, std::byte{0x4E}, std::byte{0x47}, std::byte{0x0D},
+        std::byte{0x0A}, std::byte{0x1A}, std::byte{0x0A}, std::byte{0x00}, std::byte{0x00},
+        std::byte{0x00}, std::byte{0x0D}, std::byte('I'),  std::byte('H'),  std::byte('D'),
+        std::byte('R'),  std::byte{0xFF}, std::byte{0xFF}, std::byte{0xFF}, std::byte{0xFF},
+        std::byte{0xFF}, std::byte{0xFF}, std::byte{0xFF}, std::byte{0xFF},
+    };
+
+    std::string error;
+    REQUIRE(!runPreprocessOn(bytes, error));
+    REQUIRE(error.find("pixel cap") != std::string::npos);
+}
+
+// stb_image also decodes JPEG; a crafted SOF0 segment is just as much a
+// decompression bomb as a crafted PNG IHDR, and there was no test at all for
+// the JPEG branch of decodedImageDimensions.
+TEST_CASE(pipeline_preprocess_rejects_a_jpeg_sof0_declaring_a_huge_image) {
+    // SOI, SOF0 marker, a 2-byte length (unchecked by the cap check), 1-byte
+    // precision, then height then width, 30000x30000, both big-endian.
+    const std::vector<std::byte> bytes = {
+        std::byte{0xFF}, std::byte{0xD8}, std::byte{0xFF}, std::byte{0xC0},
+        std::byte{0x00}, std::byte{0x0B}, std::byte{0x08}, std::byte{0x75},
+        std::byte{0x30}, std::byte{0x75}, std::byte{0x30},
+    };
+
+    std::string error;
+    REQUIRE(!runPreprocessOn(bytes, error));
+    REQUIRE(error.find("30000") != std::string::npos);
+}
+
+// The JPEG spec allows one or more 0xFF fill bytes to precede a marker's real
+// code byte, and stb_image's own JPEG decoder skips them. Treating the first
+// fill byte as the marker itself (and bailing out as malformed) let a single
+// 0xFF in front of SOF0 slip the cap entirely.
+TEST_CASE(pipeline_preprocess_rejects_a_jpeg_with_a_fill_byte_before_sof0) {
+    const std::vector<std::byte> bytes = {
+        std::byte{0xFF}, std::byte{0xD8}, std::byte{0xFF}, std::byte{0xFF},
+        std::byte{0xC0}, std::byte{0x00}, std::byte{0x0B}, std::byte{0x08},
+        std::byte{0x75}, std::byte{0x30}, std::byte{0x75}, std::byte{0x30},
+    };
+
+    std::string error;
+    REQUIRE(!runPreprocessOn(bytes, error));
+    REQUIRE(error.find("30000") != std::string::npos);
+}
+
+// Apple's CgBI PNGs (iOS app-bundle PNGs, which stb_image's PNG decoder
+// accepts) insert a private "CgBI" chunk before IHDR. Assuming IHDR is always
+// the first chunk let a CgBI PNG's real dimensions sail past the cap
+// entirely, because decodedImageDimensions never found an IHDR at offset 8.
+TEST_CASE(pipeline_preprocess_rejects_a_cgbi_png_with_a_huge_ihdr) {
+    std::vector<std::byte> bytes = {
+        std::byte{0x89}, std::byte{0x50}, std::byte{0x4E}, std::byte{0x47},
+        std::byte{0x0D}, std::byte{0x0A}, std::byte{0x1A}, std::byte{0x0A}, // PNG signature
+        std::byte{0x00}, std::byte{0x00}, std::byte{0x00}, std::byte{0x04}, // CgBI chunk length: 4
+        std::byte('C'),  std::byte('g'),  std::byte('B'),  std::byte('I'),
+        std::byte{0x00}, std::byte{0x00}, std::byte{0x00}, std::byte{0x00}, // 4 bytes of chunk data
+        std::byte{0x00}, std::byte{0x00}, std::byte{0x00}, std::byte{0x00}, // CRC (unchecked)
+        std::byte{0x00}, std::byte{0x00}, std::byte{0x00}, std::byte{0x0D}, // IHDR chunk length: 13
+        std::byte('I'),  std::byte('H'),  std::byte('D'),  std::byte('R'),
+        std::byte{0x00}, std::byte{0x00}, std::byte{0xC3}, std::byte{0x50}, // width: 50000
+        std::byte{0x00}, std::byte{0x00}, std::byte{0xC3}, std::byte{0x50}, // height: 50000
+    };
+
+    std::string error;
+    REQUIRE(!runPreprocessOn(bytes, error));
+    REQUIRE(error.find("50000") != std::string::npos);
+}
+
+// decodeImage also accepts BMP. BMP's height is signed and may be negative
+// (top-down row order); only its magnitude matters for a pixel count, and
+// negating INT32_MIN -- its most extreme legal value -- must not overflow.
+TEST_CASE(pipeline_preprocess_rejects_a_bmp_with_a_huge_negative_height) {
+    std::vector<std::byte> bytes(26, std::byte{0x00});
+    bytes[0] = std::byte('B');
+    bytes[1] = std::byte('M');
+    // Header size = 40 (BITMAPINFOHEADER), little-endian, at offset 14.
+    bytes[14] = std::byte{0x28};
+    // width = 50000 (0x0000C350), little-endian, at offset 18.
+    bytes[18] = std::byte{0x50};
+    bytes[19] = std::byte{0xC3};
+    bytes[20] = std::byte{0x00};
+    bytes[21] = std::byte{0x00};
+    // height = INT32_MIN (0x80000000), little-endian, at offset 22.
+    bytes[22] = std::byte{0x00};
+    bytes[23] = std::byte{0x00};
+    bytes[24] = std::byte{0x00};
+    bytes[25] = std::byte{0x80};
+
+    std::string error;
+    REQUIRE(!runPreprocessOn(bytes, error));
+    REQUIRE(error.find("50000") != std::string::npos);
+}
+
+// stb's stbi__get_marker skips repeated 0xFF fill bytes AND non-0xFF junk
+// bytes left over between segments, one byte at a time, once scanning past
+// the very first marker after SOI. APP0 (length 2: no payload) is followed
+// by one junk byte before the real SOF0 marker.
+TEST_CASE(pipeline_preprocess_rejects_a_jpeg_with_junk_between_segments) {
+    const std::vector<std::byte> bytes = {
+        std::byte{0xFF}, std::byte{0xD8},                                   // SOI
+        std::byte{0xFF}, std::byte{0xE0}, std::byte{0x00}, std::byte{0x02}, // APP0, length 2
+        std::byte{0x00},                                                    // junk between segments
+        std::byte{0xFF}, std::byte{0xC0},                                   // SOF0
+        std::byte{0x00}, std::byte{0x11}, std::byte{0x08},                  // length, precision
+        std::byte{0x4E}, std::byte{0x20},                                   // height = 20000
+        std::byte{0x4E}, std::byte{0x20},                                   // width = 20000
+        std::byte{0x03},
+    };
+
+    std::string error;
+    REQUIRE(!runPreprocessOn(bytes, error));
+    REQUIRE(error.find("20000") != std::string::npos);
+}
+
+// SOI itself may be preceded by 0xFF fill bytes, per stbi__get_marker; a
+// single leading 0xFF must not make this unrecognized as a JPEG at all.
+TEST_CASE(pipeline_preprocess_rejects_a_jpeg_with_a_fill_byte_before_soi) {
+    const std::vector<std::byte> bytes = {
+        std::byte{0xFF}, std::byte{0xFF}, std::byte{0xD8}, // fill byte, then SOI
+        std::byte{0xFF}, std::byte{0xC0},                  // SOF0
+        std::byte{0x00}, std::byte{0x11}, std::byte{0x08}, // length, precision
+        std::byte{0x4E}, std::byte{0x20},                  // height = 20000
+        std::byte{0x4E}, std::byte{0x20},                  // width = 20000
+        std::byte{0x03},
+    };
+
+    std::string error;
+    REQUIRE(!runPreprocessOn(bytes, error));
+    REQUIRE(error.find("20000") != std::string::npos);
+}
+
+// No fixed chunk-count limit guards the CgBI walk: it is bounded by `size`
+// alone, since every chunk it skips advances by at least 12 bytes. Eight
+// empty CgBI chunks ahead of IHDR must not exhaust an artificial limit.
+TEST_CASE(pipeline_preprocess_rejects_a_png_with_eight_cgbi_chunks_then_a_huge_ihdr) {
+    std::vector<std::byte> bytes = {
+        std::byte{0x89}, std::byte{0x50}, std::byte{0x4E}, std::byte{0x47},
+        std::byte{0x0D}, std::byte{0x0A}, std::byte{0x1A}, std::byte{0x0A}, // PNG signature
+    };
+    for (int i = 0; i < 8; ++i) {
+        const std::vector<std::byte> cgbi_chunk = {
+            std::byte{0x00}, std::byte{0x00}, std::byte{0x00}, std::byte{0x00}, // length: 0
+            std::byte('C'),  std::byte('g'),  std::byte('B'),  std::byte('I'),
+            std::byte{0x00}, std::byte{0x00}, std::byte{0x00}, std::byte{0x00}, // CRC (unchecked)
+        };
+        bytes.insert(bytes.end(), cgbi_chunk.begin(), cgbi_chunk.end());
+    }
+    const std::vector<std::byte> ihdr_chunk = {
+        std::byte{0x00}, std::byte{0x00}, std::byte{0x00}, std::byte{0x0D}, // length: 13
+        std::byte('I'),  std::byte('H'),  std::byte('D'),  std::byte('R'),
+        std::byte{0x00}, std::byte{0x00}, std::byte{0x3E}, std::byte{0x80}, // width: 16000
+        std::byte{0x00}, std::byte{0x00}, std::byte{0x3E}, std::byte{0x80}, // height: 16000
+    };
+    bytes.insert(bytes.end(), ihdr_chunk.begin(), ihdr_chunk.end());
+
+    std::string error;
+    REQUIRE(!runPreprocessOn(bytes, error));
+    REQUIRE(error.find("16000") != std::string::npos);
+}
+
+// BITMAPCOREHEADER (header size 12) stores unsigned 16-bit width/height right
+// after it, not the 32-bit BITMAPINFOHEADER layout the other branch reads; a
+// small, legitimate core BMP must not be rejected by the cap.
+TEST_CASE(pipeline_preprocess_accepts_a_bitmapcoreheader_bmp_under_the_cap) {
+    std::vector<std::byte> bytes(22, std::byte{0x00});
+    bytes[0] = std::byte('B');
+    bytes[1] = std::byte('M');
+    // Header size = 12 (BITMAPCOREHEADER), little-endian, at offset 14.
+    bytes[14] = std::byte{0x0C};
+    // width = height = 10, 16-bit little-endian, at offsets 18 and 20.
+    bytes[18] = std::byte{0x0A};
+    bytes[20] = std::byte{0x0A};
+
+    std::string error;
+    // This header alone is not a decodable image, so the overall run() result
+    // is not under test here -- only that the cap itself did not reject it.
+    runPreprocessOn(bytes, error);
+    REQUIRE(error.find("pixel cap") == std::string::npos);
+}
+
+// Regression guard for the hsz==12 branch itself: a BITMAPCOREHEADER
+// declaring a huge (but 16-bit-representable) width/height must still be
+// caught by the cap, the same as the BITMAPINFOHEADER path above.
+TEST_CASE(pipeline_preprocess_rejects_a_bitmapcoreheader_bmp_with_huge_dims) {
+    std::vector<std::byte> bytes(26, std::byte{0x00});
+    bytes[0] = std::byte('B');
+    bytes[1] = std::byte('M');
+    // Header size = 12 (BITMAPCOREHEADER), little-endian, at offset 14.
+    bytes[14] = std::byte{0x0C};
+    // width = height = 65535 (0xFFFF), 16-bit little-endian, at offsets 18
+    // and 20.
+    bytes[18] = std::byte{0xFF};
+    bytes[19] = std::byte{0xFF};
+    bytes[20] = std::byte{0xFF};
+    bytes[21] = std::byte{0xFF};
+    // planes = 1, 16-bit little-endian, at offset 22.
+    bytes[22] = std::byte{0x01};
+    bytes[23] = std::byte{0x00};
+    // bpp = 24, 16-bit little-endian, at offset 24.
+    bytes[24] = std::byte{0x18};
+    bytes[25] = std::byte{0x00};
+
+    std::string error;
+    REQUIRE(!runPreprocessOn(bytes, error));
+    REQUIRE(error.find("65535") != std::string::npos);
+}
+
+// A producer wired to the wrong tensor, or declaring the wrong datatype, can
+// still supply exactly 16 bytes and pass a byte-length-only check while every
+// value inside is read back as the wrong type.
+TEST_CASE(pipeline_postprocess_requires_int64_frame_size) {
+    ModelMetadata neighbour;
+    neighbour.outputs.push_back({"output0", "FP32", {1, 84, 8400}});
+
+    PipelineStepConfig step;
+    step.kind = PipelineStepKind::Postprocess;
+    step.name = "post";
+    step.task_type = "yolo26";
+
+    std::string build_error;
+    auto built = makeBuiltinPipelineStep(step, neighbour, build_error);
+    REQUIRE(built != nullptr);
+
+    std::vector<OutputTensor> step_inputs;
+    OutputTensor model_output;
+    model_output.name = "output0";
+    model_output.datatype = "FP32";
+    model_output.shape = {1, 84, 8400};
+    model_output.bytes.assign(static_cast<size_t>(84 * 8400) * sizeof(float), std::byte{0});
+    step_inputs.push_back(std::move(model_output));
+
+    OutputTensor frame_size;
+    frame_size.name = "FRAME_SIZE";
+    frame_size.datatype = "INT32";
+    frame_size.shape = {4};
+    appendTensorScalar<int32_t>(frame_size.bytes, 640);
+    appendTensorScalar<int32_t>(frame_size.bytes, 640);
+    appendTensorScalar<int32_t>(frame_size.bytes, 0);
+    appendTensorScalar<int32_t>(frame_size.bytes, 0);
+    step_inputs.push_back(std::move(frame_size));
+
+    std::vector<OutputTensor> step_outputs;
+    std::string error;
+    REQUIRE(!built->run(step_inputs, step_outputs, error));
+    REQUIRE(error.find("INT64") != std::string::npos);
 }
 
 #endif
@@ -631,4 +940,169 @@ TEST_CASE(pipeline_dynamic_axis_accepts_any_extent_and_rejects_rank_mismatch) {
     ExecutionResponse error;
     REQUIRE(!neuriploOrderedInputs(metadata, wrong_rank, error).has_value());
     REQUIRE_EQ(error.error_code, "INVALID_ARGUMENT");
+}
+
+namespace {
+// A model with two declared inputs, standing in for a step wired to read one
+// graph tensor through both of them.
+class TwoInputExecutor final : public Executor {
+  public:
+    TwoInputExecutor() {
+        metadata_.name = "two";
+        metadata_.versions.push_back("1");
+        metadata_.platform = "neuriplo_stub";
+        metadata_.inputs.push_back({"a", "FP32", {1, 3}});
+        metadata_.inputs.push_back({"b", "FP32", {1, 3}});
+        metadata_.outputs.push_back({"sum", "FP32", {1, 3}});
+    }
+    const ModelMetadata &metadata() const override {
+        return metadata_;
+    }
+    ExecutionResponse infer(const ExecutionRequest &request) override {
+        ExecutionResponse response;
+        OutputTensor output;
+        output.name = "sum";
+        output.datatype = "FP32";
+        output.shape = {1, 3};
+        output.bytes = request.inputs.front().bytes;
+        response.outputs.push_back(std::move(output));
+        return response;
+    }
+
+  private:
+    ModelMetadata metadata_;
+};
+} // namespace
+
+// Regression for a step wired to read one graph tensor through two of its own
+// inputs ("a" and "b" both mapped to "output"). The step's global last-use
+// index landed on this step either way, so the first of the two lookups moved
+// the tensor out of the value map and the second lookup found nothing.
+TEST_CASE(pipeline_step_reading_one_tensor_through_two_inputs_succeeds) {
+    auto registry = registryWithEchoModel();
+    RuntimeConfig two;
+    two.model_name = "two";
+    two.backend = "stub";
+    REQUIRE(registry.loadModel(two, [](const RuntimeConfig &, std::string &) {
+        return std::make_unique<TwoInputExecutor>();
+    }));
+    const std::string graph = R"({"steps": [
+        {"kind": "model", "name": "detect", "model_name": "yolo"},
+        {"kind": "model", "name": "fuse", "model_name": "two",
+         "input_map": {"a": "output", "b": "output"}}
+    ]})";
+    REQUIRE(registry.loadModel(pipelineConfig(graph)));
+    REQUIRE(registry.ready("yolo_ensemble"));
+
+    const auto handle = registry.findHandle("yolo_ensemble");
+    REQUIRE(handle != nullptr);
+    auto scheduled = handle->scheduler->submit(requestWith("input", {1.0, 2.0, 3.0}));
+    REQUIRE(scheduled.ok);
+    REQUIRE(scheduled.response.ok);
+}
+
+// NMS does not promise score order; the envelope cap must keep the
+// highest-scoring entries rather than whichever ones happen to come first.
+TEST_CASE(pipeline_top_score_indices_ranks_before_capping) {
+    std::vector<float> scores;
+    for (size_t i = 0; i < 150; ++i) {
+        // Deliberately unsorted and not monotonic with index.
+        scores.push_back(static_cast<float>((i * 37) % 150));
+    }
+
+    const auto ranked = pipelineTopScoreIndices(scores, 100);
+    REQUIRE_EQ(ranked.size(), 100u);
+    for (size_t i = 0; i + 1 < ranked.size(); ++i) {
+        REQUIRE(scores[ranked[i]] >= scores[ranked[i + 1]]);
+    }
+    // The 100 highest scores among 0..149 are 50..149; the 49 lowest must not
+    // have survived the cap.
+    for (const auto index : ranked) {
+        REQUIRE(scores[index] >= 50.0F);
+    }
+}
+
+// `left > right` alone is not a strict weak ordering once a NaN score can
+// appear (every comparison involving NaN is false), which is undefined
+// behaviour for std::stable_sort's comparator. NaN must rank after every real
+// score instead of corrupting the sort.
+TEST_CASE(pipeline_top_score_indices_ranks_nan_last) {
+    const std::vector<float> scores = {5.0F, std::numeric_limits<float>::quiet_NaN(), 3.0F, 10.0F};
+
+    const auto ranked = pipelineTopScoreIndices(scores, scores.size());
+    REQUIRE_EQ(ranked.size(), 4u);
+    REQUIRE_EQ(ranked[0], 3u); // 10.0
+    REQUIRE_EQ(ranked[1], 0u); // 5.0
+    REQUIRE_EQ(ranked[2], 2u); // 3.0
+    REQUIRE(std::isnan(scores[ranked[3]]));
+}
+
+// A pipeline referencing itself would recurse into itself at request time;
+// this must be caught at load, not surfaced as a request timeout.
+TEST_CASE(pipeline_rejects_a_step_referencing_its_own_pipeline) {
+    auto registry = registryWithEchoModel();
+    const std::string graph = R"({"steps": [
+        {"kind": "model", "name": "loop", "model_name": "yolo_ensemble"}
+    ]})";
+    REQUIRE(registry.loadModel(pipelineConfig(graph)));
+    REQUIRE(!registry.ready("yolo_ensemble"));
+    const auto handle = registry.findHandle("yolo_ensemble");
+    REQUIRE(handle != nullptr);
+    REQUIRE(handle->load_error.has_value());
+    REQUIRE(handle->load_error->find("cannot reference itself") != std::string::npos);
+}
+
+// A model step resolving to another ensemble is a nested ensemble, which is
+// not supported: it must be rejected with a clear message rather than loading
+// and failing (or recursing) on the first request.
+TEST_CASE(pipeline_rejects_a_model_step_resolving_to_a_nested_ensemble) {
+    auto registry = registryWithEchoModel();
+    REQUIRE(registry.loadModel(pipelineConfig(twoStepGraph())));
+    REQUIRE(registry.ready("yolo_ensemble"));
+
+    RuntimeConfig outer;
+    outer.model_name = "outer_ensemble";
+    outer.backend = pipelineBackendId();
+    outer.pipeline_graph = R"({"steps": [
+        {"kind": "model", "name": "inner", "model_name": "yolo_ensemble"}
+    ]})";
+    REQUIRE(registry.loadModel(outer));
+    REQUIRE(!registry.ready("outer_ensemble"));
+    const auto handle = registry.findHandle("outer_ensemble");
+    REQUIRE(handle != nullptr);
+    REQUIRE(handle->load_error.has_value());
+    REQUIRE(handle->load_error->find("nested ensembles") != std::string::npos);
+}
+
+// Reloading a pipeline with a graph that references its own name must fail
+// the same way the initial load would, rather than succeeding because the
+// resolver finds the pipeline's own already-published snapshot. Before this
+// fix, that reload succeeded and every request recursed into itself until it
+// timed out.
+TEST_CASE(pipeline_reload_rejects_referencing_itself) {
+    auto registry = registryWithEchoModel();
+    REQUIRE(registry.loadModel(pipelineConfig(twoStepGraph())));
+    REQUIRE(registry.ready("yolo_ensemble"));
+
+    auto self = pipelineConfig(R"({"steps": [
+        {"kind": "model", "name": "loop", "model_name": "yolo_ensemble"}
+    ]})");
+    REQUIRE(!registry.reload("yolo_ensemble", self));
+    const auto handle = registry.findHandle("yolo_ensemble");
+    REQUIRE(handle != nullptr);
+    REQUIRE(handle->load_error.has_value());
+    REQUIRE(handle->load_error->find("cannot reference itself") != std::string::npos);
+}
+
+// A known key with the wrong JSON type is a graph authoring mistake, not a
+// value to silently keep the default for; the message must name the key.
+TEST_CASE(pipeline_config_rejects_wrong_typed_known_key) {
+    PipelineConfig config;
+    std::string error;
+    const std::string graph = R"({"steps": [
+        {"kind": "model", "name": "a", "model_name": "m",
+         "confidence_threshold": "0.5"}
+    ]})";
+    REQUIRE(!parsePipelineConfig(graph, config, error));
+    REQUIRE(error.find("confidence_threshold") != std::string::npos);
 }
