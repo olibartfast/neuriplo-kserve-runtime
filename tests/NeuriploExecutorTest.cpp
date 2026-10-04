@@ -104,6 +104,35 @@ ExecutionRequest request(std::vector<std::string> outputs = {}) {
     return execution_request;
 }
 
+ModelMetadata dynamicImageAdapterMetadata(std::vector<int64_t> shape = {1, -1}) {
+    ModelMetadata metadata;
+    metadata.name = "demo";
+    metadata.versions = {"7"};
+    metadata.platform = "neuriplo_onnx_runtime";
+    metadata.inputs.push_back({"IMAGE", "UINT8", std::move(shape)});
+    metadata.outputs.push_back({"scores", "FP32", {1, 2}});
+    return metadata;
+}
+
+ExecutionRequest imageRequest(std::vector<int64_t> shape, size_t byte_count) {
+    ExecutionRequest execution_request;
+    InputTensor tensor;
+    tensor.name = "IMAGE";
+    tensor.datatype = "UINT8";
+    tensor.shape = std::move(shape);
+    tensor.bytes.assign(byte_count, std::byte{7});
+    execution_request.inputs.push_back(std::move(tensor));
+    return execution_request;
+}
+
+void requireInvalidImage(Executor &executor, const ExecutionRequest &req,
+                         const std::string &expected_message) {
+    const auto response = executor.infer(req);
+    REQUIRE(!response.ok);
+    REQUIRE_EQ(response.error_code, "INVALID_ARGUMENT");
+    REQUIRE(response.error_message.find(expected_message) != std::string::npos);
+}
+
 } // namespace
 
 TEST_CASE(neuriplo_executor_loads_metadata_from_adapter) {
@@ -400,4 +429,51 @@ TEST_CASE(neuriplo_executor_preserves_uint8_output_datatype) {
     REQUIRE_EQ(response.outputs.size(), static_cast<size_t>(1));
     REQUIRE_EQ(response.outputs[0].name, "mask");
     REQUIRE_EQ(response.outputs[0].datatype, "UINT8");
+}
+
+TEST_CASE(neuriplo_executor_dynamic_dim_accepts_concrete_extent) {
+    auto adapter = std::make_unique<FakeNeuriploAdapter>(dynamicImageAdapterMetadata());
+    auto *adapter_ptr = adapter.get();
+    std::string error;
+    const auto executor = makeNeuriploExecutor(config(), error, std::move(adapter));
+    REQUIRE(executor != nullptr);
+
+    const auto response = executor->infer(imageRequest({1, 5}, 5));
+    REQUIRE(response.ok);
+    REQUIRE_EQ(adapter_ptr->last_inputs.size(), static_cast<size_t>(1));
+    REQUIRE((adapter_ptr->last_inputs[0].shape == std::vector<int64_t>{1, 5}));
+    REQUIRE_EQ(adapter_ptr->last_inputs[0].bytes.size(), static_cast<size_t>(5));
+
+    // An accepted request does not rewrite the declared metadata.
+    REQUIRE_EQ(executor->metadata().inputs.size(), static_cast<size_t>(1));
+    REQUIRE_EQ(executor->metadata().inputs[0].name, "IMAGE");
+    REQUIRE((executor->metadata().inputs[0].shape == std::vector<int64_t>{1, -1}));
+}
+
+TEST_CASE(neuriplo_executor_dynamic_dim_rejects_bad_requests) {
+    std::string error;
+    const auto executor = makeNeuriploExecutor(
+        config(), error, std::make_unique<FakeNeuriploAdapter>(dynamicImageAdapterMetadata()));
+    REQUIRE(executor != nullptr);
+
+    const std::string shape_error = "invalid shape for neuriplo input: IMAGE";
+    requireInvalidImage(*executor, imageRequest({5}, 5), shape_error);
+    requireInvalidImage(*executor, imageRequest({1, 5, 1}, 5), shape_error);
+    requireInvalidImage(*executor, imageRequest({1, -1}, 5), shape_error);
+    requireInvalidImage(*executor, imageRequest({1}, 1), shape_error);
+    requireInvalidImage(*executor, imageRequest({2, 5}, 10), shape_error);
+    requireInvalidImage(*executor, imageRequest({1, 5}, 4),
+                        "input data length does not match shape for neuriplo input: IMAGE");
+}
+
+TEST_CASE(neuriplo_executor_concrete_dims_stay_strict) {
+    std::string error;
+    const auto executor = makeNeuriploExecutor(
+        config(), error,
+        std::make_unique<FakeNeuriploAdapter>(dynamicImageAdapterMetadata({1, 3})));
+    REQUIRE(executor != nullptr);
+
+    requireInvalidImage(*executor, imageRequest({1, 4}, 4),
+                        "invalid shape for neuriplo input: IMAGE");
+    REQUIRE(executor->infer(imageRequest({1, 3}, 3)).ok);
 }
