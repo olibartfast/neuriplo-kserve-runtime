@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstdlib>
+#include <limits>
 #include <nlohmann/json.hpp>
 #include <string>
 #include <utility>
@@ -99,13 +100,26 @@ std::optional<std::vector<std::string>> parseStringData(const Json &data) {
     return parsed;
 }
 
-size_t tensorElementCount(const std::vector<int64_t> &shape) {
+// The product can overflow for a declared shape that cannot represent a real
+// buffer -- a dynamic axis lets a request declare any extent, including one
+// like 2^50 that no metadata concrete dimension would ever bound. The old
+// unchecked product sometimes wrapped around to exactly zero, which callers'
+// "expected_elements != 0" bypass (there to tolerate a genuine zero-extent
+// shape) then treated as if nothing needed checking at all. `overflowed`
+// lets a caller tell the two apart and reject the overflow outright.
+size_t tensorElementCount(const std::vector<int64_t> &shape, bool &overflowed) {
+    overflowed = false;
     size_t count = 1;
     for (const auto dimension : shape) {
         if (dimension <= 0) {
             return 0;
         }
-        count *= static_cast<size_t>(dimension);
+        const auto extent = static_cast<size_t>(dimension);
+        if (count > std::numeric_limits<size_t>::max() / extent) {
+            overflowed = true;
+            return 0;
+        }
+        count *= extent;
     }
     return count;
 }
@@ -319,12 +333,12 @@ InferenceParseResult parseInferenceRequest(const std::string &body, const ModelM
             return invalid("invalid shape for input: " + name);
         }
 
-        if (!shapeMatches(input["shape"], *metadata_input)) {
-            return invalid("invalid shape for input: " + name);
-        }
-
         const auto parsed_shape = parseShape(input["shape"]);
-        const auto expected_elements = tensorElementCount(parsed_shape);
+        bool shape_overflowed = false;
+        const auto expected_elements = tensorElementCount(parsed_shape, shape_overflowed);
+        if (shape_overflowed) {
+            return invalid("input shape element count overflows for input: " + name);
+        }
 
         InputTensor tensor;
         tensor.name = name;

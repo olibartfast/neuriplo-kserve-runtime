@@ -1,5 +1,31 @@
 #include "PipelineSteps.hpp"
 
+#include <algorithm>
+#include <cmath>
+#include <numeric>
+
+std::vector<size_t> pipelineTopScoreIndices(const std::vector<float> &scores, size_t cap) {
+    std::vector<size_t> indices(scores.size());
+    std::iota(indices.begin(), indices.end(), size_t{0});
+    // `left > right` alone is not a strict weak ordering once a NaN score can
+    // appear (every comparison involving NaN is false), which is undefined
+    // behaviour for std::stable_sort's comparator. NaN is ranked after every
+    // real score, and treated as equivalent to any other NaN, so the
+    // ordering stays total and NaN simply loses any tiebreak for the cap.
+    std::stable_sort(indices.begin(), indices.end(), [&scores](size_t left, size_t right) {
+        const bool left_nan = std::isnan(scores[left]);
+        const bool right_nan = std::isnan(scores[right]);
+        if (left_nan || right_nan) {
+            return !left_nan && right_nan;
+        }
+        return scores[left] > scores[right];
+    });
+    if (indices.size() > cap) {
+        indices.resize(cap);
+    }
+    return indices;
+}
+
 // Envelope shapes are transcribed from the platform ensemble contract. The
 // offset arrays are 101 entries
 // (max detections + 1) and are always emitted at full length, including on a
