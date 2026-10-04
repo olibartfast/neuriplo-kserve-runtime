@@ -171,6 +171,23 @@ RuntimeConfig parseRuntimeConfig(int argc, char **argv, const RuntimeEnvironment
     argc = static_cast<int>(normalized_argv.size());
     argv = normalized_argv.data();
 
+    // Tracks whether these single-model flags were given explicitly (CLI),
+    // as opposed to left at their default -- a repository tree supplies its
+    // own name/path/backend/version per model, so an explicit single-model
+    // flag alongside it is a configuration mistake the deployment author
+    // almost certainly did not intend, not a priority to silently resolve.
+    bool model_name_explicit = false;
+    bool model_path_explicit = false;
+    bool backend_explicit = false;
+    // Deliberately CLI-only, unlike model_version_explicit (which the
+    // MODEL_VERSION env var also sets): a deployment manifest commonly sets
+    // MODEL_REPOSITORY and MODEL_VERSION together in the same env block (the
+    // latter meant for a non-repository fallback path, or simply inherited
+    // from a shared template), and that combination must not fail fast --
+    // only an operator who typed --model-version on the command line next to
+    // --models actually asked for the conflicting thing.
+    bool model_version_cli = false;
+
     applyStringEnvironmentDefault(config.model_name, environment, "MODEL_NAME");
     if (const auto env_version = environment.get("MODEL_VERSION");
         env_version.has_value() && !env_version->empty()) {
@@ -204,17 +221,21 @@ RuntimeConfig parseRuntimeConfig(int argc, char **argv, const RuntimeEnvironment
                 static_cast<size_t>(std::stoull(requireValue(i, argc, argv, arg)));
         } else if (arg == "--model-name") {
             config.model_name = requireValue(i, argc, argv, arg);
+            model_name_explicit = true;
         } else if (arg == "--model-version") {
             config.model_version = requireValue(i, argc, argv, arg);
             config.model_version_explicit = true;
+            model_version_cli = true;
         } else if (arg == "--model-path") {
             config.model_path = requireValue(i, argc, argv, arg);
+            model_path_explicit = true;
         } else if (arg == "--model-repository" || arg == "--models") {
             config.model_repository = requireValue(i, argc, argv, arg);
         } else if (arg == "--model-control-mode") {
             config.model_control_mode = requireValue(i, argc, argv, arg);
         } else if (arg == "--backend") {
             config.backend = requireValue(i, argc, argv, arg);
+            backend_explicit = true;
         } else if (arg == "--plugin-dir") {
             config.plugin_dir = requireValue(i, argc, argv, arg);
         } else if (arg == "--deployment") {
@@ -303,6 +324,39 @@ RuntimeConfig parseRuntimeConfig(int argc, char **argv, const RuntimeEnvironment
     if (config.model_control_mode == "explicit" && config.model_repository.empty()) {
         throw std::invalid_argument(
             "explicit model control mode requires --models/--model-repository");
+    }
+    if (!config.model_repository.empty()) {
+        // A repository tree (whether named by --models/--model-repository or
+        // by the MODEL_REPOSITORY env var an image sets) supplies its own
+        // name/path/backend/version per discovered model. Accepting one of
+        // these single-model flags alongside it would silently pick one or
+        // the other depending on code path rather than tell the caller their
+        // flags conflict -- fail fast and name both instead.
+        std::vector<std::string> conflicting;
+        if (model_name_explicit) {
+            conflicting.push_back("--model-name");
+        }
+        if (model_path_explicit) {
+            conflicting.push_back("--model-path");
+        }
+        if (backend_explicit) {
+            conflicting.push_back("--backend");
+        }
+        if (model_version_cli) {
+            conflicting.push_back("--model-version");
+        }
+        if (!conflicting.empty()) {
+            std::string joined;
+            for (size_t i = 0; i < conflicting.size(); ++i) {
+                if (i > 0) {
+                    joined += ", ";
+                }
+                joined += conflicting[i];
+            }
+            throw std::invalid_argument(
+                joined + " cannot be combined with --models/--model-repository "
+                         "(MODEL_REPOSITORY): the repository tree supplies these per model");
+        }
     }
     if (config.max_request_bytes == 0 ||
         config.max_request_bytes > static_cast<size_t>(std::numeric_limits<int64_t>::max())) {

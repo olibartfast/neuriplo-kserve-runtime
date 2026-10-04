@@ -1,4 +1,6 @@
 #include "ModelRepository.hpp"
+#include "KServeRuntime.hpp"
+#include "MetricsRegistry.hpp"
 #include "ModelRegistry.hpp"
 #include "PipelineExecutor.hpp"
 #include "RuntimeConfig.hpp"
@@ -7,6 +9,7 @@
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <vector>
 
 namespace fs = std::filesystem;
 
@@ -295,4 +298,212 @@ TEST_CASE(model_repository_warns_when_root_is_not_a_directory) {
     const auto configs = scanModelRepository("/nonexistent/model/repository", defaults(), warnings);
     REQUIRE(configs.empty());
     REQUIRE_EQ(warnings.size(), 1);
+}
+
+// P2-B2 B-6: an empty highest-numbered version directory must not drop the
+// whole model -- the next version down that actually holds a file is served,
+// with a warning naming the version that was skipped.
+TEST_CASE(model_repository_falls_back_to_lower_version_with_a_file) {
+    const TempRepository repo("fallback-version");
+    repo.addModelFile("m", "1", "model.onnx");
+    repo.addVersionDir("m", "2"); // staged but not yet populated
+
+    std::vector<std::string> warnings;
+    const auto configs = scanModelRepository(repo.root(), defaults(), warnings);
+    REQUIRE_EQ(configs.size(), 1);
+    REQUIRE_EQ(configs[0].model_version, std::string("1"));
+    bool warned_about_two = false;
+    for (const auto &warning : warnings) {
+        if (warning.find("version 2") != std::string::npos) {
+            warned_about_two = true;
+        }
+    }
+    REQUIRE(warned_about_two);
+}
+
+// P2-B2 B-14: "01" and "1" are the same version; the reported version is
+// always the canonicalized form, and the duplicate is warned about.
+TEST_CASE(model_repository_canonicalizes_duplicate_leading_zero_versions) {
+    const TempRepository repo("canonical-duplicate");
+    repo.addModelFile("m", "01", "model.onnx");
+    repo.addModelFile("m", "1", "model.onnx");
+
+    std::vector<std::string> warnings;
+    const auto configs = scanModelRepository(repo.root(), defaults(), warnings);
+    REQUIRE_EQ(configs.size(), 1);
+    REQUIRE_EQ(configs[0].model_version, std::string("1"));
+    bool warned_about_duplicate = false;
+    for (const auto &warning : warnings) {
+        if (warning.find("duplicate") != std::string::npos) {
+            warned_about_duplicate = true;
+        }
+    }
+    REQUIRE(warned_about_duplicate);
+}
+
+// P2-B2 B-15: a non-numeric version directory is skipped with a warning
+// naming it, per docs/init-container.md.
+TEST_CASE(model_repository_warns_about_skipped_non_numeric_version_directory) {
+    const TempRepository repo("non-numeric-warns");
+    repo.addModelFile("m", "1", "model.onnx");
+    repo.addVersionDir("m", "latest");
+
+    std::vector<std::string> warnings;
+    const auto configs = scanModelRepository(repo.root(), defaults(), warnings);
+    REQUIRE_EQ(configs.size(), 1);
+    bool warned = false;
+    for (const auto &warning : warnings) {
+        if (warning.find("non-numeric") != std::string::npos &&
+            warning.find("latest") != std::string::npos) {
+            warned = true;
+        }
+    }
+    REQUIRE(warned);
+}
+
+// P2-B2 A-7: an ensemble discovered in a repository tree must not inherit a
+// server-wide dynamic-batching default -- max_batch_size 1 / batching off is
+// contractual for ensembles, not a tuning default.
+TEST_CASE(model_repository_forces_off_batching_defaults_for_discovered_ensemble) {
+    const TempRepository repo("ensemble-no-batching");
+    repo.addModelFile("yolo_ensemble", "1", "graph.json");
+
+    RuntimeConfig batching_defaults = defaults();
+    batching_defaults.dynamic_batching_enabled = true;
+    batching_defaults.max_batch_size = 8;
+
+    std::vector<std::string> warnings;
+    const auto configs = scanModelRepository(repo.root(), batching_defaults, warnings);
+    REQUIRE_EQ(configs.size(), 1);
+    REQUIRE(!configs[0].dynamic_batching_enabled);
+    REQUIRE_EQ(configs[0].max_batch_size, static_cast<size_t>(1));
+}
+
+// P2-B2 B-11: version activation must resolve the requested version through
+// the scanner directly, and find nothing (the caller 404s) when that exact
+// version holds nothing servable -- never fall back to a different version's
+// file.
+TEST_CASE(resolve_repository_model_version_finds_the_requested_version_only) {
+    const TempRepository repo("resolve-version");
+    repo.addModelFile("m", "1", "model.onnx");
+    repo.addModelFile("m", "3", "model.plan");
+    repo.addVersionDir("m", "2"); // staged but empty
+
+    const auto v3 = resolveRepositoryModelVersion(repo.root(), "m", "3");
+    REQUIRE(v3.has_value());
+    REQUIRE(v3->backend == std::string("tensorrt"));
+    REQUIRE(v3->canonical_version == std::string("3"));
+    REQUIRE(v3->model_path.find("3") != std::string::npos);
+
+    const auto v1 = resolveRepositoryModelVersion(repo.root(), "m", "1");
+    REQUIRE(v1.has_value());
+    REQUIRE(v1->canonical_version == std::string("1"));
+    REQUIRE(v1->model_path.find("model.onnx") != std::string::npos);
+
+    // Version 2 exists as a directory but holds nothing recognized: this must
+    // not silently resolve to version 1's or version 3's file under the "2"
+    // label.
+    REQUIRE(!resolveRepositoryModelVersion(repo.root(), "m", "2").has_value());
+    REQUIRE(!resolveRepositoryModelVersion(repo.root(), "m", "9").has_value());
+}
+
+// C3: a leading-zero on-disk directory resolves under its canonical label,
+// and reports that canonical label back -- not the raw directory name.
+TEST_CASE(resolve_repository_model_version_canonicalizes_leading_zeros) {
+    const TempRepository repo("resolve-leading-zero");
+    repo.addModelFile("m", "01", "model.onnx");
+
+    const auto resolved = resolveRepositoryModelVersion(repo.root(), "m", "1");
+    REQUIRE(resolved.has_value());
+    REQUIRE(resolved->canonical_version == std::string("1"));
+}
+
+// C3 (security): the version string comes straight off a URL. It must never
+// be joined onto a filesystem path -- only a plain numeric label is even
+// considered, so none of these can escape the model directory or the root.
+TEST_CASE(resolve_repository_model_version_rejects_path_traversal) {
+    const TempRepository repo("resolve-traversal");
+    repo.addModelFile("m", "1", "model.onnx");
+
+    REQUIRE(!resolveRepositoryModelVersion(repo.root(), "m", "..").has_value());
+    REQUIRE(!resolveRepositoryModelVersion(repo.root(), "m", "../x/1").has_value());
+    REQUIRE(!resolveRepositoryModelVersion(repo.root(), "m", "1/../../y").has_value());
+    REQUIRE(!resolveRepositoryModelVersion(repo.root(), "m", "../../etc/passwd").has_value());
+    // A traversal attempt on model_name itself must be refused too.
+    REQUIRE(!resolveRepositoryModelVersion(repo.root(), "..", "1").has_value());
+    // F1: a model_name naming a nested path component, not a single
+    // directory under root, must be refused the same way.
+    REQUIRE(!resolveRepositoryModelVersion(repo.root(), "../m", "1").has_value());
+    REQUIRE(!resolveRepositoryModelVersion(repo.root(), "a/b", "1").has_value());
+    REQUIRE(!resolveRepositoryModelVersion(repo.root(), "a\\b", "1").has_value());
+}
+
+// C3 end-to-end: version activation on a real repository-mode model, through
+// the actual HTTP admin endpoint. "demo" scans to a real backend this test
+// build cannot actually run, so it is forced to "stub" after the scan (the
+// same pattern model_repository_registry_serves_each_tree_version uses); the
+// ensemble needs no such override since the pipeline backend never touches
+// real neuriplo. Covers both the success path (a leading-zero version
+// activates and registers under its canonical label) and the security path
+// (a path-traversal "version" is refused, and nothing changes).
+TEST_CASE(repository_version_activate_resolves_through_scanner_and_rejects_traversal) {
+    const TempRepository repo("activate-http");
+    repo.addModelFile("demo", "1", "model.onnx");
+
+    const fs::path ensemble_dir = fs::path(repo.root()) / "ens";
+    const std::string graph =
+        R"({"steps": [{"kind": "model", "name": "detect", "model_name": "demo"}]})";
+    fs::create_directories(ensemble_dir / "01");
+    {
+        std::ofstream out(ensemble_dir / "01" / "graph.json");
+        out << graph;
+    }
+    fs::create_directories(ensemble_dir / "3");
+    {
+        std::ofstream out(ensemble_dir / "3" / "graph.json");
+        out << graph;
+    }
+
+    // model_repository must carry the scan root -- exactly as main.cpp's
+    // `defaults` does (it passes the whole parsed RuntimeConfig, which
+    // already has --models/--model-repository in it) -- since that is what
+    // the version-activate handler uses to recognize a repository-mode
+    // model and find its root to resolve against.
+    RuntimeConfig scan_defaults = defaults();
+    scan_defaults.model_repository = repo.root();
+
+    std::vector<std::string> warnings;
+    auto configs = scanModelRepository(repo.root(), scan_defaults, warnings);
+    for (auto &config : configs) {
+        if (config.model_name == "demo") {
+            config.backend = "stub";
+        }
+    }
+
+    ModelRegistry registry(configs);
+    registry.setRepositoryCatalog(configs);
+    MetricsRegistry metrics;
+    KServeRuntime runtime(registry, metrics);
+
+    REQUIRE(registry.ready("demo"));
+    REQUIRE(registry.ready("ens"));
+    // Highest canonical version (3) served initially.
+    REQUIRE_EQ(registry.defaultVersion("ens").value(), std::string("3"));
+
+    HttpRequest activate;
+    activate.method = "POST";
+    activate.path = "/v2/admin/models/ens/versions/01/activate";
+    activate.body = R"({"version":"01"})";
+    const auto ok = runtime.handle(activate);
+    REQUIRE_EQ(ok.status, 200);
+    REQUIRE_EQ(registry.defaultVersion("ens").value(), std::string("1"));
+
+    HttpRequest traversal;
+    traversal.method = "POST";
+    traversal.path = "/v2/admin/models/ens/versions/../activate";
+    traversal.body = R"({"version":".."})";
+    const auto blocked = runtime.handle(traversal);
+    REQUIRE_EQ(blocked.status, 404);
+    // The traversal attempt changed nothing -- still on "1" from above.
+    REQUIRE_EQ(registry.defaultVersion("ens").value(), std::string("1"));
 }

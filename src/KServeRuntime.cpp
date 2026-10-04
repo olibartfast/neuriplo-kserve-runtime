@@ -5,6 +5,7 @@
 #include "KServeErrors.hpp"
 #include "KServeV2Codec.hpp"
 #include "Logging.hpp"
+#include "ModelRepository.hpp"
 #include "OpenAiCodec.hpp"
 #include "RequestPipeline.hpp"
 #include "RuntimeVersion.hpp"
@@ -278,7 +279,13 @@ HttpResponse KServeRuntime::metricsPage() const {
     const auto models = registry_.listModels();
     for (const auto &name : models) {
         std::string version = registry_.defaultVersion(name).value_or("1");
-        if (models.size() == 1) {
+        // The global label override is only correct in genuine single-model
+        // mode, where it IS that one model's version. A one-model repository
+        // (or explicit mode with exactly one model loaded) also has
+        // models.size() == 1 but the global label is the CLI/default
+        // version, not necessarily this model's -- e.g. a one-model
+        // repository serving version "3" would otherwise be mislabeled "1".
+        if (models.size() == 1 && !registry_.repositoryMode()) {
             version = metrics_.modelVersionLabel();
         }
         metrics_.setSchedulerMetrics(name, version, registry_.schedulerMetrics(name));
@@ -971,9 +978,30 @@ HttpResponse KServeRuntime::handleRepository(const HttpRequest &request) const {
 
     if (request.path == index_path) {
         if (request.method != "POST") {
-            return error(405, KServeErrors::InvalidArgument,
+            return error(405, KServeErrors::MethodNotAllowed,
                          "method not allowed: use POST /v2/repository/index");
         }
+        // The optional body is the KServe model-repository extension's
+        // ready filter: {"ready": true} returns only models currently
+        // serving. Absent/empty body means no filter; malformed JSON is a
+        // client error, not silently ignored.
+        bool ready_filter = false;
+        if (!request.body.empty()) {
+            Json filter;
+            try {
+                filter = Json::parse(request.body);
+            } catch (const std::exception &parse_error) {
+                return error(400, KServeErrors::InvalidArgument,
+                             std::string("invalid JSON: ") + parse_error.what());
+            }
+            if (filter.contains("ready")) {
+                if (!filter["ready"].is_boolean()) {
+                    return error(400, KServeErrors::InvalidArgument, "ready must be a boolean");
+                }
+                ready_filter = filter["ready"].get<bool>();
+            }
+        }
+
         // The index lists what the repository offers, not only what is loaded --
         // in explicit control mode a client needs to see a model before it can
         // ask for it. Unloaded catalog entries report UNAVAILABLE.
@@ -996,6 +1024,16 @@ HttpResponse KServeRuntime::handleRepository(const HttpRequest &request) const {
             if (state == ModelState::Ready && !snapshot->isReady()) {
                 state = ModelState::Unavailable;
             }
+            // The KServe model-repository extension has no FAILED state: a
+            // model whose load failed is UNAVAILABLE, same as a catalogued
+            // but unloaded one. The reason field (below) is what actually
+            // says why -- the extension's state enum does not.
+            if (state == ModelState::Failed) {
+                state = ModelState::Unavailable;
+            }
+            if (ready_filter && state != ModelState::Ready) {
+                continue;
+            }
             Json entry;
             entry["name"] = name;
             auto version = registry_.defaultVersion(name).value_or(std::string());
@@ -1010,7 +1048,11 @@ HttpResponse KServeRuntime::handleRepository(const HttpRequest &request) const {
                 snapshot && snapshot->load_error ? *snapshot->load_error : std::string();
             models.push_back(std::move(entry));
         }
-        return json(200, models.dump());
+        // A directory name reaching the scanner is not guaranteed to be valid
+        // UTF-8; nlohmann::json::dump() throws on that by default, which would
+        // turn one oddly-named model into a 500 for the whole index. Replacing
+        // invalid sequences keeps this endpoint non-throwing instead.
+        return json(200, models.dump(-1, ' ', false, Json::error_handler_t::replace));
     }
 
     if (!startsWith(request.path, models_prefix)) {
@@ -1027,8 +1069,14 @@ HttpResponse KServeRuntime::handleRepository(const HttpRequest &request) const {
     if (model_name.empty()) {
         return error(400, KServeErrors::InvalidArgument, "model name is required");
     }
+    // The action names a route at all before the method is checked against
+    // it: a GET (or any other method) on an unknown action is "no such
+    // route" (404), not "wrong method for a route that doesn't exist" (405).
+    if (action != "load" && action != "unload") {
+        return error(404, KServeErrors::NotFound, "repository route not found");
+    }
     if (request.method != "POST") {
-        return error(405, KServeErrors::InvalidArgument, "method not allowed: use POST");
+        return error(405, KServeErrors::MethodNotAllowed, "method not allowed: use POST");
     }
 
     if (action == "unload") {
@@ -1039,10 +1087,6 @@ HttpResponse KServeRuntime::handleRepository(const HttpRequest &request) const {
             return error(409, KServeErrors::Unavailable, "load/reload in progress: " + model_name);
         }
         return error(404, KServeErrors::ModelNotFound, "model not found: " + model_name);
-    }
-
-    if (action != "load") {
-        return error(404, KServeErrors::NotFound, "repository route not found");
     }
 
     // The extension addresses models by name alone and expects the server to
@@ -1240,7 +1284,21 @@ HttpResponse KServeRuntime::handleAdmin(const HttpRequest &request) const {
             return error(400, KServeErrors::InvalidArgument, "version is required");
         }
 
-        const auto switch_defaults = registry_.modelConfig(model_name).value_or(defaults);
+        const auto current_config = registry_.modelConfig(model_name);
+        const auto catalog_config = registry_.catalogConfig(model_name);
+        // A repository-mode model's RuntimeConfig keeps the scan root it was
+        // discovered under (see ModelRepository.cpp), so its presence here
+        // distinguishes a repository model from a single-model/explicit-body
+        // one, for which there is nothing on disk to resolve a version
+        // against beyond the request body.
+        const std::string repository_root =
+            current_config && !current_config->model_repository.empty()
+                ? current_config->model_repository
+                : (catalog_config && !catalog_config->model_repository.empty()
+                       ? catalog_config->model_repository
+                       : std::string());
+
+        const auto switch_defaults = current_config.value_or(defaults);
         const auto parsed = parseSwitchVersionRequest(request.body, switch_defaults);
         if (!parsed.ok) {
             return error(400, KServeErrors::InvalidArgument, parsed.error_message);
@@ -1248,11 +1306,40 @@ HttpResponse KServeRuntime::handleAdmin(const HttpRequest &request) const {
         RuntimeConfig switch_config = parsed.config;
         switch_config.model_name = model_name;
         switch_config.model_version = version;
-        if (registry_.switchVersion(model_name, version, switch_config)) {
+
+        // The version actually registered/reported: the raw URL label by
+        // default, or -- for a repository model -- the canonical version the
+        // scanner resolves it to, so "01" activates and registers as "1".
+        std::string registered_version = version;
+
+        if (!repository_root.empty()) {
+            // Resolve <root>/<model_name>/<version>/ through the scanner
+            // rather than reusing the slot's current model_path: that path
+            // belongs to whichever version is currently active, so without
+            // this, activating version 3 would go on serving version 1's
+            // weights under the "3" label. A version with nothing servable
+            // under it -- including a non-numeric or path-traversal string,
+            // which resolveRepositoryModelVersion refuses outright -- is a
+            // 404, not a reload of the wrong file.
+            const auto resolved =
+                resolveRepositoryModelVersion(repository_root, model_name, version);
+            if (!resolved) {
+                return error(404, KServeErrors::NotFound,
+                             "version " + version +
+                                 " has no recognized model file for model: " + model_name);
+            }
+            switch_config.model_path = resolved->model_path;
+            switch_config.backend = resolved->backend;
+            switch_config.model_version = resolved->canonical_version;
+            registered_version = resolved->canonical_version;
+        }
+
+        if (registry_.switchVersion(model_name, registered_version, switch_config)) {
             return json(200, R"({"activated":true})");
         }
         return error(409, KServeErrors::Unavailable,
-                     "failed to activate version " + version + " for model: " + model_name);
+                     "failed to activate version " + registered_version +
+                         " for model: " + model_name);
     }
 
     return error(404, KServeErrors::NotFound, "admin route not found");
