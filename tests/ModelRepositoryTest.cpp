@@ -342,7 +342,7 @@ TEST_CASE(model_repository_canonicalizes_duplicate_leading_zero_versions) {
 }
 
 // P2-B2 B-15: a non-numeric version directory is skipped with a warning
-// naming it, per docs/init-container.md.
+// naming it, per docs/model-repository.md.
 TEST_CASE(model_repository_warns_about_skipped_non_numeric_version_directory) {
     const TempRepository repo("non-numeric-warns");
     repo.addModelFile("m", "1", "model.onnx");
