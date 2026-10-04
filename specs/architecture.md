@@ -1,8 +1,8 @@
 # Design Patterns in neuriplo-kserve-runtime
 
-Architecture cheat sheet for the runtime. Prefer symbol names over line numbers when
-navigating — line refs drift quickly. Step snapshots live in `specs/history/steps/STEP0.md` through
-`specs/history/steps/STEP6.md`.
+Architecture cheat sheet for the runtime — what the code does today, not a plan.
+Prefer symbol names over line numbers when navigating; line refs drift quickly.
+`mission.md` holds the standing design principles and non-goals.
 
 ## Strategy / Interface
 
@@ -161,7 +161,7 @@ Batch formation (`formBatch`) scans the queue (not front-only):
 - fulfills expired entries immediately with timeout
 - waits until formation deadline or next queued deadline
 
-See `specs/history/steps/STEP6.md` for dynamic batching behavior.
+Dynamic batching flags and behavior are documented in `../README.md`.
 
 ---
 
@@ -296,5 +296,44 @@ slicing per-request responses.
 
 Each module depends only on interfaces below it. No cyclical dependencies.
 
-Related docs: `specs/history/steps/STEP5.md` (scheduler), `specs/history/steps/STEP6.md` (dynamic batching), `AGENTS.md`
-(build/test conventions).
+---
+
+## Protocol conventions
+
+The runtime serves the V2 surface documented in `../README.md` "Endpoints", plus
+the KServe repository extension (`/v2/repository/index`,
+`/v2/repository/models/{name}/load|unload`) and an admin surface under
+`/v2/admin/models`.
+
+`ServingRuntime` declares `protocolVersions: [v2]` and the conservative custom
+format `neuriplo` with `autoSelect: false`. Broad auto-selection for generic
+formats (`onnx`, `openvino`, `tensorrt`, `gguf`) is still not claimed: metadata
+conversion is validated per format before any format is advertised.
+
+LLM requests use the KServe `BYTES` prompt convention with generation parameters
+under `parameters`:
+
+```json
+{
+  "inputs": [
+    {"name": "prompt", "shape": [1], "datatype": "BYTES",
+     "data": ["Explain KServe briefly."]}
+  ],
+  "parameters": {"max_tokens": 128, "temperature": 0.7}
+}
+```
+
+Responses come back as a `BYTES` `text` output. The `/v1/*` OpenAI-compatible
+endpoints are ecosystem convenience and are never required for KServe
+compliance; they share lifecycle, metrics, timeouts, and cancellation with the
+V2 path.
+
+Stable surfaces — adding is cheap, renaming is a breaking change:
+
+- The error taxonomy and its HTTP mapping (`../docs/errors.md`).
+- Metric names and the structured log field set (`../README.md` "Observability").
+
+Related docs: `../README.md` (flags, endpoints, observability),
+`../docs/errors.md` (error taxonomy), `../deploy/ensemble/README.md` (pipeline
+contract), `mission.md` (boundaries and non-goals), `../AGENTS.md` (build/test
+conventions).
