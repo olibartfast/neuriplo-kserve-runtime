@@ -11,6 +11,8 @@
 services:
   # Kubernetes calls this an init container; compose calls it a service that
   # must complete first. Same image, same default command.
+  # The image clears /staging before copying, so the named volume is effectively
+  # discardable: a removed model never lingers in staging between runs.
   stage-models:
     image: neuriplo-models:depth-v1
     volumes:
@@ -43,7 +45,8 @@ services:
     volumes:
       - staging:/staging
       # Named volume rather than a throwaway: rebuilding engines is expensive,
-      # and the entrypoint skips conversion when one is already present.
+      # and the entrypoint skips conversion only when the model has a matching
+      # .prepared stamp (same source, TensorRT, GPU, driver and TRT_* settings).
       - model-repo:/models/repo
     deploy:
       resources:
