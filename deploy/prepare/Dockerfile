@@ -21,7 +21,7 @@
 # For a repository with no TensorRT in it, a much smaller base is enough --
 # preparation is then only copying and renaming:
 #
-#   docker build -f deploy/prepare/Dockerfile --build-arg BASE_IMAGE=busybox:glibc .
+#   docker build -f deploy/prepare/Dockerfile --build-arg BASE_IMAGE=busybox:1.37.0-glibc@sha256:42a9ff19af33811ee466b24c66384461d37c32dcc28d1d27d49b8aca816bd5ee .
 ARG BASE_IMAGE=nvcr.io/nvidia/tensorrt:25.12-py3
 
 FROM ${BASE_IMAGE}

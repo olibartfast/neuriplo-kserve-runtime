@@ -137,18 +137,19 @@ jobs:
       - name: Install shellcheck
         run: sudo apt-get update && sudo apt-get install -y shellcheck
       - name: Lint prepare scripts
-        run: shellcheck deploy/prepare/prepare-repository.sh scripts/test-prepare-repository.sh
+        run: shellcheck deploy/prepare/prepare-repository.sh scripts/test-prepare-repository.sh deploy/models/build-model-image.sh scripts/serve-onnx-gpu.sh scripts/serve-dali-trt.sh
       - name: Run preparer tests
         run: scripts/test-prepare-repository.sh
       # The preparer is a portable /bin/sh script, and the serving image's shell
-      # is busybox ash rather than bash. Run the suite a second time with dash as
-      # /bin/sh so a bashism cannot pass here and fail in the container.
-      - name: Install dash
-        run: sudo apt-get install -y dash
+      # is busybox ash rather than bash. Run the suite again with the preparer
+      # executed by dash and by busybox ash (PREPARE_SHELL) so a bashism cannot
+      # pass here and fail in the container.
+      - name: Install dash and busybox
+        run: sudo apt-get install -y dash busybox-static
       - name: Re-run under dash
-        run: |
-          sudo ln -sf /bin/dash /bin/sh
-          scripts/test-prepare-repository.sh
+        run: PREPARE_SHELL=dash scripts/test-prepare-repository.sh
+      - name: Re-run under busybox ash
+        run: PREPARE_SHELL="busybox sh" scripts/test-prepare-repository.sh
 
   real-onnx-grpc:
     name: Real neuriplo ONNX + gRPC build and test

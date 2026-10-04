@@ -7,6 +7,11 @@ set -uo pipefail
 # neuriplo-kserve-runtime are replaced by stubs on PATH that record how they were
 # called. What is under test is the dispatch and the tree it produces, not
 # inference -- so this belongs in CI on an ordinary runner.
+#
+# PREPARE_SHELL selects the shell that runs the preparer, e.g.
+#   PREPARE_SHELL=dash scripts/test-prepare-repository.sh
+#   PREPARE_SHELL="busybox sh" scripts/test-prepare-repository.sh
+# Unset, the script runs through its own #!/bin/sh shebang.
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -39,6 +44,10 @@ mkdir -p "$BIN"
 
 cat >"$BIN/trtexec" <<'STUB'
 #!/usr/bin/env bash
+if [ "${1:-}" = "--version" ]; then
+    echo "&&&& RUNNING TensorRT.trtexec [TensorRT v${FAKE_TRT_VERSION:-100000}]"
+    exit 0
+fi
 echo "$*" >>"$TRTEXEC_LOG"
 if [ "${TRTEXEC_FAIL:-false}" = "true" ]; then
     exit 1
@@ -55,7 +64,15 @@ cat >"$BIN/neuriplo-kserve-runtime" <<'STUB'
 echo "$*" >>"$SERVE_LOG"
 STUB
 
-chmod +x "$BIN/trtexec" "$BIN/neuriplo-kserve-runtime"
+cat >"$BIN/nvidia-smi" <<'STUB'
+#!/usr/bin/env bash
+case "$*" in
+    *driver_version*) echo "${FAKE_DRIVER:-550.00}" ;;
+    *) echo "${FAKE_GPU:-Fake GPU A}" ;;
+esac
+STUB
+
+chmod +x "$BIN/trtexec" "$BIN/neuriplo-kserve-runtime" "$BIN/nvidia-smi"
 export PATH="$BIN:$PATH"
 
 # --- helpers -----------------------------------------------------------------
@@ -77,7 +94,10 @@ new_case() {
 }
 
 run_prepare() {
-    STAGE_DIR="$STAGE" MODEL_REPOSITORY="$REPO" "$PREPARE" "$@" \
+    # PREPARE_SHELL is word-split on purpose ("busybox sh"); empty expands to
+    # nothing and the script runs through its shebang.
+    # shellcheck disable=SC2086
+    STAGE_DIR="$STAGE" MODEL_REPOSITORY="$REPO" ${PREPARE_SHELL:-} "$PREPARE" "$@" \
         >"$WORK/$CASE/out.log" 2>&1
     return $?
 }
@@ -415,6 +435,236 @@ printf 'onnx' >"$STAGE/detector.onnx"
 REPOSITORY_LAYOUT=torchserve run_prepare
 expect_exit $? 1
 expect_log_contains "$WORK/$CASE/out.log" "unsupported REPOSITORY_LAYOUT"
+
+# =============================================================================
+echo "=== Case 19: publishing into an existing empty version dir does not nest ==="
+new_case empty-target
+printf 'onnx' >"$STAGE/detector.onnx"
+mkdir -p "$REPO/detector/1"
+run_prepare
+expect_exit $? 0
+expect_file "detector/1/model.plan"
+expect_file "detector/1/.prepared"
+if find "$REPO/detector" -name '.prepare-tmp.*' | grep -q .; then
+    fail "$CASE: work directory nested or left behind"
+else
+    pass "$CASE: no nested work directory"
+fi
+
+new_case nonempty-unstamped
+printf 'onnx' >"$STAGE/detector.onnx"
+mkdir -p "$REPO/detector/1"
+printf 'legacy' >"$REPO/detector/1/junk.txt"
+run_prepare
+expect_exit $? 0
+expect_file "detector/1/model.plan"
+expect_absent "detector/1/junk.txt"
+if [ "$(wc -l <"$TRTEXEC_LOG")" -eq 1 ]; then
+    pass "$CASE: unstamped directory is rebuilt"
+else
+    fail "$CASE: unstamped directory was not rebuilt"
+fi
+
+# =============================================================================
+echo "=== Case 20: the stamp records provenance and gates re-preparation ==="
+new_case stamp
+printf 'onnx-v1' >"$STAGE/detector.onnx"
+run_prepare
+expect_exit $? 0
+STAMP_PATH="$REPO/detector/1/.prepared"
+expect_log_contains "$STAMP_PATH" "source_sha256="
+expect_log_contains "$STAMP_PATH" "tensorrt=100000"
+expect_log_contains "$STAMP_PATH" "gpu=Fake GPU A;"
+expect_log_contains "$STAMP_PATH" "driver=550.00;"
+expect_log_contains "$STAMP_PATH" "precision=fp16"
+expect_log_contains "$STAMP_PATH" "layout=neuriplo"
+
+count_builds() { wc -l <"$TRTEXEC_LOG" | tr -d ' '; }
+
+run_prepare
+expect_exit $? 0
+if [ "$(count_builds)" = 1 ]; then
+    pass "$CASE: identical inputs reuse the engine"
+else
+    fail "$CASE: identical inputs rebuilt"
+fi
+
+printf 'onnx-v2' >"$STAGE/detector.onnx"
+run_prepare
+if [ "$(count_builds)" = 2 ]; then
+    pass "$CASE: changed source rebuilds"
+else
+    fail "$CASE: changed source did not rebuild"
+fi
+
+TRT_PRECISION=fp32 run_prepare
+if [ "$(count_builds)" = 3 ]; then
+    pass "$CASE: changed precision rebuilds"
+else
+    fail "$CASE: changed precision did not rebuild"
+fi
+
+TRT_PRECISION=fp32 TRT_SHAPES="images:1x3x64x64" run_prepare
+if [ "$(count_builds)" = 4 ]; then
+    pass "$CASE: changed shapes rebuild"
+else
+    fail "$CASE: changed shapes did not rebuild"
+fi
+
+TRT_PRECISION=fp32 TRT_SHAPES="images:1x3x64x64" TRT_EXTRA_ARGS="--workspace=64" run_prepare
+if [ "$(count_builds)" = 5 ]; then
+    pass "$CASE: changed extra args rebuild"
+else
+    fail "$CASE: changed extra args did not rebuild"
+fi
+
+export TRT_PRECISION=fp32 TRT_SHAPES="images:1x3x64x64" TRT_EXTRA_ARGS="--workspace=64"
+FAKE_TRT_VERSION=100001 run_prepare
+if [ "$(count_builds)" = 6 ]; then
+    pass "$CASE: changed TensorRT version rebuilds"
+else
+    fail "$CASE: changed TensorRT version did not rebuild"
+fi
+
+FAKE_TRT_VERSION=100001 FAKE_GPU="Fake GPU B" run_prepare
+if [ "$(count_builds)" = 7 ]; then
+    pass "$CASE: changed GPU rebuilds"
+else
+    fail "$CASE: changed GPU did not rebuild"
+fi
+
+FAKE_TRT_VERSION=100001 FAKE_GPU="Fake GPU B" FAKE_DRIVER=560.00 run_prepare
+if [ "$(count_builds)" = 8 ]; then
+    pass "$CASE: changed driver rebuilds"
+else
+    fail "$CASE: changed driver did not rebuild"
+fi
+
+FAKE_TRT_VERSION=100001 FAKE_GPU="Fake GPU B" FAKE_DRIVER=560.00 run_prepare
+if [ "$(count_builds)" = 8 ]; then
+    pass "$CASE: unchanged environment reuses the engine"
+else
+    fail "$CASE: unchanged environment rebuilt"
+fi
+unset TRT_PRECISION TRT_SHAPES TRT_EXTRA_ARGS
+
+rm "$REPO/detector/1/.prepared"
+FAKE_TRT_VERSION=100001 FAKE_GPU="Fake GPU B" FAKE_DRIVER=560.00 TRT_PRECISION=fp32 \
+    TRT_SHAPES="images:1x3x64x64" TRT_EXTRA_ARGS="--workspace=64" run_prepare
+if [ "$(count_builds)" = 9 ]; then
+    pass "$CASE: missing stamp rebuilds"
+else
+    fail "$CASE: missing stamp did not rebuild"
+fi
+
+new_case stamp-layout
+printf 'pte' >"$STAGE/ecdet.pte"
+run_prepare
+expect_exit $? 0
+printf 'pte2' >"$STAGE/ecdet.pte"
+run_prepare
+expect_exit $? 0
+if [ "$(cat "$REPO/ecdet/1/model.pte")" = "pte2" ]; then
+    pass "$CASE: changed copy-through artifact is re-prepared"
+else
+    fail "$CASE: stale copy-through artifact served"
+fi
+
+new_case stamp-tree
+mkdir -p "$STAGE/raft/3"
+printf 'engine' >"$STAGE/raft/3/model.plan"
+run_prepare
+expect_exit $? 0
+printf 'engine2' >"$STAGE/raft/3/model.plan"
+run_prepare
+expect_exit $? 0
+if [ "$(cat "$REPO/raft/3/model.plan")" = "engine2" ]; then
+    pass "$CASE: changed tree is re-prepared"
+else
+    fail "$CASE: stale tree served"
+fi
+expect_file "raft/3/.prepared"
+
+new_case removed-not-pruned
+printf 'onnx' >"$STAGE/a.onnx"
+printf 'onnx' >"$STAGE/b.onnx"
+run_prepare
+rm "$STAGE/b.onnx"
+run_prepare
+expect_exit $? 0
+expect_file "b/1/model.plan"
+
+# =============================================================================
+echo "=== Case 21: duplicate model names fail loudly ==="
+new_case duplicate-name
+printf 'onnx' >"$STAGE/detector.onnx"
+printf 'plan' >"$STAGE/detector.plan"
+run_prepare
+expect_exit $? 1
+expect_log_contains "$WORK/$CASE/out.log" "detector.onnx"
+expect_log_contains "$WORK/$CASE/out.log" "detector.plan"
+expect_log_contains "$WORK/$CASE/out.log" "model name 'detector'"
+expect_absent "detector"
+
+new_case duplicate-tree-flat
+printf 'onnx' >"$STAGE/raft.onnx"
+mkdir -p "$STAGE/raft/2"
+printf 'engine' >"$STAGE/raft/2/model.plan"
+run_prepare
+expect_exit $? 1
+expect_log_contains "$WORK/$CASE/out.log" "both resolve to model name 'raft'"
+
+# =============================================================================
+echo "=== Case 22: versions must be numeric ==="
+new_case bad-model-version
+printf 'onnx' >"$STAGE/detector.onnx"
+MODEL_VERSION=../../escape run_prepare
+expect_exit $? 1
+expect_log_contains "$WORK/$CASE/out.log" "MODEL_VERSION must be"
+if [ -e "$WORK/$CASE/escape" ]; then
+    fail "$CASE: wrote outside the repository"
+else
+    pass "$CASE: nothing written outside the repository"
+fi
+
+new_case empty-model-version
+printf 'onnx' >"$STAGE/detector.onnx"
+MODEL_VERSION="" run_prepare
+# An empty variable falls back to the default of 1.
+expect_exit $? 0
+expect_file "detector/1/model.plan"
+
+new_case bad-tree-version
+mkdir -p "$STAGE/raft/v1"
+printf 'engine' >"$STAGE/raft/v1/model.plan"
+run_prepare
+expect_exit $? 1
+expect_log_contains "$WORK/$CASE/out.log" "version directory must be a non-negative integer"
+expect_absent "raft"
+
+new_case non-integer-tree-version
+mkdir -p "$STAGE/raft/1.5"
+printf 'engine' >"$STAGE/raft/1.5/model.plan"
+run_prepare
+expect_exit $? 1
+
+# =============================================================================
+echo "=== Case 23: a failed rebuild keeps the served version ==="
+new_case failed-rebuild-keeps-old
+printf 'onnx-v1' >"$STAGE/detector.onnx"
+run_prepare
+expect_exit $? 0
+cp "$REPO/detector/1/model.plan" "$WORK/$CASE/plan.before"
+cp "$REPO/detector/1/.prepared" "$WORK/$CASE/stamp.before"
+printf 'onnx-v2' >"$STAGE/detector.onnx"
+TRTEXEC_FAIL=true run_prepare
+expect_exit $? 1
+if cmp -s "$REPO/detector/1/model.plan" "$WORK/$CASE/plan.before" &&
+    cmp -s "$REPO/detector/1/.prepared" "$WORK/$CASE/stamp.before"; then
+    pass "$CASE: old model.plan and .prepared untouched"
+else
+    fail "$CASE: failed rebuild altered the served version"
+fi
 
 # =============================================================================
 echo

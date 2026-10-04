@@ -35,8 +35,9 @@ Each step lives in the image that owns it, so the manifests only wire volumes:
 | ONNX to engine | the serving image's `ENTRYPOINT` | a manifest, hook, or sidecar |
 | Model discovery | the runtime's `--models` tree scan | a per-model flag |
 
-Consequences worth relying on: adding or removing a model means rebuilding the
-model image and changing no YAML, and the same two images run without a cluster.
+Consequences worth relying on: adding a model means rebuilding the model image
+and changing no YAML (removing one also needs its directory deleted from the
+claim), and the same two images run without a cluster.
 `deploy/compose/docker-compose.yml` reproduces the identical flow -- compose's
 `service_completed_successfully` is the init container -- and a single container
 works too when the models are already on disk:
@@ -75,8 +76,10 @@ model name, so the entrypoint never needs editing.
 Engines live on a PVC, not an `emptyDir`. Measured on this node, a cold build
 takes ~8.5 min for a 101 MB model and ~2 min for a 21 MB one -- roughly 10
 minutes that would otherwise be paid on every pod replacement. Against a warm
-claim the entrypoint skips conversion and the pod is ready in well under a
-minute. `progressDeadlineSeconds` has to cover the cold case, or the rollout is
+claim whose `.prepared` stamp matches (same source, TensorRT, GPU, driver and
+`TRT_*` settings) the entrypoint skips conversion and the pod is ready in well
+under a minute; any difference rebuilds. Removed models are not pruned from the
+claim. `progressDeadlineSeconds` has to cover the cold case, or the rollout is
 marked failed while conversion is still running.
 
 ### Static shapes
@@ -104,10 +107,7 @@ docker build -f runtime/docker/Dockerfile.tensorrt \
 The context needs two sibling directories, `runtime/` (this repo) and
 `neuriplo/`.
 
-`neuriplo-kserve-runtime:onnx-gpu` cannot be used for this path. It links only
-`libonnxruntime.so.1`, and while it ships
-`libonnxruntime_providers_tensorrt.so`, that library cannot load because
-`libnvinfer.so.10` is absent. The entrypoint fails loudly rather than silently
+If `trtexec` is missing, the entrypoint fails loudly rather than silently
 serving ONNX; set `TRT_FALLBACK_ONNX=true` to opt into the fallback explicitly.
 
 ## Model repository layout
