@@ -63,10 +63,21 @@ bool readTensorMap(const json &node, const char *field, std::map<std::string, st
     return true;
 }
 
-void readFloat(const json &node, const char *field, float &target) {
-    if (node.contains(field) && node[field].is_number()) {
-        target = node[field].get<float>();
+// Unknown keys stay tolerated (deferred: a typo there is silently ignored,
+// same as before), but a *known* key with the wrong JSON type is a graph
+// authoring mistake worth failing loudly for, naming the key so it is
+// findable -- e.g. "confidence_threshold": "0.5" quoted as a string.
+bool readFloat(const json &node, const char *field, const std::string &step_name, float &target,
+               std::string &error) {
+    if (!node.contains(field)) {
+        return true;
     }
+    if (!node[field].is_number()) {
+        error = "pipeline step '" + step_name + "': " + field + " must be a number";
+        return false;
+    }
+    target = node[field].get<float>();
+    return true;
 }
 
 } // namespace
@@ -146,9 +157,11 @@ bool parsePipelineConfig(const std::string &json_text, PipelineConfig &config, s
             }
         }
 
-        readFloat(node, "confidence_threshold", step.confidence_threshold);
-        readFloat(node, "nms_threshold", step.nms_threshold);
-        readFloat(node, "mask_threshold", step.mask_threshold);
+        if (!readFloat(node, "confidence_threshold", step.name, step.confidence_threshold, error) ||
+            !readFloat(node, "nms_threshold", step.name, step.nms_threshold, error) ||
+            !readFloat(node, "mask_threshold", step.name, step.mask_threshold, error)) {
+            return false;
+        }
 
         if (!readTensorMap(node, "input_map", step.input_map, step.name, error) ||
             !readTensorMap(node, "output_map", step.output_map, step.name, error)) {

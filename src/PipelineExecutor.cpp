@@ -103,7 +103,8 @@ class PipelineExecutor : public Executor {
         for (const auto &step : steps_) {
             std::vector<OutputTensor> step_inputs;
             step_inputs.reserve(step.inputs.size());
-            for (const auto &declared : step.inputs) {
+            for (size_t input_index = 0; input_index < step.inputs.size(); ++input_index) {
+                const auto &declared = step.inputs[input_index];
                 const auto graph_name = mapped(step.config.input_map, declared.name);
                 const auto found = values.find(graph_name);
                 if (found == values.end()) {
@@ -111,12 +112,26 @@ class PipelineExecutor : public Executor {
                                    "pipeline step '" + step.config.name +
                                        "' is missing input tensor '" + graph_name + "'");
                 }
-                // Move rather than copy when no later step and no declared
-                // output needs this tensor again. Model tensors are megabytes
-                // (a 640x640 FP32 image is 4.9 MB), so a deep copy per step is
-                // a measurable share of pipeline latency.
+                // A later input of this same step may still need this tensor --
+                // a step reading one graph tensor through two of its own inputs
+                // -- so the global last-use index alone is not enough: moving on
+                // the first of those two lookups erased the value out from under
+                // the second one. Only move when nothing later, in this step or
+                // any later one, still needs it.
+                bool needed_later_in_step = false;
+                for (size_t ahead = input_index + 1; ahead < step.inputs.size(); ++ahead) {
+                    if (mapped(step.config.input_map, step.inputs[ahead].name) == graph_name) {
+                        needed_later_in_step = true;
+                        break;
+                    }
+                }
                 const auto last = last_use_.find(graph_name);
-                if (last != last_use_.end() && last->second == step_index) {
+                const bool is_last_use = last != last_use_.end() && last->second == step_index;
+                // Move rather than copy when nothing else needs this tensor
+                // again. Model tensors are megabytes (a 640x640 FP32 image is
+                // 4.9 MB), so a deep copy per step is a measurable share of
+                // pipeline latency.
+                if (!needed_later_in_step && is_last_use) {
                     auto tensor = std::move(found->second);
                     tensor.name = declared.name;
                     values.erase(found);
@@ -325,6 +340,18 @@ std::unique_ptr<Executor> makePipelineExecutor(const RuntimeConfig &config,
         step.config = step_config;
 
         if (step_config.kind == PipelineStepKind::Model) {
+            // A pipeline that references itself -- directly, or by naming
+            // another ensemble -- would recurse into itself at request time.
+            // Resolving a step to the pipeline's own already-published
+            // snapshot during a reload turns that straight into an infinite
+            // request loop that only ever surfaces as a timeout, so both are
+            // rejected here, before the step is ever scheduled.
+            if (step_config.model_name == config.model_name) {
+                error = "pipeline step '" + step_config.name + "' references its own pipeline '" +
+                        config.model_name + "'; a pipeline cannot reference itself";
+                return nullptr;
+            }
+
             // Resolved once here so the composed metadata is known at load
             // time and a pipeline over a missing model fails to load rather
             // than failing on first request.
@@ -332,6 +359,12 @@ std::unique_ptr<Executor> makePipelineExecutor(const RuntimeConfig &config,
             if (!snapshot) {
                 error = "pipeline step '" + step_config.name + "' references model '" +
                         step_config.model_name + "' which is not loaded";
+                return nullptr;
+            }
+            if (snapshot->metadata.platform == "ensemble") {
+                error = "pipeline step '" + step_config.name + "' references model '" +
+                        step_config.model_name +
+                        "' which is itself an ensemble; nested ensembles are not supported";
                 return nullptr;
             }
             step.inputs = snapshot->metadata.inputs;

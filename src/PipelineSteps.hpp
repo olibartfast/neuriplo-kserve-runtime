@@ -52,6 +52,15 @@ std::unique_ptr<PipelineStep> makeBuiltinPipelineStep(const PipelineStepConfig &
 // its tests do not need the task layer.
 std::vector<TensorMetadata> pipelineEnvelopeOutputs(PipelineEnvelope envelope);
 
+// Indices into `scores`, ranked highest-first and capped to at most `cap`
+// entries (ties keep their original relative order). A postprocess step's
+// envelope cap must keep the highest-scoring detections when more survive
+// NMS than the cap allows; the task layer's NMS does not promise score order,
+// so capping while scanning in task order instead kept whichever detections
+// happened to come first. Available regardless of task support so the
+// ranking itself can be tested without the task layer.
+std::vector<size_t> pipelineTopScoreIndices(const std::vector<float> &scores, size_t cap);
+
 #ifdef NEURIPLO_RUNTIME_WITH_TASKS
 // Extracts one detection's mask as box-sized UINT8 bytes, normalizing the three
 // layouts task postprocessors produce (mask_data, a box-sized mask image, or a

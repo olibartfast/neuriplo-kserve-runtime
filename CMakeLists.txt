@@ -22,6 +22,19 @@ include(FetchContent)
 
 # Pin third-party versions from a single source of truth.
 # Format: KEY=VALUE (one per line, blank lines and #-comments allowed).
+# Precedence: `cmake -D` > versions.env > the "develop" default below. `-D`
+# always creates a CACHE entry, and our own `set()` calls below never touch
+# the cache, so `DEFINED CACHE{...}` reliably tells a `-D` override apart from
+# the plain variable versions.env is about to set.
+set(_NEURIPLO_VERSION_FROM_CLI FALSE)
+if(DEFINED CACHE{NEURIPLO_VERSION})
+    set(_NEURIPLO_VERSION_FROM_CLI TRUE)
+endif()
+set(_NEURIPLO_TASKS_VERSION_FROM_CLI FALSE)
+if(DEFINED CACHE{NEURIPLO_TASKS_VERSION})
+    set(_NEURIPLO_TASKS_VERSION_FROM_CLI TRUE)
+endif()
+
 set(NEURIPLO_VERSION "develop")
 set(NEURIPLO_TASKS_VERSION "develop")
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/versions.env")
@@ -29,13 +42,25 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/versions.env")
     foreach(_LINE IN LISTS _VERSIONS_ENV)
         string(STRIP "${_LINE}" _LINE)
         if(_LINE MATCHES "^([A-Za-z_][A-Za-z0-9_]*)=(.*)$")
-            if("${CMAKE_MATCH_1}" STREQUAL "NEURIPLO_VERSION")
+            if("${CMAKE_MATCH_1}" STREQUAL "NEURIPLO_VERSION" AND NOT _NEURIPLO_VERSION_FROM_CLI)
                 set(NEURIPLO_VERSION "${CMAKE_MATCH_2}")
-            elseif("${CMAKE_MATCH_1}" STREQUAL "NEURIPLO_TASKS_VERSION")
+            elseif("${CMAKE_MATCH_1}" STREQUAL "NEURIPLO_TASKS_VERSION" AND NOT _NEURIPLO_TASKS_VERSION_FROM_CLI)
                 set(NEURIPLO_TASKS_VERSION "${CMAKE_MATCH_2}")
             endif()
         endif()
     endforeach()
+endif()
+# A -D override wins even though versions.env was read after it conceptually
+# "ran": re-assert it from the cache now that the normal-variable shadowing
+# above is done.
+if(_NEURIPLO_VERSION_FROM_CLI)
+    set(NEURIPLO_VERSION "$CACHE{NEURIPLO_VERSION}")
+    message(STATUS "NEURIPLO_VERSION pinned via -D, overriding versions.env: ${NEURIPLO_VERSION}")
+endif()
+if(_NEURIPLO_TASKS_VERSION_FROM_CLI)
+    set(NEURIPLO_TASKS_VERSION "$CACHE{NEURIPLO_TASKS_VERSION}")
+    message(STATUS
+        "NEURIPLO_TASKS_VERSION pinned via -D, overriding versions.env: ${NEURIPLO_TASKS_VERSION}")
 endif()
 
 FetchContent_Declare(
