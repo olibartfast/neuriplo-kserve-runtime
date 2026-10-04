@@ -133,8 +133,8 @@ spec:
           emptyDir: {}
         # Persisted, not emptyDir: rebuilding the engines costs ~10 minutes on
         # this node, and that would be paid on every pod replacement. The
-        # entrypoint skips conversion when an engine is already present, so a
-        # restart against a warm claim starts in seconds.
+        # entrypoint skips conversion only when the engine's .prepared stamp
+        # matches, so a restart against a warm claim starts in seconds.
         - name: models
           persistentVolumeClaim:
             claimName: neuriplo-model-repo

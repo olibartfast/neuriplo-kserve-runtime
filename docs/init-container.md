@@ -96,7 +96,8 @@ the whole procedure by itself — and, because it is a step rather than a wrappe
 it composes in front of a server nobody modified.
 
 The practical test: **adding or removing a model must not change any YAML.** It
-does not. Rebuild the artifact image, restart the pod.
+does not. Rebuild the artifact image, restart the pod. Adding is picked up
+automatically; removing is not pruned from a warm volume (see below).
 
 ## Serving it with something else
 
@@ -181,7 +182,7 @@ Neither applies to a repository with no TensorRT in it, where preparation is
 only copying and renaming and a `busybox` base is enough:
 
 ```bash
-docker build -f deploy/prepare/Dockerfile --build-arg BASE_IMAGE=busybox:glibc .
+docker build -f deploy/prepare/Dockerfile --build-arg BASE_IMAGE=busybox:1.37.0-glibc@sha256:42a9ff19af33811ee466b24c66384461d37c32dcc28d1d27d49b8aca816bd5ee .
 ```
 
 ### Wrapping a different server
@@ -210,11 +211,12 @@ Default is `neuriplo-kserve-runtime --models=$MODEL_REPOSITORY`.
 `$MODEL_REPOSITORY` is a PVC and not an `emptyDir` because engine builds are
 expensive. Measured on the k3d node (RTX 3060): **~8.5 min for a 101 MB model,
 ~2 min for a 21 MB one.** On an `emptyDir` that ~10 minutes is paid on every pod
-replacement. Against a warm claim the prepare step short-circuits and the pod is
-ready in well under a minute.
+replacement. Against a warm claim whose `.prepared` stamp still matches, the prepare step
+short-circuits and the pod is ready in well under a minute. A changed source
+artifact, TensorRT version, GPU, driver, or `TRT_*` setting rebuilds.
 
 `$STAGE_DIR` can be an `emptyDir` because it is re-populated by the init
-container on every start.
+container on every start; the artifact image also clears it before copying.
 
 ### Environment
 
@@ -261,9 +263,17 @@ is the operator's business.
 
 These are what make the step safe to re-run, which it will be on every restart:
 
-1. **Idempotent.** If the output artifact already exists, skip and return
-   success. A restart against a warm volume must not rebuild.
-2. **Atomic publish.** Write to `<target>.tmp` and `mv` into place. A conversion
+1. **Idempotent.** If the output artifact exists and its `.prepared` stamp
+   (source sha256, layout, and for engines the TensorRT version, GPU, driver and
+   effective `TRT_PRECISION`/`TRT_SHAPES`/`TRT_EXTRA_ARGS`) equals what this run
+   would produce, skip and return success. A missing or different stamp
+   re-prepares and replaces the directory. Tree-form versions are checked by
+   stamp only (a hash of the tree's files), not by a particular artifact name.
+   Models removed from staging are not pruned.
+2. **Atomic publish.** Write to a temp directory and `mv` it into place. An
+   existing version directory is first renamed aside (same parent, temp name),
+   the new one is renamed in, then the old one is deleted; if the second rename
+   fails the old one is restored, and a failed build never touches it. A conversion
    killed by an OOM kill or a failed startup probe must not leave a truncated
    file that the next start mistakes for a finished one.
 3. **Fail loudly, never substitute silently.** If the intended backend cannot be
@@ -424,8 +434,12 @@ which is exported on demand. Model files are deliberately not committed, so the
 *recipe* is committed instead.
 
 Removing a model from the image does not remove it from a warm PVC — the prepare
-step only adds. Delete the model directory from the volume, or recreate the
-claim.
+step never prunes. Delete the model directory from the volume, or recreate the
+claim. Changing a model's source file, or the TensorRT version, GPU, driver or
+`TRT_*` settings, does re-prepare it: each version directory carries a
+`.prepared` stamp and is rebuilt when the stamp differs or is missing. Two
+staged artifacts with the same model name, or a `MODEL_VERSION` / tree version
+directory that is not a non-negative integer, fail the run.
 
 ### Controlling what is loaded
 
