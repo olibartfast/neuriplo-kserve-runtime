@@ -218,7 +218,7 @@ Single-model mode is unchanged and remains the default.
 
 Building a repository before serving it — the init-container procedure, the
 prepare-step contract, per-backend handling, and the failure modes — is
-specified in [docs/init-container.md](docs/init-container.md).
+specified in [docs/model-repository.md](docs/model-repository.md).
 
 ## Endpoints
 
