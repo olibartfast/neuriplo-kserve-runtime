@@ -257,4 +257,24 @@ TEST_CASE(grpc_codec_parses_llm_parameters) {
     REQUIRE_EQ(exec_request.llm_params->streaming, true);
 }
 
+TEST_CASE(grpc_codec_carries_dynamic_dim_request_shape_through) {
+    inference::ModelInferRequest proto;
+    proto.set_model_name("demo");
+    auto *input = proto.add_inputs();
+    input->set_name("IMAGE");
+    input->set_datatype("UINT8");
+    input->add_shape(1);
+    input->add_shape(5);
+    proto.add_raw_input_contents(std::string("\x01\x02\x03\x04\x05", 5));
+
+    const auto exec_request = grpc_v2::convertInferRequest(proto);
+    REQUIRE_EQ(exec_request.inputs.size(), 1u);
+    REQUIRE_EQ(exec_request.inputs[0].name, "IMAGE");
+    REQUIRE_EQ(exec_request.inputs[0].datatype, "UINT8");
+    REQUIRE_EQ(exec_request.inputs[0].shape.size(), 2u);
+    REQUIRE_EQ(exec_request.inputs[0].shape[0], 1);
+    REQUIRE_EQ(exec_request.inputs[0].shape[1], 5);
+    REQUIRE_EQ(exec_request.inputs[0].bytes.size(), 5u);
+}
+
 #endif // NEURIPLO_RUNTIME_WITH_GRPC
