@@ -1,14 +1,14 @@
 # Neuriplo KServe Runtime Roadmap
 
 > Status: living brownfield roadmap, reconstructed on 2026-10-04 from
-> `history/target-design.md`, the former next-steps file, and `CHANGELOG.md`. Phase order after
+> the former target design, the former next-steps file, and `CHANGELOG.md`. Phase order after
 > the current phase is a working sequence to be confirmed.
 
-This roadmap is scoped to the KServe runtime. The former planning folder now lives
-here: step snapshots are in `history/steps/` (`STEP0.md` to `STEP14.md`), the
-original target design is `history/target-design.md`, design patterns are in
-`architecture.md`, and procedures are in `procedures/`. Step status that was in
-the former next-steps file is merged into the phases below.
+This roadmap is scoped to the KServe runtime. Design patterns are in
+`architecture.md`. The step snapshots (`STEP0.md` to `STEP14.md`), the original
+target design and the YOLO e2e procedure were removed from the tree; they remain
+in git history at [e77f6f0](https://github.com/olibartfast/neuriplo-kserve-runtime/tree/e77f6f0/specs/). Step status that was in the former
+next-steps file is merged into the phases below.
 
 ## Status Key
 
@@ -40,7 +40,7 @@ items or backfill packets for completed work.
 Scaffold, KServe packaging, V2 protocol, model registry and executors, atomic
 neuriplo integration, scheduler, dynamic batching, observability, LLM backends
 and path completion, production hardening, and deployment validation. Record:
-[history/target-design.md](history/target-design.md), `history/steps/STEP0.md` to `STEP11.md`.
+the target design and `STEP0.md` to `STEP11.md` in [git history](https://github.com/olibartfast/neuriplo-kserve-runtime/tree/e77f6f0/specs/history).
 
 ## Phase 1 - Platform E2E and Production Track (Steps 12-14)
 
@@ -48,8 +48,8 @@ and path completion, production hardening, and deployment validation. Record:
 
 YOLO end-to-end through neuriplo-infer, HTTP and gRPC parity, control/data
 plane split, and multi-model hot reload with zero-downtime version switch.
-Record: [procedures/e2e-yolo.md](procedures/e2e-yolo.md),
-`history/steps/STEP12.md` to `STEP14.md`.
+Record: the YOLO e2e procedure and `STEP12.md` to `STEP14.md` in
+[git history](https://github.com/olibartfast/neuriplo-kserve-runtime/tree/e77f6f0/specs/).
 
 Summary: Step 12 ran real neuriplo-infer to KServe HTTP to runtime to neuriplo
 (ONNX Runtime) to YOLO, with gRPC parity (`real-onnx-grpc`, `scripts/e2e-yolo.sh`).
@@ -123,10 +123,12 @@ Each needs a packet before work starts.
 
 **Status: Planned, scale-triggered**
 
-Async HTTP reactor, zero-copy tensor buffers, arena/PMR allocators, and
+Async HTTP reactor, zero-copy tensor buffers, arena/PMR allocators,
+`std::expected`-style result types at executor/scheduler boundaries, and
 multi-datatype gRPC codec. Each starts only on its trigger: connection
 concurrency above O(100) for the reactor (epoll/io_uring), copy overhead visible
 in profiling for zero-copy buffers, allocation churn under load for arena/PMR,
+error-handling bugs for structured result types,
 and client demand for INT8/FP16 in the gRPC codec.
 
 ## Infrastructure and Cross-Repo Notes
@@ -145,5 +147,18 @@ succeeded, and neuriplo-infer's 22/22 tests passed.
 - [A-10] The Step 15 status in `AGENTS.md` ("on `feature/step-15-raw-output`")
   is stale, because the raw output path is already used by the adapter.
 - [A-11] Phase 4 and 5 ordering is a working sequence, not a commitment.
+
+## Standing risks
+
+- Backend thread-safety is per-backend and not uniformly documented upstream.
+- Tensor dtype mapping must stay explicit and tested; silent widening is the
+  failure mode.
+- Dynamic batching can silently change output splitting if compatibility rules
+  are relaxed carelessly.
+- LLM scheduling is not tensor batching. Token, context, cancellation, and
+  memory-pressure policies have to stay explicit.
+- Pulling server dependencies into `neuriplo` core, or the task layer into the
+  default runtime build, would create dependency creep. The
+  `NEURIPLO_RUNTIME_ENABLE_TASKS=OFF` default is the guard.
 
 _Revision: 2026-10-04 - initial brownfield roadmap._

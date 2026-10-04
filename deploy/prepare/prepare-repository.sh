@@ -22,7 +22,7 @@
 #
 # Nothing here names a model. Each model's name comes from its staged filename
 # (or directory), and the backend that serves it comes from the filename this
-# script writes. See docs/init-container.md for the full specification.
+# script writes. See docs/model-repository.md for the full specification.
 #
 # Staging shapes accepted under STAGE_DIR:
 #
