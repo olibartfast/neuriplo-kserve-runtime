@@ -1035,6 +1035,9 @@ HttpResponse KServeRuntime::handleRepository(const HttpRequest &request) const {
         if (registry_.unloadModel(model_name)) {
             return json(200, "{}");
         }
+        if (registry_.loadOrReloadInProgress(model_name)) {
+            return error(409, KServeErrors::Unavailable, "load/reload in progress: " + model_name);
+        }
         return error(404, KServeErrors::ModelNotFound, "model not found: " + model_name);
     }
 
@@ -1050,12 +1053,6 @@ HttpResponse KServeRuntime::handleRepository(const HttpRequest &request) const {
     // /v2/admin/models/load takes.
     const auto loaded = registry_.modelConfig(model_name);
     const auto catalog = registry_.catalogConfig(model_name);
-    if (!loaded && !catalog && request.body.empty()) {
-        return error(404, KServeErrors::ModelNotFound,
-                     "model is not in the repository and not loaded: " + model_name +
-                         "; provide its backend and model_path in the request body to load a "
-                         "model the repository does not contain");
-    }
     // A loaded model's own config wins over the catalog so that a reload keeps
     // any overrides it was last loaded with.
     RuntimeConfig defaults =
@@ -1064,6 +1061,18 @@ HttpResponse KServeRuntime::handleRepository(const HttpRequest &request) const {
     const auto parsed = parseReloadModelRequest(request.body, defaults);
     if (!parsed.ok) {
         return error(400, KServeErrors::InvalidArgument, parsed.error_message);
+    }
+    // A name that is neither already loaded nor in the repository catalog has
+    // nothing to fall back to: it must not silently load against
+    // RuntimeConfig's stub defaults just because the body parsed (e.g. an
+    // empty object "{}", which is what tritonclient's load call sends). The
+    // check is on the parsed backend, not the raw body text, so "{}" and ""
+    // are rejected alike.
+    if (!known && !catalog.has_value() && !parsed.backend_provided) {
+        return error(404, KServeErrors::ModelNotFound,
+                     "model is not in the repository and not loaded: " + model_name +
+                         "; provide its backend and model_path in the request body to load a "
+                         "model the repository does not contain");
     }
     RuntimeConfig config = parsed.config;
     config.model_name = model_name;
@@ -1085,8 +1094,26 @@ HttpResponse KServeRuntime::handleRepository(const HttpRequest &request) const {
         metrics_.recordModelLoadFailure(model_name, config.backend);
         return error(409, KServeErrors::Unavailable, message);
     }
+    if (!known && registry_.ready(model_name)) {
+        // The narrow race this "known" check cannot close by itself: a
+        // concurrent request loaded this exact name between the
+        // modelConfig() lookup above and the loadModel() call just now, so
+        // loadModel() correctly refused (it is not this call's slot to
+        // manage) -- but the model is loaded, which is what this call
+        // asked for too. Not a 409.
+        metrics_.recordModelLoadSuccess(model_name, config.backend);
+        return json(200, "{}");
+    }
+    // A known model's failed reload leaves it untouched and Ready (see
+    // ModelLifecycle::finishReload); there is no dead slot to drop, but the
+    // caller should still see why the attempt failed rather than a generic
+    // message.
+    std::string message = "failed to load model: " + model_name;
+    if (const auto handle = registry_.findHandle(model_name); handle && handle->load_error) {
+        message = *handle->load_error;
+    }
     metrics_.recordModelLoadFailure(model_name, config.backend);
-    return error(409, KServeErrors::Unavailable, "failed to load model: " + model_name);
+    return error(409, KServeErrors::Unavailable, message);
 }
 
 HttpResponse KServeRuntime::handleAdmin(const HttpRequest &request) const {
@@ -1140,8 +1167,20 @@ HttpResponse KServeRuntime::handleAdmin(const HttpRequest &request) const {
             return error(409, KServeErrors::Unavailable, message);
         }
         metrics_.recordModelLoadFailure(parsed.config.model_name, parsed.config.backend);
+        // loadModel() returns false here either because the name already had
+        // a settled, Ready slot before this call (the caller wants reload,
+        // not load) or because this call waited on a same-name build that
+        // was already in flight and that build ended up not Ready -- in
+        // which case "already loaded" would be misleading: surface why the
+        // build that actually resolved it failed instead.
+        if (const auto handle = registry_.findHandle(parsed.config.model_name);
+            handle && !handle->isReady()) {
+            return error(
+                409, KServeErrors::Unavailable,
+                handle->load_error.value_or("concurrent load failed: " + parsed.config.model_name));
+        }
         return error(409, KServeErrors::Unavailable,
-                     "failed to load model: " + parsed.config.model_name);
+                     "model already loaded; use reload: " + parsed.config.model_name);
     }
 
     const auto admin_tail = request.path.size() > std::string(prefix).size() + 1
@@ -1160,6 +1199,9 @@ HttpResponse KServeRuntime::handleAdmin(const HttpRequest &request) const {
         if (registry_.unloadModel(model_name)) {
             return json(200, R"({"unloaded":true})");
         }
+        if (registry_.loadOrReloadInProgress(model_name)) {
+            return error(409, KServeErrors::Unavailable, "load/reload in progress: " + model_name);
+        }
         return error(404, KServeErrors::ModelNotFound, "model not found: " + model_name);
     }
 
@@ -1176,7 +1218,14 @@ HttpResponse KServeRuntime::handleAdmin(const HttpRequest &request) const {
         if (registry_.reload(model_name, reload_config)) {
             return json(200, R"({"reloaded":true})");
         }
-        return error(409, KServeErrors::Unavailable, "failed to reload model: " + model_name);
+        // A failed reload leaves the serving model untouched and Ready (see
+        // ModelLifecycle::finishReload); surface why it failed instead of a
+        // generic message.
+        std::string message = "failed to reload model: " + model_name;
+        if (const auto handle = registry_.findHandle(model_name); handle && handle->load_error) {
+            message = *handle->load_error;
+        }
+        return error(409, KServeErrors::Unavailable, message);
     }
 
     constexpr auto versions_prefix = "versions/";
