@@ -1217,11 +1217,19 @@ HttpResponse KServeRuntime::handleAdmin(const HttpRequest &request) const {
         // was already in flight and that build ended up not Ready -- in
         // which case "already loaded" would be misleading: surface why the
         // build that actually resolved it failed instead.
-        if (const auto handle = registry_.findHandle(parsed.config.model_name);
-            handle && !handle->isReady()) {
-            return error(
-                409, KServeErrors::Unavailable,
-                handle->load_error.value_or("concurrent load failed: " + parsed.config.model_name));
+        if (const auto handle = registry_.findHandle(parsed.config.model_name); handle) {
+            if (!handle->isReady()) {
+                return error(409, KServeErrors::Unavailable,
+                             handle->load_error.value_or("concurrent load failed: " +
+                                                         parsed.config.model_name));
+            }
+        } else {
+            // The slot this call waited on was dropped by its owner after a
+            // failed build (see unloadModel()'s Failed-without-scheduler
+            // path): there is nothing loaded to "reload", so saying so would
+            // be misleading.
+            return error(409, KServeErrors::Unavailable,
+                         "concurrent load failed: " + parsed.config.model_name);
         }
         return error(409, KServeErrors::Unavailable,
                      "model already loaded; use reload: " + parsed.config.model_name);
@@ -1302,6 +1310,11 @@ HttpResponse KServeRuntime::handleAdmin(const HttpRequest &request) const {
         const auto parsed = parseSwitchVersionRequest(request.body, switch_defaults);
         if (!parsed.ok) {
             return error(400, KServeErrors::InvalidArgument, parsed.error_message);
+        }
+        if (parsed.version != version) {
+            return error(400, KServeErrors::InvalidArgument,
+                         "version mismatch: URL version '" + version +
+                             "' does not match body version '" + parsed.version + "'");
         }
         RuntimeConfig switch_config = parsed.config;
         switch_config.model_name = model_name;
