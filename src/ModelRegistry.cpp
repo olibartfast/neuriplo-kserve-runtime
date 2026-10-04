@@ -343,7 +343,10 @@ bool ModelRegistry::reload(const std::string &model_name, const RuntimeConfig &c
     ModelHandle next;
     {
         PendingLoadGuard guard(*this, model_name);
-        lifecycle_.load(next, config, std::move(factory));
+        lifecycle_.load(next, config, std::move(factory),
+                        config.model_version_explicit && !config.model_version.empty()
+                            ? std::optional<std::string>(config.model_version)
+                            : std::nullopt);
         guard.commit();
     }
 
@@ -648,7 +651,7 @@ bool ModelRegistry::allReady() const {
             return false;
         }
     }
-    return any_counted;
+    return any_counted || explicit_control_mode_;
 }
 
 bool ModelRegistry::loadOrReloadInProgress(const std::string &model_name) const {

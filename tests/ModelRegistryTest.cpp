@@ -100,6 +100,35 @@ TEST_CASE(model_registry_resolves_version_from_executor_metadata) {
     REQUIRE(registry.findHandleVersion("demo", "42") != nullptr);
 }
 
+// E-2 regression: reload() must pass the same explicit version override
+// loadModel() does, or a model served at an explicit version (repository
+// version N, or --model-version N) reports the backend's own version after
+// any reload.
+TEST_CASE(model_registry_reload_keeps_explicit_version_override) {
+    RuntimeConfig config = demoConfig();
+    config.model_version = "3";
+    config.model_version_explicit = true;
+
+    auto factory = [](const RuntimeConfig &cfg, std::string &error) {
+        (void)error;
+        ModelMetadata metadata;
+        metadata.name = cfg.model_name;
+        // The backend's own version, deliberately different from the
+        // explicit override, so a reload that drops the override is
+        // unmistakable.
+        metadata.versions = {"1"};
+        metadata.platform = "test_version";
+        metadata.outputs.push_back({"output", "FP32", {1, 1}});
+        return std::make_unique<MarkerExecutor>(std::move(metadata));
+    };
+
+    ModelRegistry registry(config, factory);
+    REQUIRE_EQ(registry.defaultVersion("demo"), "3");
+
+    REQUIRE(registry.reload("demo", config, factory));
+    REQUIRE_EQ(registry.defaultVersion("demo"), "3");
+}
+
 TEST_CASE(model_registry_uses_injected_executor) {
     const RuntimeConfig config = demoConfig();
     const ModelRegistry registry(config, [](const RuntimeConfig &cfg, std::string &error) {
@@ -271,6 +300,41 @@ TEST_CASE(model_registry_slow_load_does_not_block_other_model_inference) {
 
     loader.join();
     REQUIRE(registry.ready("slow"));
+    REQUIRE(registry.allReady());
+}
+
+// E-3 regression: in explicit control mode, a registry whose only model is
+// still on its first load (a Loading placeholder, never yet Ready) must not
+// make /v2/health/ready report 503 during that entire first load. The
+// placeholder is "not yet counted" (see the B-8 comment above), so
+// any_counted alone stays false here -- allReady() must fall back to
+// explicit_control_mode_ instead of returning any_counted bare.
+TEST_CASE(model_registry_explicit_mode_stays_ready_during_first_load) {
+    ModelRegistry registry(std::vector<RuntimeConfig>{}, /*explicit_control_mode=*/true,
+                           demoConfig());
+    REQUIRE(registry.allReady());
+
+    auto gate = std::make_shared<BuildGate>();
+    RuntimeConfig config = demoConfig();
+
+    std::thread loader(
+        [&registry, config, gate] { registry.loadModel(config, gatedFactory(gate)); });
+    waitForBuildStarted(gate);
+
+    const auto snapshot = registry.findHandle("demo");
+    REQUIRE(snapshot != nullptr);
+    REQUIRE_EQ(snapshot->state, ModelState::Loading);
+    REQUIRE(!snapshot->isReady());
+    REQUIRE(registry.allReady());
+
+    {
+        std::lock_guard<std::mutex> lock(gate->mutex);
+        gate->release = true;
+    }
+    gate->cv.notify_all();
+    loader.join();
+
+    REQUIRE(registry.ready("demo"));
     REQUIRE(registry.allReady());
 }
 
