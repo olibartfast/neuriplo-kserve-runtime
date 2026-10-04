@@ -66,6 +66,14 @@
 #                          failing. Off by default: a silently dropped artifact
 #                          surfaces much later as a 404 from a client.
 #
+# Re-preparation. Every prepared version directory carries a `.prepared` stamp
+# recording what produced it: the source artifact's sha256, the layout and target
+# filename, and -- when an engine was built -- the TensorRT version, GPU name,
+# driver version, and the effective TRT_PRECISION / TRT_SHAPES / TRT_EXTRA_ARGS.
+# A start skips a directory only when its stamp matches what this run would
+# produce; a missing or different stamp rebuilds it, replacing the old directory.
+# Models removed from staging are NOT pruned from the repository.
+#
 # Per-model overrides. A heterogeneous repository can hold one static and one
 # dynamic model, which a single global TRT_SHAPES cannot express. Append the
 # model name uppercased with non-alphanumerics replaced by underscores:
@@ -82,6 +90,22 @@ ONNX_BACKEND="${ONNX_BACKEND:-tensorrt}"
 TRT_PRECISION="${TRT_PRECISION:-fp16}"
 TRT_FALLBACK_ONNX="${TRT_FALLBACK_ONNX:-false}"
 PREPARE_IGNORE_UNKNOWN="${PREPARE_IGNORE_UNKNOWN:-false}"
+
+STAMP_FILE=".prepared"
+
+# A version is a directory name the server parses as a number, and it is also a
+# path component: anything else either never loads or escapes the repository.
+case "$MODEL_VERSION" in
+    '' | *[!0-9]*)
+        echo "error: MODEL_VERSION must be a non-negative integer, got: $MODEL_VERSION" >&2
+        exit 1
+        ;;
+esac
+
+if ! command -v sha256sum >/dev/null 2>&1; then
+    echo "error: sha256sum not found; it is needed to stamp prepared models" >&2
+    exit 1
+fi
 
 case "$ONNX_BACKEND" in
     tensorrt | onnx_runtime) ;;
@@ -171,20 +195,107 @@ model_override() {
 
 # Publishing a whole version directory at once keeps multi-file models (OpenVINO
 # .xml + .bin) atomic, which a per-file rename cannot. A rename within one
-# filesystem is atomic, and the target never exists because a populated version
-# directory short-circuits before we get here.
+# filesystem is atomic. An existing target (empty, or stale from a different
+# stamp) must not stay in place, or `mv` would move the work directory *inside*
+# it. So the old directory is first renamed aside (same parent, temp name), the
+# new one is renamed in, and only then is the old one deleted; if the second
+# rename fails the old directory is restored. A failed build never reaches this
+# function, so it leaves the previously served version untouched.
 publish() {
     publish_staging_dir="$1"
     publish_target_dir="$2"
-    mkdir -p "$(dirname "$publish_target_dir")"
-    mv "$publish_staging_dir" "$publish_target_dir"
+    publish_parent=$(dirname "$publish_target_dir")
+    publish_aside="$publish_parent/.prepare-tmp.old.$(basename "$publish_target_dir").$$"
+    mkdir -p "$publish_parent"
+    rm -rf "$publish_aside"
+    if [ -e "$publish_target_dir" ]; then
+        mv "$publish_target_dir" "$publish_aside"
+    fi
+    if ! mv "$publish_staging_dir" "$publish_target_dir"; then
+        if [ -e "$publish_aside" ]; then
+            mv "$publish_aside" "$publish_target_dir"
+        fi
+        echo "error: could not publish $publish_target_dir" >&2
+        exit 1
+    fi
+    rm -rf "$publish_aside"
     echo "prepared $publish_target_dir"
 }
 
-# True when the version directory already holds something, so a restart against a
-# warm volume neither rebuilds an engine (minutes) nor re-copies a model.
+# True when the version directory holds the expected artifact AND a stamp equal
+# to the one this run would write, so a restart against a warm volume neither
+# rebuilds an engine (minutes) nor re-copies a model, while a changed source,
+# TensorRT, GPU, driver, or build option does rebuild.
+#   $1 version dir  $2 expected artifact filename ("" to skip)  $3 expected stamp
 already_prepared() {
-    [ -d "$1" ] && [ -n "$(ls -A "$1" 2>/dev/null)" ]
+    [ -d "$1" ] || return 1
+    if [ -n "$2" ] && [ ! -f "$1/$2" ]; then
+        return 1
+    fi
+    [ -f "$1/$STAMP_FILE" ] || return 1
+    [ "$(cat "$1/$STAMP_FILE")" = "$3" ]
+}
+
+write_stamp() {
+    printf '%s\n' "$2" >"$1/$STAMP_FILE"
+}
+
+# sha256 of the concatenation of the given files.
+sha256_of() {
+    cat "$@" | sha256sum | cut -d' ' -f1
+}
+
+# Engine environment, computed once and only when an engine is actually built.
+# Sets ENGINE_ENV rather than echoing it so the cache survives (a command
+# substitution would run in a subshell).
+ENGINE_ENV=""
+engine_env() {
+    if [ -z "$ENGINE_ENV" ]; then
+        env_trt=$(trtexec --version 2>&1 | sed -n 's/.*TensorRT v\([0-9][0-9]*\).*/\1/p' | head -n 1)
+        if [ -z "$env_trt" ]; then
+            env_trt="${TENSORRT_VERSION:-unknown}"
+        fi
+        env_gpu="unavailable"
+        env_driver="unavailable"
+        if command -v nvidia-smi >/dev/null 2>&1; then
+            env_gpu=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | tr '\n' ';')
+            env_driver=$(nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null | tr '\n' ';')
+            : "${env_gpu:=unavailable}"
+            : "${env_driver:=unavailable}"
+        fi
+        ENGINE_ENV="tensorrt=$env_trt
+gpu=$env_gpu
+driver=$env_driver"
+    fi
+}
+
+# Stamp text for a flat artifact. Sets STAMP.
+STAMP=""
+flat_stamp() {
+    stamp_source="$1"
+    stamp_model="$2"
+    stamp_ext="$3"
+    stamp_target="$4"
+
+    if [ "$stamp_ext" = "xml" ] && [ -f "${stamp_source%.xml}.bin" ]; then
+        stamp_sha=$(sha256_of "$stamp_source" "${stamp_source%.xml}.bin")
+    else
+        stamp_sha=$(sha256_of "$stamp_source")
+    fi
+    STAMP="stamp=1
+kind=file
+layout=$REPOSITORY_LAYOUT
+extension=$stamp_ext
+target=$stamp_target
+source_sha256=$stamp_sha"
+    if [ "$stamp_ext" = "onnx" ] && [ "$stamp_target" = "model.plan" ]; then
+        engine_env
+        STAMP="$STAMP
+$ENGINE_ENV
+precision=$(model_override TRT_PRECISION "$stamp_model")
+shapes=$(model_override TRT_SHAPES "$stamp_model")
+extra_args=$(model_override TRT_EXTRA_ARGS "$stamp_model")"
+    fi
 }
 
 convert_onnx() {
@@ -247,10 +358,6 @@ prepare_flat() {
     extension="$3"
 
     target_dir="$MODEL_REPOSITORY/$model_name/$MODEL_VERSION"
-    if already_prepared "$target_dir"; then
-        echo "already prepared, skipping: $target_dir"
-        return 0
-    fi
 
     # Resolved before any work is done, so an unsupported format cannot leave a
     # temp directory behind.
@@ -266,6 +373,13 @@ prepare_flat() {
         *) resolve_target "$extension" "$model_name" ;;
     esac
     target_name="$RESOLVED_TARGET"
+
+    flat_stamp "$source_file" "$model_name" "$extension" "$target_name"
+    if already_prepared "$target_dir" "$target_name" "$STAMP"; then
+        echo "already prepared, skipping: $target_dir"
+        return 0
+    fi
+    flat_stamp_text="$STAMP"
 
     work_dir="$MODEL_REPOSITORY/$model_name/.prepare-tmp.$MODEL_VERSION.$$"
     rm -rf "$work_dir"
@@ -314,10 +428,12 @@ prepare_flat() {
             ;;
     esac
 
+    write_stamp "$work_dir" "$flat_stamp_text"
     publish "$work_dir" "$target_dir"
 }
 
 # Tree form is already repository-shaped, so it is copied without interpretation.
+# Version directory names are validated up front by check_staged_names.
 prepare_tree() {
     source_dir="$1"
     model_name="$2"
@@ -328,7 +444,15 @@ prepare_tree() {
         version_name=$(basename "$version_dir")
 
         target_dir="$MODEL_REPOSITORY/$model_name/$version_name"
-        if already_prepared "$target_dir"; then
+        tree_sha=$(cd "$version_dir" && find . -type f ! -name "$STAMP_FILE" | LC_ALL=C sort |
+            while IFS= read -r tree_file; do
+                printf '%s\n' "$tree_file"
+                sha256_of "$tree_file"
+            done | sha256sum | cut -d' ' -f1)
+        tree_stamp="stamp=1
+kind=tree
+tree_sha256=$tree_sha"
+        if already_prepared "$target_dir" "" "$tree_stamp"; then
             echo "already prepared, skipping: $target_dir"
             tree_prepared="yes"
             continue
@@ -338,6 +462,7 @@ prepare_tree() {
         rm -rf "$work_dir"
         mkdir -p "$work_dir"
         cp -R "$version_dir/." "$work_dir/"
+        write_stamp "$work_dir" "$tree_stamp"
         publish "$work_dir" "$target_dir"
         tree_prepared="yes"
     done
@@ -354,11 +479,74 @@ prepare_tree() {
     fi
 }
 
+# Extensions that become a model. Shared by the duplicate-name scan and the
+# dispatch below so the two cannot disagree about what counts as an artifact.
+is_model_extension() {
+    case "$1" in
+        onnx | plan | engine | xml | pte | tflite | torchscript | pt | pb | dali | json) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+check_tree_versions() {
+    for check_version in "$1"/*; do
+        [ -d "$check_version" ] || continue
+        check_name=$(basename "$check_version")
+        case "$check_name" in
+            '' | *[!0-9]*)
+                echo "error: version directory must be a non-negative integer: $check_version" >&2
+                exit 1
+                ;;
+        esac
+    done
+}
+
+# Two staged artifacts that resolve to the same model name would publish into the
+# same <model>/<version> directory, and the second would silently lose. Checked
+# for the whole staging directory before any conversion starts.
+check_staged_names() {
+    claimed=""
+    tab=$(printf '\t')
+    nl='
+'
+    for scan_entry in "$STAGE_DIR"/*; do
+        [ -e "$scan_entry" ] || continue
+        scan_base=$(basename "$scan_entry")
+        if [ -d "$scan_entry" ]; then
+            scan_name="$scan_base"
+            check_tree_versions "$scan_entry"
+        else
+            case "$scan_base" in
+                *.*) scan_ext="${scan_base##*.}" ;;
+                *) scan_ext="" ;;
+            esac
+            is_model_extension "$scan_ext" || continue
+            scan_name="${scan_base%.*}"
+        fi
+        # claimed holds "name<TAB>entry" lines.
+        scan_other=""
+        while IFS="$tab" read -r claimed_name claimed_entry; do
+            if [ "$claimed_name" = "$scan_name" ]; then
+                scan_other="$claimed_entry"
+            fi
+        done <<EOF
+$claimed
+EOF
+        if [ -n "$scan_other" ]; then
+            echo "error: staged artifacts '$scan_other' and '$scan_entry' both resolve to model name '$scan_name'" >&2
+            exit 1
+        fi
+        claimed="$claimed$scan_name$tab$scan_entry$nl"
+    done
+}
+
 # Leftovers from a run killed partway through. Removed before anything is
 # scanned so a half-written directory can never be published by a later pass.
 if [ -d "$MODEL_REPOSITORY" ]; then
     find "$MODEL_REPOSITORY" -maxdepth 2 -type d -name '.prepare-tmp.*' -exec rm -rf {} + 2>/dev/null || true
 fi
+
+check_staged_names
 
 staged_any=""
 
@@ -392,11 +580,12 @@ for entry in "$STAGE_DIR"/*; do
             # Copied after its model so it lands beside the version directory.
             continue
             ;;
-        onnx | plan | engine | xml | pte | tflite | torchscript | pt | pb | dali | json)
-            prepare_flat "$entry" "$model_name" "$extension"
-            staged_any="yes"
-            ;;
         *)
+            if is_model_extension "$extension"; then
+                prepare_flat "$entry" "$model_name" "$extension"
+                staged_any="yes"
+                continue
+            fi
             if [ "$PREPARE_IGNORE_UNKNOWN" = "true" ]; then
                 echo "ignoring unrecognized staged file: $entry"
                 continue

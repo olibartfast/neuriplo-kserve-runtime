@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Build a model artifact image from exported ONNX files.
 #
-# Exists so the image that feeds a deployment is reproducible from this repo.
-# Model files are deliberately not committed (see .gitignore and the export
-# guidance in neuriplo-tasks), so the recipe is committed instead.
+# Records how the image that feeds a deployment is built. Model files are
+# deliberately not committed (see .gitignore and the export guidance in
+# neuriplo-tasks), so the recipe is committed instead. The result is not
+# bit-for-bit reproducible: Ultralytics exports depend on its version and weights.
 #
 # Sources may be given as:
 #   - a path to an existing .onnx file
@@ -23,6 +24,7 @@ TAG=""
 IMGSZ=768
 IMPORT_CLUSTER=""
 SOURCES=()
+SEEN_BASENAMES=" "
 
 usage() {
     cat >&2 <<'USAGE'
@@ -59,6 +61,25 @@ trap 'rm -rf "$context"' EXIT
 
 for source in "${SOURCES[@]}"; do
     if [ -f "$source" ]; then
+        case "$source" in
+            *.onnx) ;;
+            *) echo "error: '$source' is not an .onnx file" >&2; exit 1 ;;
+        esac
+        base=$(basename "$source")
+    else
+        case "$source" in
+            *.onnx) echo "error: '$source' not found" >&2; exit 1 ;;
+        esac
+        base="$(basename "$source").onnx"
+    fi
+    case "$SEEN_BASENAMES" in
+        *" $base "*) echo "error: duplicate model name '$base' (sources would overwrite each other)" >&2; exit 1 ;;
+    esac
+    SEEN_BASENAMES="$SEEN_BASENAMES$base "
+done
+
+for source in "${SOURCES[@]}"; do
+    if [ -f "$source" ]; then
         echo "using existing export: $source"
         cp "$source" "$context/"
         continue
@@ -81,7 +102,11 @@ done
 
 cp "$script_dir/Dockerfile" "$context/Dockerfile"
 docker build -t "$TAG" "$context"
-echo "built $TAG with: $(cd "$context" && ls ./*.onnx | tr '\n' ' ')"
+built_list=""
+for built in "$context"/*.onnx; do
+    built_list="$built_list$(basename "$built") "
+done
+echo "built $TAG with: $built_list"
 
 if [ -n "$IMPORT_CLUSTER" ]; then
     k3d image import "$TAG" -c "$IMPORT_CLUSTER"

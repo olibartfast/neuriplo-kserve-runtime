@@ -10,9 +10,14 @@
 #     particular nothing from any other vendor's package tree.
 set -euo pipefail
 
-TENSORRT_DIR="${TENSORRT_DIR:-/home/oli/dependencies/TensorRT-10.13.3.9}"
-DALI_DIR="${DALI_DIR:-/home/oli/dependencies/dali}"
+TENSORRT_DIR="${TENSORRT_DIR:?set TENSORRT_DIR to the TensorRT install root}"
+DALI_DIR="${DALI_DIR:?set DALI_DIR to the DALI install directory}"
 BINARY="${BINARY:-$(dirname "$0")/../build/real-dali-trt/neuriplo-kserve-runtime}"
+
+if [ ! -x "$BINARY" ]; then
+    echo "error: runtime binary not found or not executable: $BINARY (set BINARY)" >&2
+    exit 1
+fi
 
 export LD_LIBRARY_PATH="${TENSORRT_DIR}/lib:${DALI_DIR}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 exec "${BINARY}" "$@"
