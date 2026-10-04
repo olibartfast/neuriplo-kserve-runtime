@@ -20,6 +20,14 @@ the "Architecture And Design Pattern Evolution" section in `plan/ROADMAP.md` for
 patterns. Prefer extending existing Strategy/factory/adapter boundaries over adding new
 frameworks unless the roadmap calls for them.
 
+## Specs And Planning Entry Point
+
+`specs/` is the project constitution (`mission.md`, `tech-stack.md`, `roadmap.md`) and the
+planning entry point; start there. `plan/` remains the historical implementation record.
+Active work that is multi-phase, changes public behavior or architecture, or has low
+reversibility needs a dated `specs/YYYY-MM-DD-feature-name/` packet (requirements, plan,
+validation) before implementation; cross-repo work uses a neuriplo-platform packet.
+
 ## MANDATORY: Agent Guide Maintenance
 
 **Agents must keep this file current.** When your task changes any item below, update the
