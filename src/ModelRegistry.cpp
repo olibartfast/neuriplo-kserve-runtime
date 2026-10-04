@@ -89,9 +89,12 @@ ModelRegistry::ModelRegistry(const RuntimeConfig &config, ExecutorFactory factor
     loadModel(config, std::move(factory));
 }
 
-ModelRegistry::ModelRegistry(const std::vector<RuntimeConfig> &configs)
-    : log_payloads_(configs.empty() ? false : configs.front().log_payloads),
-      tokens_per_char_(configs.empty() ? 0.25 : configs.front().tokens_per_char) {
+ModelRegistry::ModelRegistry(const std::vector<RuntimeConfig> &configs, bool explicit_control_mode,
+                             const RuntimeConfig &defaults)
+    : log_payloads_(configs.empty() ? defaults.log_payloads : configs.front().log_payloads),
+      tokens_per_char_(configs.empty() ? defaults.tokens_per_char
+                                       : configs.front().tokens_per_char),
+      repository_mode_(true), explicit_control_mode_(explicit_control_mode) {
     // Ensembles are loaded after plain models because a pipeline's steps are
     // resolved against models already in the registry.
     for (const auto &config : configs) {
@@ -618,7 +621,11 @@ bool ModelRegistry::readyVersion(const std::string &model_name, const std::strin
 bool ModelRegistry::allReady() const {
     std::shared_lock lock(models_mutex_);
     if (models_.empty()) {
-        return false;
+        // Explicit control mode starts (and may return to) empty by design;
+        // the server is ready to accept load requests even though nothing is
+        // loaded yet. Every other mode treats an empty registry as not-ready
+        // -- there is nothing to serve.
+        return explicit_control_mode_;
     }
     bool any_counted = false;
     for (const auto &entry : models_) {
@@ -627,6 +634,13 @@ bool ModelRegistry::allReady() const {
             // Still coming up for the first time (a load's placeholder): a
             // load in progress must not make the whole server, and every
             // other already-loaded model with it, report not-ready.
+            continue;
+        }
+        if (repository_mode_ && snapshot && snapshot->state == ModelState::Failed) {
+            // Reported through /v2/repository/index (UNAVAILABLE + reason)
+            // instead: one bad model in a repository must not take the rest
+            // of the server's readiness down with it. Single-model mode
+            // keeps strict readiness -- it falls through to the check below.
             continue;
         }
         any_counted = true;
@@ -712,4 +726,8 @@ double ModelRegistry::tokensPerChar() const {
 
 size_t ModelRegistry::retiredSchedulerCount() const {
     return retire_queue_.pendingCount();
+}
+
+bool ModelRegistry::repositoryMode() const {
+    return repository_mode_;
 }
