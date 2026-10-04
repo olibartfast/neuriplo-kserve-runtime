@@ -248,3 +248,82 @@ TEST_CASE(parse_runtime_config_model_version_env) {
     REQUIRE_EQ(config.model_version, "3");
     REQUIRE_EQ(config.deployment, "prod");
 }
+
+// P2-B2 B-16/C-8: an explicit single-model flag alongside --models must fail
+// fast naming both, not silently pick one or the other.
+TEST_CASE(parse_runtime_config_rejects_model_path_with_models) {
+    bool threw = false;
+    std::string message;
+    try {
+        (void)parse({"neuriplo-kserve-runtime", "--models", "/repo", "--model-path", "/one.onnx"});
+    } catch (const std::invalid_argument &error) {
+        threw = true;
+        message = error.what();
+    }
+    REQUIRE(threw);
+    REQUIRE(message.find("--model-path") != std::string::npos);
+    REQUIRE(message.find("--models") != std::string::npos ||
+            message.find("--model-repository") != std::string::npos);
+}
+
+TEST_CASE(parse_runtime_config_rejects_backend_and_model_name_with_models) {
+    bool threw = false;
+    try {
+        (void)parse({"neuriplo-kserve-runtime", "--models", "/repo", "--backend", "stub",
+                     "--model-name", "x"});
+    } catch (const std::invalid_argument &) {
+        threw = true;
+    }
+    REQUIRE(threw);
+}
+
+// The conflict must be caught the same way when --models comes from the
+// MODEL_REPOSITORY env var an image sets and --model-path is given on the
+// command line -- neither side should silently win.
+TEST_CASE(parse_runtime_config_rejects_model_path_cli_with_model_repository_env) {
+    bool threw = false;
+    try {
+        (void)parse({"neuriplo-kserve-runtime", "--model-path", "/one.onnx"},
+                    testEnvironment({{"MODEL_REPOSITORY", "/repo"}}));
+    } catch (const std::invalid_argument &) {
+        threw = true;
+    }
+    REQUIRE(threw);
+}
+
+// --model-version alone, without a repository, remains valid (regression
+// guard for the conflict check above).
+TEST_CASE(parse_runtime_config_model_version_without_repository_still_valid) {
+    const auto config = parse({"neuriplo-kserve-runtime", "--model-version", "2"});
+    REQUIRE_EQ(config.model_version, "2");
+}
+
+// C2 regression: a deployment manifest commonly sets MODEL_REPOSITORY and
+// MODEL_VERSION in the same env block (e.g. deploy/k3d/runtime-trt.yaml) --
+// the latter is not an operator asking for a conflicting single-model
+// version, so this combination must not crash-loop the pod.
+TEST_CASE(parse_runtime_config_env_model_repository_and_model_version_does_not_throw) {
+    bool threw = false;
+    try {
+        (void)parse({"neuriplo-kserve-runtime"},
+                    testEnvironment({{"MODEL_REPOSITORY", "/repo"}, {"MODEL_VERSION", "3"}}));
+    } catch (const std::invalid_argument &) {
+        threw = true;
+    }
+    REQUIRE(!threw);
+}
+
+// C2: an operator who actually types --model-version on the command line
+// next to --models/--model-repository still gets the fail-fast conflict.
+TEST_CASE(parse_runtime_config_rejects_cli_model_version_with_models) {
+    bool threw = false;
+    std::string message;
+    try {
+        (void)parse({"neuriplo-kserve-runtime", "--models", "/repo", "--model-version", "3"});
+    } catch (const std::invalid_argument &error) {
+        threw = true;
+        message = error.what();
+    }
+    REQUIRE(threw);
+    REQUIRE(message.find("--model-version") != std::string::npos);
+}

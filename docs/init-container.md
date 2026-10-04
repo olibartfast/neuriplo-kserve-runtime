@@ -404,8 +404,24 @@ perfectly well-formed and simply have no backend here.
 - Version directories are **numeric**; the highest is served. Comparison is
   numeric, not lexical — `10` beats `9`, and leading zeros do not change rank.
 - A non-numeric version directory is skipped with a warning, not an error.
-- A version directory with no recognized model file is skipped with a warning.
-- One malformed model never stops the rest of the repository from serving.
+- A version directory with no recognized model file is skipped with a warning,
+  and the next-highest version that does hold one is served instead -- an
+  empty highest-numbered directory does not drop the whole model.
+- Two version directories that differ only by leading zeros (`01` and `1`) are
+  the same version; the reported version is always the canonicalized form
+  (`1`, never `01`), and a duplicate is a warning plus a deterministic pick,
+  not an arbitrary one.
+- One malformed model never stops the rest of the repository from serving --
+  and one *loaded* model's later failure (a reload, for instance) is reported
+  through `/v2/repository/index` (state `UNAVAILABLE` plus a reason) without
+  making `/v2/health/ready` report the whole server not ready. Single-model
+  mode (`--model-path`, no `--models`) keeps strict readiness: there is only
+  one model, so its failure is the server's failure.
+- Activating a version (`POST /v2/admin/models/<name>/versions/<version>/activate`)
+  on a repository-mode model resolves `<root>/<model-name>/<version>/` through
+  the scanner again, not the slot's current file -- it never serves one
+  version's weights under another version's label. A version with nothing
+  servable under it is a 404.
 
 ### `config.pbtxt`
 
@@ -515,6 +531,19 @@ single-model mode (`--model-path`) or loaded through
 `.pb` maps to `libtensorflow`, but a TensorFlow SavedModel is a *directory*
 (`model.savedmodel/`), and the scanner only inspects files inside a version
 directory. A frozen-graph `.pb` works; a SavedModel does not.
+
+### Ensembles do not inherit the server-wide batching defaults
+
+`max_batch_size 1` / dynamic batching off is contractual for an ensemble
+(`.json`, backend `ensemble`) -- encoded images have no common shape, so
+batching them is meaningless, and the executor refuses to build otherwise.
+A `--dynamic-batching-enabled`/`--max-batch-size` flag set for the tensor
+models in a repository is a server-wide default meant for those models, not
+for an ensemble discovered or loaded alongside them: discovery, and an admin
+load/reload body that does not itself name `dynamic_batching_enabled` or
+`max_batch_size`, force both off for an ensemble rather than inheriting the
+default and failing to load. Only a request that explicitly asks for batching
+on that ensemble is rejected.
 
 ## Running it
 

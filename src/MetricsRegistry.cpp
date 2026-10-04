@@ -332,9 +332,22 @@ std::string MetricsRegistry::renderMetrics() const {
     out += "# HELP neuriplo_http_requests_total Total HTTP requests with method/status labels\n";
     out += "# TYPE neuriplo_http_requests_total counter\n";
     for (const auto &[model, statuses] : requests_by_status_) {
+        // Each model's own version, not the single global model_version_
+        // (which is only ever one model's version in repository mode, and
+        // would otherwise mislabel every other model's metric lines with
+        // it). scheduler_metrics_by_model_ is populated per model by
+        // KServeRuntime::metricsPage() before renderMetrics() runs; fall
+        // back to the global label only for a model that hasn't gone
+        // through that (e.g. single-model mode, where it IS that model's
+        // version).
+        std::string version = model_version_;
+        if (const auto found = scheduler_metrics_by_model_.find(model);
+            found != scheduler_metrics_by_model_.end()) {
+            version = found->second.first;
+        }
         for (const auto &[status, count] : statuses) {
             std::map<std::string, std::string> labels = {
-                {"model", model}, {"version", model_version_}, {"status", status}};
+                {"model", model}, {"version", version}, {"status", status}};
             if (!deployment_.empty()) {
                 labels["deployment"] = deployment_;
             }

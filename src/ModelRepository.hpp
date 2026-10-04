@@ -2,7 +2,9 @@
 
 #include "RuntimeConfig.hpp"
 
+#include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 // Discovery for a Triton-style model repository tree:
@@ -37,3 +39,28 @@ std::string backendForModelFile(const std::string &path);
 std::vector<RuntimeConfig> scanModelRepository(const std::string &root,
                                                const RuntimeConfig &defaults,
                                                std::vector<std::string> &warnings);
+
+struct ResolvedRepositoryVersion {
+    std::string model_path;
+    std::string backend;
+    // The canonical (leading-zero-stripped) version label -- what the
+    // caller should register and report, never the raw on-disk directory
+    // name (e.g. "01").
+    std::string canonical_version;
+};
+
+// Resolves exactly one version of a repository model by canonical version
+// value, matching the same version grouping/pick that scanModelRepository
+// uses (so a duplicate such as "01"/"1" resolves to the same directory here
+// as it did at scan time). `version` is untrusted request input (it comes
+// straight off a URL): it is accepted only when isNumericVersion(version)
+// holds, and is never joined onto a filesystem path -- it is compared, after
+// canonicalizing, against directory names this function itself discovers by
+// listing `root`/`model_name`. This is what keeps "..", "../x/1" and similar
+// from ever reaching the filesystem as a path segment. Returns nullopt when
+// the version is not a plain numeric label, `model_name` is not a plain
+// component ("", ".", ".."), or the matching version holds nothing
+// servable -- the caller turns that into a 404.
+std::optional<ResolvedRepositoryVersion>
+resolveRepositoryModelVersion(const std::string &root, const std::string &model_name,
+                              const std::string &version);

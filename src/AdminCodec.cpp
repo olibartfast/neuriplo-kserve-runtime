@@ -1,5 +1,7 @@
 #include "AdminCodec.hpp"
 
+#include "PipelineExecutor.hpp"
+
 #include <nlohmann/json.hpp>
 
 #include <optional>
@@ -166,17 +168,34 @@ std::optional<std::string> applyCommonFields(const Json &json, RuntimeConfig &co
     if (!readBool(json, "use_gpu", config.use_gpu, &type_error) && !type_error.empty()) {
         return type_error;
     }
-    if (!readBool(json, "dynamic_batching_enabled", config.dynamic_batching_enabled, &type_error) &&
-        !type_error.empty()) {
+    const bool dynamic_batching_provided =
+        readBool(json, "dynamic_batching_enabled", config.dynamic_batching_enabled, &type_error);
+    if (!dynamic_batching_provided && !type_error.empty()) {
         return type_error;
     }
 
+    bool max_batch_size_provided = false;
     if (readSizeT(json, "max_batch_size", config.max_batch_size, &type_error)) {
+        max_batch_size_provided = true;
         if (config.max_batch_size < 1) {
             return std::string("max_batch_size must be >= 1");
         }
     } else if (!type_error.empty()) {
         return type_error;
+    }
+
+    if (config.backend == pipelineBackendId() && !dynamic_batching_provided &&
+        !max_batch_size_provided) {
+        // max_batch_size 1 / batching off is contractual for ensembles
+        // (PipelineExecutor rejects anything else), not a tuning default. A
+        // server-wide --dynamic-batching-enabled/--max-batch-size default
+        // inherited from `defaults` (the model's prior config, or the CLI
+        // defaults) was set for the tensor models it tunes, not for this
+        // ensemble; only a request that names these fields on this model
+        // itself is an actual ask for batching on an ensemble, and that is
+        // still rejected below/at load time.
+        config.dynamic_batching_enabled = false;
+        config.max_batch_size = 1;
     }
 
     if (readInt64(json, "max_queue_delay_us", config.max_queue_delay_us, &type_error)) {
