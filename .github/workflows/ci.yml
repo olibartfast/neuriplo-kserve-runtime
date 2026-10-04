@@ -90,6 +90,24 @@ jobs:
       - name: Run version command under valgrind
         run: valgrind --leak-check=full --error-exitcode=1 ./build/debug/neuriplo-kserve-runtime --version
 
+  debug-tasks:
+    name: Debug + task layer (ensemble preprocess/postprocess) build and test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build tools
+        run: sudo apt-get update && sudo apt-get install -y build-essential cmake ninja-build ccache
+      - name: Set up ccache
+        uses: hendrikmuhs/ccache-action@v1
+        with:
+          key: ${{ github.job }}-${{ runner.os }}
+      - name: Configure
+        run: cmake --preset debug -B build/debug-tasks -DNEURIPLO_RUNTIME_ENABLE_TASKS=ON -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+      - name: Build
+        run: cmake --build build/debug-tasks --parallel
+      - name: Unit tests
+        run: ctest --test-dir build/debug-tasks
+
   grpc:
     name: gRPC V2 build and test
     runs-on: ubuntu-latest
@@ -125,6 +143,31 @@ jobs:
         run: cmake --build --preset debug --parallel --target neuriplo-kserve-runtime
       - name: Run curl smoke test
         run: scripts/e2e-stub.sh
+
+  prepare-repository:
+    name: Model repository preparer
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # No GPU, no TensorRT, no runtime binary: the test stubs trtexec and the
+      # server on PATH, because what is under test is the dispatch and the tree
+      # it produces.
+      - name: Install shellcheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+      - name: Lint prepare scripts
+        run: shellcheck deploy/prepare/prepare-repository.sh scripts/test-prepare-repository.sh deploy/models/build-model-image.sh scripts/serve-onnx-gpu.sh scripts/serve-dali-trt.sh
+      - name: Run preparer tests
+        run: scripts/test-prepare-repository.sh
+      # The preparer is a portable /bin/sh script, and the serving image's shell
+      # is busybox ash rather than bash. Run the suite again with the preparer
+      # executed by dash and by busybox ash (PREPARE_SHELL) so a bashism cannot
+      # pass here and fail in the container.
+      - name: Install dash and busybox
+        run: sudo apt-get install -y dash busybox-static
+      - name: Re-run under dash
+        run: PREPARE_SHELL=dash scripts/test-prepare-repository.sh
+      - name: Re-run under busybox ash
+        run: PREPARE_SHELL="busybox sh" scripts/test-prepare-repository.sh
 
   real-onnx-grpc:
     name: Real neuriplo ONNX + gRPC build and test

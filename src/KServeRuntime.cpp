@@ -5,6 +5,7 @@
 #include "KServeErrors.hpp"
 #include "KServeV2Codec.hpp"
 #include "Logging.hpp"
+#include "ModelRepository.hpp"
 #include "OpenAiCodec.hpp"
 #include "RequestPipeline.hpp"
 #include "RuntimeVersion.hpp"
@@ -208,6 +209,9 @@ HttpResponse KServeRuntime::handle(const HttpRequest &request) const {
     if (startsWith(request.path, "/v2/admin/")) {
         return handleAdmin(request);
     }
+    if (startsWith(request.path, "/v2/repository/")) {
+        return handleRepository(request);
+    }
 
     const auto route_tail = extractModelRouteTail(request.path);
     if (!route_tail.empty()) {
@@ -275,7 +279,13 @@ HttpResponse KServeRuntime::metricsPage() const {
     const auto models = registry_.listModels();
     for (const auto &name : models) {
         std::string version = registry_.defaultVersion(name).value_or("1");
-        if (models.size() == 1) {
+        // The global label override is only correct in genuine single-model
+        // mode, where it IS that one model's version. A one-model repository
+        // (or explicit mode with exactly one model loaded) also has
+        // models.size() == 1 but the global label is the CLI/default
+        // version, not necessarily this model's -- e.g. a one-model
+        // repository serving version "3" would otherwise be mislabeled "1".
+        if (models.size() == 1 && !registry_.repositoryMode()) {
             version = metrics_.modelVersionLabel();
         }
         metrics_.setSchedulerMetrics(name, version, registry_.schedulerMetrics(name));
@@ -962,6 +972,194 @@ HttpResponse KServeRuntime::embeddings(const HttpRequest &request) const {
     return json(200, embeddingResponseJson(resp));
 }
 
+HttpResponse KServeRuntime::handleRepository(const HttpRequest &request) const {
+    constexpr auto index_path = "/v2/repository/index";
+    constexpr auto models_prefix = "/v2/repository/models/";
+
+    if (request.path == index_path) {
+        if (request.method != "POST") {
+            return error(405, KServeErrors::MethodNotAllowed,
+                         "method not allowed: use POST /v2/repository/index");
+        }
+        // The optional body is the KServe model-repository extension's
+        // ready filter: {"ready": true} returns only models currently
+        // serving. Absent/empty body means no filter; malformed JSON is a
+        // client error, not silently ignored.
+        bool ready_filter = false;
+        if (!request.body.empty()) {
+            Json filter;
+            try {
+                filter = Json::parse(request.body);
+            } catch (const std::exception &parse_error) {
+                return error(400, KServeErrors::InvalidArgument,
+                             std::string("invalid JSON: ") + parse_error.what());
+            }
+            if (filter.contains("ready")) {
+                if (!filter["ready"].is_boolean()) {
+                    return error(400, KServeErrors::InvalidArgument, "ready must be a boolean");
+                }
+                ready_filter = filter["ready"].get<bool>();
+            }
+        }
+
+        // The index lists what the repository offers, not only what is loaded --
+        // in explicit control mode a client needs to see a model before it can
+        // ask for it. Unloaded catalog entries report UNAVAILABLE.
+        auto names = registry_.listModels();
+        for (const auto &name : registry_.catalogModels()) {
+            if (std::find(names.begin(), names.end(), name) == names.end()) {
+                names.push_back(name);
+            }
+        }
+        std::sort(names.begin(), names.end());
+
+        Json models = Json::array();
+        for (const auto &name : names) {
+            const auto snapshot = registry_.findHandle(name);
+            // A catalog entry with no slot is offered but not serving, which the
+            // extension spells UNAVAILABLE.
+            auto state = snapshot ? snapshot->state : ModelState::Unavailable;
+            // A slot reaches Ready before its scheduler necessarily is;
+            // reporting READY there would invite traffic that cannot be served.
+            if (state == ModelState::Ready && !snapshot->isReady()) {
+                state = ModelState::Unavailable;
+            }
+            // The KServe model-repository extension has no FAILED state: a
+            // model whose load failed is UNAVAILABLE, same as a catalogued
+            // but unloaded one. The reason field (below) is what actually
+            // says why -- the extension's state enum does not.
+            if (state == ModelState::Failed) {
+                state = ModelState::Unavailable;
+            }
+            if (ready_filter && state != ModelState::Ready) {
+                continue;
+            }
+            Json entry;
+            entry["name"] = name;
+            auto version = registry_.defaultVersion(name).value_or(std::string());
+            if (version.empty()) {
+                if (const auto catalog = registry_.catalogConfig(name)) {
+                    version = catalog->model_version;
+                }
+            }
+            entry["version"] = version;
+            entry["state"] = modelStateName(state);
+            entry["reason"] =
+                snapshot && snapshot->load_error ? *snapshot->load_error : std::string();
+            models.push_back(std::move(entry));
+        }
+        // A directory name reaching the scanner is not guaranteed to be valid
+        // UTF-8; nlohmann::json::dump() throws on that by default, which would
+        // turn one oddly-named model into a 500 for the whole index. Replacing
+        // invalid sequences keeps this endpoint non-throwing instead.
+        return json(200, models.dump(-1, ' ', false, Json::error_handler_t::replace));
+    }
+
+    if (!startsWith(request.path, models_prefix)) {
+        return error(404, KServeErrors::NotFound, "repository route not found");
+    }
+
+    const auto tail = request.path.substr(std::string(models_prefix).size());
+    const auto slash = tail.find('/');
+    if (slash == std::string::npos) {
+        return error(404, KServeErrors::NotFound, "repository route not found");
+    }
+    const auto model_name = tail.substr(0, slash);
+    const auto action = tail.substr(slash + 1);
+    if (model_name.empty()) {
+        return error(400, KServeErrors::InvalidArgument, "model name is required");
+    }
+    // The action names a route at all before the method is checked against
+    // it: a GET (or any other method) on an unknown action is "no such
+    // route" (404), not "wrong method for a route that doesn't exist" (405).
+    if (action != "load" && action != "unload") {
+        return error(404, KServeErrors::NotFound, "repository route not found");
+    }
+    if (request.method != "POST") {
+        return error(405, KServeErrors::MethodNotAllowed, "method not allowed: use POST");
+    }
+
+    if (action == "unload") {
+        if (registry_.unloadModel(model_name)) {
+            return json(200, "{}");
+        }
+        if (registry_.loadOrReloadInProgress(model_name)) {
+            return error(409, KServeErrors::Unavailable, "load/reload in progress: " + model_name);
+        }
+        return error(404, KServeErrors::ModelNotFound, "model not found: " + model_name);
+    }
+
+    // The extension addresses models by name alone and expects the server to
+    // resolve that name against a model store. A repository tree is that store:
+    // its catalog entry supplies backend, path and version. Failing that, an
+    // already-loaded model reloads from the config it was last loaded with. A
+    // name in neither place must carry its config in the body, the same fields
+    // /v2/admin/models/load takes.
+    const auto loaded = registry_.modelConfig(model_name);
+    const auto catalog = registry_.catalogConfig(model_name);
+    // A loaded model's own config wins over the catalog so that a reload keeps
+    // any overrides it was last loaded with.
+    RuntimeConfig defaults =
+        loaded.has_value() ? *loaded : (catalog.has_value() ? *catalog : RuntimeConfig{});
+    const bool known = loaded.has_value();
+    const auto parsed = parseReloadModelRequest(request.body, defaults);
+    if (!parsed.ok) {
+        return error(400, KServeErrors::InvalidArgument, parsed.error_message);
+    }
+    // A name that is neither already loaded nor in the repository catalog has
+    // nothing to fall back to: it must not silently load against
+    // RuntimeConfig's stub defaults just because the body parsed (e.g. an
+    // empty object "{}", which is what tritonclient's load call sends). The
+    // check is on the parsed backend, not the raw body text, so "{}" and ""
+    // are rejected alike.
+    if (!known && !catalog.has_value() && !parsed.backend_provided) {
+        return error(404, KServeErrors::ModelNotFound,
+                     "model is not in the repository and not loaded: " + model_name +
+                         "; provide its backend and model_path in the request body to load a "
+                         "model the repository does not contain");
+    }
+    RuntimeConfig config = parsed.config;
+    config.model_name = model_name;
+
+    const bool registered =
+        known ? registry_.reload(model_name, config) : registry_.loadModel(config);
+    if (registered) {
+        if (registry_.ready(model_name)) {
+            metrics_.recordModelLoadSuccess(model_name, config.backend);
+            return json(200, "{}");
+        }
+        // The slot registered but the executor never came up; surface the load
+        // error and drop the dead slot, matching the admin load path.
+        std::string message = "failed to load model: " + model_name;
+        if (const auto handle = registry_.findHandle(model_name); handle && handle->load_error) {
+            message = *handle->load_error;
+        }
+        registry_.unloadModel(model_name);
+        metrics_.recordModelLoadFailure(model_name, config.backend);
+        return error(409, KServeErrors::Unavailable, message);
+    }
+    if (!known && registry_.ready(model_name)) {
+        // The narrow race this "known" check cannot close by itself: a
+        // concurrent request loaded this exact name between the
+        // modelConfig() lookup above and the loadModel() call just now, so
+        // loadModel() correctly refused (it is not this call's slot to
+        // manage) -- but the model is loaded, which is what this call
+        // asked for too. Not a 409.
+        metrics_.recordModelLoadSuccess(model_name, config.backend);
+        return json(200, "{}");
+    }
+    // A known model's failed reload leaves it untouched and Ready (see
+    // ModelLifecycle::finishReload); there is no dead slot to drop, but the
+    // caller should still see why the attempt failed rather than a generic
+    // message.
+    std::string message = "failed to load model: " + model_name;
+    if (const auto handle = registry_.findHandle(model_name); handle && handle->load_error) {
+        message = *handle->load_error;
+    }
+    metrics_.recordModelLoadFailure(model_name, config.backend);
+    return error(409, KServeErrors::Unavailable, message);
+}
+
 HttpResponse KServeRuntime::handleAdmin(const HttpRequest &request) const {
     constexpr auto prefix = "/v2/admin/models";
     if (!startsWith(request.path, prefix)) {
@@ -1013,8 +1211,28 @@ HttpResponse KServeRuntime::handleAdmin(const HttpRequest &request) const {
             return error(409, KServeErrors::Unavailable, message);
         }
         metrics_.recordModelLoadFailure(parsed.config.model_name, parsed.config.backend);
+        // loadModel() returns false here either because the name already had
+        // a settled, Ready slot before this call (the caller wants reload,
+        // not load) or because this call waited on a same-name build that
+        // was already in flight and that build ended up not Ready -- in
+        // which case "already loaded" would be misleading: surface why the
+        // build that actually resolved it failed instead.
+        if (const auto handle = registry_.findHandle(parsed.config.model_name); handle) {
+            if (!handle->isReady()) {
+                return error(409, KServeErrors::Unavailable,
+                             handle->load_error.value_or("concurrent load failed: " +
+                                                         parsed.config.model_name));
+            }
+        } else {
+            // The slot this call waited on was dropped by its owner after a
+            // failed build (see unloadModel()'s Failed-without-scheduler
+            // path): there is nothing loaded to "reload", so saying so would
+            // be misleading.
+            return error(409, KServeErrors::Unavailable,
+                         "concurrent load failed: " + parsed.config.model_name);
+        }
         return error(409, KServeErrors::Unavailable,
-                     "failed to load model: " + parsed.config.model_name);
+                     "model already loaded; use reload: " + parsed.config.model_name);
     }
 
     const auto admin_tail = request.path.size() > std::string(prefix).size() + 1
@@ -1033,6 +1251,9 @@ HttpResponse KServeRuntime::handleAdmin(const HttpRequest &request) const {
         if (registry_.unloadModel(model_name)) {
             return json(200, R"({"unloaded":true})");
         }
+        if (registry_.loadOrReloadInProgress(model_name)) {
+            return error(409, KServeErrors::Unavailable, "load/reload in progress: " + model_name);
+        }
         return error(404, KServeErrors::ModelNotFound, "model not found: " + model_name);
     }
 
@@ -1049,7 +1270,14 @@ HttpResponse KServeRuntime::handleAdmin(const HttpRequest &request) const {
         if (registry_.reload(model_name, reload_config)) {
             return json(200, R"({"reloaded":true})");
         }
-        return error(409, KServeErrors::Unavailable, "failed to reload model: " + model_name);
+        // A failed reload leaves the serving model untouched and Ready (see
+        // ModelLifecycle::finishReload); surface why it failed instead of a
+        // generic message.
+        std::string message = "failed to reload model: " + model_name;
+        if (const auto handle = registry_.findHandle(model_name); handle && handle->load_error) {
+            message = *handle->load_error;
+        }
+        return error(409, KServeErrors::Unavailable, message);
     }
 
     constexpr auto versions_prefix = "versions/";
@@ -1064,19 +1292,67 @@ HttpResponse KServeRuntime::handleAdmin(const HttpRequest &request) const {
             return error(400, KServeErrors::InvalidArgument, "version is required");
         }
 
-        const auto switch_defaults = registry_.modelConfig(model_name).value_or(defaults);
+        const auto current_config = registry_.modelConfig(model_name);
+        const auto catalog_config = registry_.catalogConfig(model_name);
+        // A repository-mode model's RuntimeConfig keeps the scan root it was
+        // discovered under (see ModelRepository.cpp), so its presence here
+        // distinguishes a repository model from a single-model/explicit-body
+        // one, for which there is nothing on disk to resolve a version
+        // against beyond the request body.
+        const std::string repository_root =
+            current_config && !current_config->model_repository.empty()
+                ? current_config->model_repository
+                : (catalog_config && !catalog_config->model_repository.empty()
+                       ? catalog_config->model_repository
+                       : std::string());
+
+        const auto switch_defaults = current_config.value_or(defaults);
         const auto parsed = parseSwitchVersionRequest(request.body, switch_defaults);
         if (!parsed.ok) {
             return error(400, KServeErrors::InvalidArgument, parsed.error_message);
         }
+        if (parsed.version != version) {
+            return error(400, KServeErrors::InvalidArgument,
+                         "version mismatch: URL version '" + version +
+                             "' does not match body version '" + parsed.version + "'");
+        }
         RuntimeConfig switch_config = parsed.config;
         switch_config.model_name = model_name;
         switch_config.model_version = version;
-        if (registry_.switchVersion(model_name, version, switch_config)) {
+
+        // The version actually registered/reported: the raw URL label by
+        // default, or -- for a repository model -- the canonical version the
+        // scanner resolves it to, so "01" activates and registers as "1".
+        std::string registered_version = version;
+
+        if (!repository_root.empty()) {
+            // Resolve <root>/<model_name>/<version>/ through the scanner
+            // rather than reusing the slot's current model_path: that path
+            // belongs to whichever version is currently active, so without
+            // this, activating version 3 would go on serving version 1's
+            // weights under the "3" label. A version with nothing servable
+            // under it -- including a non-numeric or path-traversal string,
+            // which resolveRepositoryModelVersion refuses outright -- is a
+            // 404, not a reload of the wrong file.
+            const auto resolved =
+                resolveRepositoryModelVersion(repository_root, model_name, version);
+            if (!resolved) {
+                return error(404, KServeErrors::NotFound,
+                             "version " + version +
+                                 " has no recognized model file for model: " + model_name);
+            }
+            switch_config.model_path = resolved->model_path;
+            switch_config.backend = resolved->backend;
+            switch_config.model_version = resolved->canonical_version;
+            registered_version = resolved->canonical_version;
+        }
+
+        if (registry_.switchVersion(model_name, registered_version, switch_config)) {
             return json(200, R"({"activated":true})");
         }
         return error(409, KServeErrors::Unavailable,
-                     "failed to activate version " + version + " for model: " + model_name);
+                     "failed to activate version " + registered_version +
+                         " for model: " + model_name);
     }
 
     return error(404, KServeErrors::NotFound, "admin route not found");

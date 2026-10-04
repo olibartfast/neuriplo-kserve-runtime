@@ -12,6 +12,26 @@
 
 namespace {
 
+// Accepts "--flag=value" by rewriting it to "--flag" "value" before parsing.
+// Unknown arguments throw, so without this the equals form -- which is how the
+// deployment procedure and most kubectl manifests write flags -- would abort
+// startup with "unknown argument" instead of being understood.
+std::vector<std::string> normalizeArguments(int argc, char **argv) {
+    std::vector<std::string> args;
+    args.reserve(static_cast<size_t>(argc));
+    for (int i = 0; i < argc; ++i) {
+        const std::string arg = argv[i];
+        const auto equals = arg.find('=');
+        if (arg.rfind("--", 0) == 0 && equals != std::string::npos && equals > 2) {
+            args.push_back(arg.substr(0, equals));
+            args.push_back(arg.substr(equals + 1));
+        } else {
+            args.push_back(arg);
+        }
+    }
+    return args;
+}
+
 std::string requireValue(int &index, int argc, char **argv, const std::string &flag) {
     if (index + 1 >= argc) {
         throw std::invalid_argument("missing value for " + flag);
@@ -142,16 +162,49 @@ RuntimeConfig parseRuntimeConfig(int argc, char **argv) {
 RuntimeConfig parseRuntimeConfig(int argc, char **argv, const RuntimeEnvironment &environment) {
     RuntimeConfig config;
 
+    const auto normalized = normalizeArguments(argc, argv);
+    std::vector<char *> normalized_argv;
+    normalized_argv.reserve(normalized.size());
+    for (const auto &arg : normalized) {
+        normalized_argv.push_back(const_cast<char *>(arg.c_str()));
+    }
+    argc = static_cast<int>(normalized_argv.size());
+    argv = normalized_argv.data();
+
+    // Tracks whether these single-model flags were given explicitly (CLI),
+    // as opposed to left at their default -- a repository tree supplies its
+    // own name/path/backend/version per model, so an explicit single-model
+    // flag alongside it is a configuration mistake the deployment author
+    // almost certainly did not intend, not a priority to silently resolve.
+    bool model_name_explicit = false;
+    bool model_path_explicit = false;
+    bool backend_explicit = false;
+    // Deliberately CLI-only, unlike model_version_explicit (which the
+    // MODEL_VERSION env var also sets): a deployment manifest commonly sets
+    // MODEL_REPOSITORY and MODEL_VERSION together in the same env block (the
+    // latter meant for a non-repository fallback path, or simply inherited
+    // from a shared template), and that combination must not fail fast --
+    // only an operator who typed --model-version on the command line next to
+    // --models actually asked for the conflicting thing.
+    bool model_version_cli = false;
+
     applyStringEnvironmentDefault(config.model_name, environment, "MODEL_NAME");
-    applyStringEnvironmentDefault(config.model_version, environment, "MODEL_VERSION");
+    if (const auto env_version = environment.get("MODEL_VERSION");
+        env_version.has_value() && !env_version->empty()) {
+        config.model_version = *env_version;
+        config.model_version_explicit = true;
+    }
     applyStringEnvironmentDefault(config.model_path, environment, "MODEL_PATH");
+    applyStringEnvironmentDefault(config.model_repository, environment, "MODEL_REPOSITORY");
+    applyStringEnvironmentDefault(config.model_control_mode, environment, "MODEL_CONTROL_MODE");
     applyStringEnvironmentDefault(config.backend, environment, "BACKEND");
     applyStringEnvironmentDefault(config.plugin_dir, environment, "NEURIPLO_PLUGIN_DIR");
     applyStringEnvironmentDefault(config.storage_uri, environment, "STORAGE_URI");
     applyStringEnvironmentDefault(config.deployment, environment, "DEPLOYMENT");
     applySizeEnvironmentDefault(config.max_request_bytes, environment, "MAX_REQUEST_BYTES");
     applyDoubleEnvironmentDefault(config.tokens_per_char, environment, "TOKENS_PER_CHAR");
-    if (config.model_path.empty() && environment.pathExists("/mnt/models")) {
+    if (config.model_path.empty() && config.model_repository.empty() &&
+        environment.pathExists("/mnt/models")) {
         config.model_path = "/mnt/models";
     }
 
@@ -168,12 +221,21 @@ RuntimeConfig parseRuntimeConfig(int argc, char **argv, const RuntimeEnvironment
                 static_cast<size_t>(std::stoull(requireValue(i, argc, argv, arg)));
         } else if (arg == "--model-name") {
             config.model_name = requireValue(i, argc, argv, arg);
+            model_name_explicit = true;
         } else if (arg == "--model-version") {
             config.model_version = requireValue(i, argc, argv, arg);
+            config.model_version_explicit = true;
+            model_version_cli = true;
         } else if (arg == "--model-path") {
             config.model_path = requireValue(i, argc, argv, arg);
+            model_path_explicit = true;
+        } else if (arg == "--model-repository" || arg == "--models") {
+            config.model_repository = requireValue(i, argc, argv, arg);
+        } else if (arg == "--model-control-mode") {
+            config.model_control_mode = requireValue(i, argc, argv, arg);
         } else if (arg == "--backend") {
             config.backend = requireValue(i, argc, argv, arg);
+            backend_explicit = true;
         } else if (arg == "--plugin-dir") {
             config.plugin_dir = requireValue(i, argc, argv, arg);
         } else if (arg == "--deployment") {
@@ -195,6 +257,8 @@ RuntimeConfig parseRuntimeConfig(int argc, char **argv, const RuntimeEnvironment
         } else if (arg == "--preferred-batch-sizes") {
             config.preferred_batch_sizes =
                 parsePreferredBatchSizes(requireValue(i, argc, argv, arg));
+        } else if (arg == "--use-gpu") {
+            config.use_gpu = parseBoolFlag(requireValue(i, argc, argv, arg), arg);
         } else if (arg == "--log-payloads") {
             config.log_payloads = parseBoolFlag(requireValue(i, argc, argv, arg), arg);
         } else if (arg == "--scheduler-strategy") {
@@ -227,7 +291,9 @@ RuntimeConfig parseRuntimeConfig(int argc, char **argv, const RuntimeEnvironment
                 "usage: neuriplo-kserve-runtime [--host 0.0.0.0] [--port 8080] "
                 "[--grpc-port 9000] "
                 "[--max-request-bytes 67108864] [--model-name demo] [--model-version 1] "
-                "[--model-path path] [--backend stub] [--deployment stable] "
+                "[--model-path path] [--models path | --model-repository path] "
+                "[--model-control-mode none] [--backend stub] [--use-gpu false] "
+                "[--plugin-dir path] [--deployment stable] "
                 "[--max-queue-size 64] [--request-timeout-ms 30000] "
                 "[--instances 1] [--dynamic-batching-enabled false] [--max-batch-size 1] "
                 "[--max-queue-delay-us 0] [--preferred-batch-sizes 2,4,8] "
@@ -249,6 +315,50 @@ RuntimeConfig parseRuntimeConfig(int argc, char **argv, const RuntimeEnvironment
     }
     if (config.model_name.empty()) {
         throw std::invalid_argument("model name must not be empty");
+    }
+    if (config.model_control_mode != "none" && config.model_control_mode != "explicit") {
+        // Rejected rather than defaulted: silently falling back to "none" on a
+        // typo would load every model in the repository, which is the exact
+        // outcome explicit mode exists to avoid.
+        throw std::invalid_argument("model control mode must be 'none' or 'explicit', got: " +
+                                    config.model_control_mode);
+    }
+    if (config.model_control_mode == "explicit" && config.model_repository.empty()) {
+        throw std::invalid_argument(
+            "explicit model control mode requires --models/--model-repository");
+    }
+    if (!config.model_repository.empty()) {
+        // A repository tree (whether named by --models/--model-repository or
+        // by the MODEL_REPOSITORY env var an image sets) supplies its own
+        // name/path/backend/version per discovered model. Accepting one of
+        // these single-model flags alongside it would silently pick one or
+        // the other depending on code path rather than tell the caller their
+        // flags conflict -- fail fast and name both instead.
+        std::vector<std::string> conflicting;
+        if (model_name_explicit) {
+            conflicting.push_back("--model-name");
+        }
+        if (model_path_explicit) {
+            conflicting.push_back("--model-path");
+        }
+        if (backend_explicit) {
+            conflicting.push_back("--backend");
+        }
+        if (model_version_cli) {
+            conflicting.push_back("--model-version");
+        }
+        if (!conflicting.empty()) {
+            std::string joined;
+            for (size_t i = 0; i < conflicting.size(); ++i) {
+                if (i > 0) {
+                    joined += ", ";
+                }
+                joined += conflicting[i];
+            }
+            throw std::invalid_argument(
+                joined + " cannot be combined with --models/--model-repository "
+                         "(MODEL_REPOSITORY): the repository tree supplies these per model");
+        }
     }
     if (config.max_request_bytes == 0 ||
         config.max_request_bytes > static_cast<size_t>(std::numeric_limits<int64_t>::max())) {

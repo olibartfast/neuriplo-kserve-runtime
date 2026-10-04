@@ -13,6 +13,9 @@ and operational endpoints. The actual backend execution remains owned by
 - Multi-model registry with admin load, unload, reload, and version activation endpoints.
 - Bounded request handling with tensor and LLM scheduler paths.
 - Stub execution by default, with optional real `neuriplo` adapter wiring.
+- Pipeline (ensemble) models: an ordered graph of preprocess, model, and
+  postprocess steps served as one model, so clients can send an encoded image
+  and receive decoded results. See [deploy/ensemble/README.md](deploy/ensemble/README.md).
 - CMake-based C++ build.
 
 ## Request Flow
@@ -180,6 +183,43 @@ When `MODEL_PATH` is unset and `/mnt/models` exists, the runtime uses
 `/mnt/models` as the model path. This matches KServe storage-initializer and PVC
 mount conventions.
 
+### Model repository mode
+
+Instead of one model, point the runtime at a Triton-style tree and it serves
+everything in it:
+
+```bash
+./build/neuriplo-kserve-runtime --models /path/to/model_repository
+```
+
+```text
+<root>/<model-name>/<version>/<model file>
+<root>/<model-name>/config.pbtxt        # optional I/O name overlay
+```
+
+Version directories are numeric and the highest is served. The backend comes
+from the model file's extension (`.plan`/`.engine` to `tensorrt`, `.onnx` to
+`onnx_runtime`, `.json` to `ensemble`, and so on), so no per-model flag is
+needed. A directory that contains nothing servable is reported as a warning and
+skipped rather than failing the scan.
+
+```text
+--models <path>                     repository root (alias --model-repository, env MODEL_REPOSITORY)
+--model-control-mode none|explicit  load everything at startup (default), or nothing
+```
+
+`explicit` loads no models at startup and leaves it to the client, through the
+KServe model-repository extension (`POST /v2/repository/index`,
+`/v2/repository/models/<name>/load`, `.../unload`). It also limits blast radius:
+a model whose backend crashes on load cannot take the server down before
+anything has asked for it.
+
+Single-model mode is unchanged and remains the default.
+
+Building a repository before serving it — the init-container procedure, the
+prepare-step contract, per-backend handling, and the failure modes — is
+specified in [docs/model-repository.md](docs/model-repository.md).
+
 ## Endpoints
 
 ### HTTP
@@ -194,6 +234,9 @@ POST /v2/models/{model_name}/infer
 GET  /v2/models/{model_name}/versions/{version}
 GET  /v2/models/{model_name}/versions/{version}/ready
 POST /v2/models/{model_name}/versions/{version}/infer
+POST /v2/repository/index
+POST /v2/repository/models/{model_name}/load
+POST /v2/repository/models/{model_name}/unload
 GET  /metrics
 ```
 

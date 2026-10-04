@@ -457,10 +457,7 @@ class LlmScheduler final : public Scheduler {
         result.execution_latency_ns = elapsedNs(execution_started, execution_finished);
         result.total_latency_ns = elapsedNs(pending->enqueued_at, execution_finished);
         result.batch_size = 1;
-        result.response = std::move(response);
-        if (!result.response.ok) {
-            result.ok = false;
-        }
+        result.adopt(std::move(response));
         fulfillResult(pending, std::move(result));
     }
 

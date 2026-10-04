@@ -52,12 +52,12 @@ SchedulerResult makeOverloadedResult() {
 }
 
 SchedulerResult makeExecutorFailureResult(std::string message) {
+    ExecutionResponse response;
+    response.ok = false;
+    response.error_code = "BACKEND_ERROR";
+    response.error_message = message.empty() ? "executor inference failed" : std::move(message);
     SchedulerResult result;
-    result.ok = false;
-    result.response.ok = false;
-    result.response.error_code = "BACKEND_ERROR";
-    result.response.error_message =
-        message.empty() ? "executor inference failed" : std::move(message);
+    result.adopt(std::move(response));
     return result;
 }
 
@@ -522,10 +522,7 @@ class ModelScheduler final : public Scheduler {
             result.execution_latency_ns = elapsedNs(execution_started, execution_finished);
             result.total_latency_ns = elapsedNs(pending->enqueued_at, execution_finished);
             result.batch_size = active_batch.size();
-            result.response = split_responses.at(index);
-            if (!result.response.ok) {
-                result.ok = false;
-            }
+            result.adopt(split_responses.at(index));
             fulfillResult(pending, std::move(result));
         }
     }
@@ -582,10 +579,7 @@ class ModelScheduler final : public Scheduler {
         result.execution_latency_ns = elapsedNs(execution_started, execution_finished);
         result.total_latency_ns = elapsedNs(pending->enqueued_at, execution_finished);
         result.batch_size = 1;
-        result.response = std::move(response);
-        if (!result.response.ok) {
-            result.ok = false;
-        }
+        result.adopt(std::move(response));
         fulfillResult(pending, std::move(result));
     }
 
