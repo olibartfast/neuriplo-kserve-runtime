@@ -76,34 +76,46 @@ output) stays deferred until neuriplo exposes it. Released as v0.1.0 to v0.3.2
 
 ## Phase 3 - v0.4.0 Release
 
-**Status: Current** - part of the cross-repo packet
-[2026-10-03-kserve-dynamic-dim-encoded-image](https://github.com/olibartfast/neuriplo-platform/tree/main/specs/2026-10-03-kserve-dynamic-dim-encoded-image),
-which is in its Phase 2 (pre-release audit of `v0.3.2..develop`).
+**Status: Complete** - released as v0.4.0 on 2026-10-05, as part of the
+cross-repo packet
+[2026-10-03-kserve-dynamic-dim-encoded-image](https://github.com/olibartfast/neuriplo-platform/tree/main/specs/2026-10-03-kserve-dynamic-dim-encoded-image).
 
-Goal: ship the unreleased work on `develop` as v0.4.0 after a full audit.
-
-Scope: everything on `develop` since v0.3.2. That is pipeline (ensemble)
-models, `NEURIPLO_RUNTIME_ENABLE_TASKS`, the `dali` backend id, `--use-gpu`,
-the dynamic-dimension and encoded-image fixes, the executor error-propagation
-fix, and model repository serving: `--models` / `--model-repository` /
-`MODEL_REPOSITORY`, `--model-control-mode`, the KServe repository extension
-(`/v2/repository/*`), the init-container preparation procedure and its deploy
-tooling (#14-#16). The pre-release audit found that `[Unreleased]` in
-[CHANGELOG.md](../CHANGELOG.md) did not list the repository work, and that the
-`versions.env` pins (neuriplo v0.8.0, neuriplo-tasks v0.8.0) are stale: tasks
-v0.8.0 lacks `decodeImage`, so a task-enabled build fails. Both are fixed in the
-release batch.
-
-Exit criteria: the audit findings are resolved, `scripts/release-patch.sh` or
-the GitFlow release branch merges to `master`, `v0.4.0` is tagged, and
-`develop` is back-merged. The `versions.env` pins are confirmed against the
-platform version matrix.
+Shipped everything on `develop` since v0.3.2: pipeline (ensemble) models,
+`NEURIPLO_RUNTIME_ENABLE_TASKS`, the `dali` backend id, `--use-gpu`, the
+dynamic-dimension and encoded-image fixes, the executor error-propagation fix,
+and model repository serving with the KServe repository extension and the
+init-container tooling (#14-#16). The pre-release audit (4 blockers, 16 major,
+31 minor) and the release review (3 integration defects) were fixed in #19 and #21-#24; see the packet's validation
+record and [CHANGELOG.md](../CHANGELOG.md).
 
 ## Phase 4 - Deferred Follow-Ups
 
 **Status: Planned**
 
-Items carried from the former next-steps file, in no committed order:
+In no committed order.
+
+Deferred from the v0.4.0 pre-release audit:
+
+- Pipeline: propagate request cancellation into steps (A-8); map step failures
+  to precise status codes (A-9); check edge datatypes between steps beyond
+  FRAME_SIZE (A-10); reject unknown pipeline config keys (A-12).
+- Ensembles stay ready when a step model is unloaded, and cached step metadata
+  goes stale (B-18).
+- Ensemble contract questions (`platform` for model-first graphs,
+  `max_batch_size`): raise against the platform ensemble contract (A-13).
+- Run images and pods as non-root with `fsGroup` on the PVC, and build
+  `Dockerfile.tensorrt` from a pinned source; needs a k3d/GPU validation run
+  (C-7, C-9).
+- Authentication for admin and repository routes, and an allowlist for
+  `model_path` / `plugin_dir`.
+- Metadata validation in the gRPC codec.
+- Remove the `data: []` validation bypass (test fixtures depend on it).
+- A pre-decode size cap for TGA (no signature to detect it by).
+- `scheduler_skips_incompatible_queue_neighbors_during_batch_formation` is
+  timing-sensitive and failed once under valgrind in CI (PR #25, no leak);
+  make it deterministic.
+
+Carried from the former next-steps file:
 
 - `--model-repository` Triton-layout scan (`config.pbtxt` to backend id);
   auto-load a model repository without admin POSTs.
