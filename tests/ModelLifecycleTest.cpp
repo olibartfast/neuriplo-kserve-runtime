@@ -98,6 +98,25 @@ TEST_CASE(model_lifecycle_marks_failed_on_load_error) {
     REQUIRE(handle.scheduler == nullptr);
 }
 
+// B-2 defensive guard: AdminCodec rejects instances < 1 before a request
+// ever reaches ModelLifecycle, but this class must not assume that -- it is
+// called directly by tests and could be called with any config. Without the
+// executors.empty() guard, load() dereferences executors.front() on an
+// empty vector (SIGSEGV).
+TEST_CASE(model_lifecycle_load_with_zero_instances_fails_cleanly) {
+    ModelHandle handle;
+    ModelLifecycle lifecycle;
+    RuntimeConfig config = demoConfig();
+    config.instances = 0;
+
+    lifecycle.load(handle, config, stubFactory());
+
+    REQUIRE_EQ(handle.state.current(), ModelState::Failed);
+    REQUIRE(!handle.isReady());
+    REQUIRE(handle.load_error.has_value());
+    REQUIRE(handle.scheduler == nullptr);
+}
+
 TEST_CASE(model_lifecycle_rejects_load_from_non_unloaded_state) {
     ModelHandle handle;
     ModelLifecycle lifecycle;
@@ -163,6 +182,21 @@ TEST_CASE(model_lifecycle_reload_from_failed_state) {
 
     REQUIRE(lifecycle.reload(handle, demoConfig(), stubFactory()));
     REQUIRE(handle.isReady());
+}
+
+// beginReload() resets a Failed handle to Unloaded to attempt the rebuild;
+// if that rebuild also fails, the handle must land back on Failed, not be
+// left looking like a model that was simply never loaded.
+TEST_CASE(model_lifecycle_reload_of_failed_handle_that_fails_again_stays_failed) {
+    ModelHandle handle;
+    ModelLifecycle lifecycle;
+    lifecycle.load(handle, demoConfig(), failingFactory());
+    REQUIRE_EQ(handle.state.current(), ModelState::Failed);
+
+    REQUIRE(!lifecycle.reload(handle, demoConfig(), failingFactory()));
+    REQUIRE_EQ(handle.state.current(), ModelState::Failed);
+    REQUIRE(!handle.isReady());
+    REQUIRE(handle.load_error.has_value());
 }
 
 TEST_CASE(model_registry_reload_delegates_to_lifecycle) {

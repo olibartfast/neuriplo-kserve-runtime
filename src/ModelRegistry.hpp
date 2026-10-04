@@ -7,6 +7,9 @@
 #include "RuntimeConfig.hpp"
 #include "SchedulerRetireQueue.hpp"
 
+#include <atomic>
+#include <condition_variable>
+#include <cstddef>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -22,6 +25,13 @@ struct ModelSlot {
     RuntimeConfig config;
     std::shared_ptr<const InferSnapshot> active_snapshot;
     std::unordered_map<std::string, std::shared_ptr<const InferSnapshot>> version_snapshots;
+    // True from a successful beginReload() until the build that follows it
+    // is resolved (success, failure, or an exception), i.e. for exactly the
+    // window in which a replacement handle is being built with
+    // models_mutex_ released. Guards against a second reload/switch-version
+    // racing the same build, and against an unload tearing the slot down
+    // out from under a build that is about to publish.
+    bool reload_pending = false;
 };
 
 class ModelRegistry {
@@ -35,9 +45,23 @@ class ModelRegistry {
     // entry cannot take the whole repository down.
     explicit ModelRegistry(const std::vector<RuntimeConfig> &configs);
 
+    // Returns true iff, after this call, `config.model_name` is a slot this
+    // call itself resolved (built, successfully or not) or a concurrent
+    // load for the exact same name that this call waited out resolved to
+    // Ready -- i.e. "this call's load attempt, or the one it joined, is
+    // done and the model ended up loaded". It returns false both for a
+    // build this call owned that failed (ready()/findHandle()->load_error
+    // tells the caller why) and for a name that already had a settled slot
+    // before this call even started (loading an already-loaded name is not
+    // success -- callers that want that use reload()).
     bool loadModel(const RuntimeConfig &config);
     bool loadModel(const RuntimeConfig &config, ExecutorFactory factory);
     bool unloadModel(const std::string &model_name);
+    // Returns true iff the reload (or, after waiting out a same-name
+    // placeholder/in-flight reload, the attempt it joined) finished with the
+    // model Ready. A failed reload of an already-loaded model returns false
+    // but leaves that model untouched and still Ready -- see
+    // ModelLifecycle::finishReload. false also simply means "no such slot".
     bool reload(const std::string &model_name, const RuntimeConfig &config);
     bool reload(const std::string &model_name, const RuntimeConfig &config,
                 ExecutorFactory factory);
@@ -66,6 +90,19 @@ class ModelRegistry {
     bool ready(const std::string &model_name) const;
     bool readyVersion(const std::string &model_name, const std::string &version) const;
     bool allReady() const;
+    // True for a name with a slot whose load is still building (state ==
+    // Loading) or whose reload/switch-version build is in flight
+    // (reload_pending): a caller deciding between 404 (no such model) and
+    // 409 (busy, try again) for an unload/drain that this returns false for
+    // the other way checks this first.
+    bool loadOrReloadInProgress(const std::string &model_name) const;
+    // Test-only visibility into how many calls are currently parked on
+    // load_cv_ (joining a same-name load placeholder or waiting out an
+    // in-flight reload/switch-version). Lets a concurrency test poll until a
+    // second caller has actually reached its wait before the test releases
+    // the gate the first caller's build is blocked on, instead of racing a
+    // sleep against it.
+    std::size_t loadWaitersForTesting() const;
     std::optional<std::string> defaultVersion(const std::string &model_name) const;
     std::optional<RuntimeConfig> modelConfig(const std::string &model_name) const;
     bool beginDrain(const std::string &model_name);
@@ -82,13 +119,39 @@ class ModelRegistry {
     // returns a factory that hands them to the lifecycle. Must be called
     // without models_mutex_ held.
     ExecutorFactory makePipelineFactory(const RuntimeConfig &config);
-    bool loadModelLocked(const std::string &model_name, const RuntimeConfig &config,
-                         ExecutorFactory factory);
     ModelSlot *findSlotMutable(const std::string &model_name);
     const ModelSlot *findSlot(const std::string &model_name) const;
     void publishSnapshot(ModelSlot &slot);
     void retireSnapshot(const std::shared_ptr<const InferSnapshot> &snapshot);
     std::string activeVersionFor(const ModelSlot &slot) const;
+
+    // RAII backstop for loadModel/reload/switchVersion: those build a
+    // replacement handle with models_mutex_ released, between setting a
+    // slot's state to Loading (fresh load) or reload_pending = true
+    // (reload/switch-version) and the follow-up lock that resolves it.
+    // ModelLifecycle::load() itself never throws -- it catches everything
+    // and reports Failed instead -- but this guard is the backstop for
+    // anything else in that window (e.g. an allocation in this class) that
+    // still might: without it, an exception would leave the slot stuck in
+    // Loading/reload_pending forever, hanging every later caller that
+    // load_cv_.wait()s on this name. commit() disarms it once the build
+    // call returns normally (by any outcome); if it is never called, the
+    // destructor marks the slot Failed (fresh load) or just clears
+    // reload_pending (reload/switch-version, leaving a Ready handle Ready)
+    // and notifies load_cv_ so no waiter is left hanging.
+    class PendingLoadGuard {
+      public:
+        PendingLoadGuard(ModelRegistry &registry, std::string model_name);
+        ~PendingLoadGuard();
+        PendingLoadGuard(const PendingLoadGuard &) = delete;
+        PendingLoadGuard &operator=(const PendingLoadGuard &) = delete;
+        void commit();
+
+      private:
+        ModelRegistry &registry_;
+        std::string model_name_;
+        bool committed_ = false;
+    };
 
     mutable std::shared_mutex models_mutex_;
     std::unordered_map<std::string, ModelSlot> models_;
@@ -97,6 +160,16 @@ class ModelRegistry {
     std::unordered_map<std::string, RuntimeConfig> catalog_;
     ModelLifecycle lifecycle_;
     SchedulerRetireQueue retire_queue_;
+    // Signaled whenever a slot leaves ModelState::Loading or reload_pending
+    // becomes false (success, failure, an exception via PendingLoadGuard, or
+    // the slot disappearing). A concurrent loadModel/reload/switchVersion
+    // call for the same name waits on this instead of racing a second
+    // build, or (for reload_pending) retries once the in-flight one clears.
+    std::condition_variable_any load_cv_;
+    // Incremented/decremented around every load_cv_.wait() call (see
+    // loadWaitersForTesting()); mutable so the const getter can read it
+    // without needing models_mutex_.
+    mutable std::atomic<std::size_t> load_waiters_{0};
     bool log_payloads_ = false;
     double tokens_per_char_ = 0.25;
 };
