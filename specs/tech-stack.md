@@ -45,7 +45,7 @@ ONNX Runtime built in), `real-plugin` (ONNX Runtime as a `dlopen` plugin),
 - Hide concrete scheduler, executor, and backend types behind interfaces and
   factory functions (`Scheduler`, `Executor`, `NeuriploAdapter`). Prefer
   extending existing Strategy, factory, and adapter boundaries over new
-  frameworks; patterns in use are recorded in `plan/DESIGN_PATTERNS.md`.
+  frameworks; patterns in use are recorded in [architecture.md](architecture.md).
 - `NeuriploAdapter` is the only seam to neuriplo. The real adapter uses the
   raw-output path (`get_infer_results_raw`) on tensors; `llmInfer()` stays on
   `get_infer_results()`.

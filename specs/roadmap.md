@@ -1,12 +1,14 @@
 # Neuriplo KServe Runtime Roadmap
 
 > Status: living brownfield roadmap, reconstructed on 2026-10-04 from
-> `plan/ROADMAP.md`, `plan/NEXT_STEPS.md`, and `CHANGELOG.md`. Phase order after
+> `history/target-design.md`, the former next-steps file, and `CHANGELOG.md`. Phase order after
 > the current phase is a working sequence to be confirmed.
 
-This roadmap is scoped to the KServe runtime. `plan/` stays in place as the
-historical implementation record: step snapshots (`plan/STEP0.md` to
-`plan/STEP14.md`) are not copied here and are not retired.
+This roadmap is scoped to the KServe runtime. The former planning folder now lives
+here: step snapshots are in `history/steps/` (`STEP0.md` to `STEP14.md`), the
+original target design is `history/target-design.md`, design patterns are in
+`architecture.md`, and procedures are in `procedures/`. Step status that was in
+the former next-steps file is merged into the phases below.
 
 ## Status Key
 
@@ -38,7 +40,7 @@ items or backfill packets for completed work.
 Scaffold, KServe packaging, V2 protocol, model registry and executors, atomic
 neuriplo integration, scheduler, dynamic batching, observability, LLM backends
 and path completion, production hardening, and deployment validation. Record:
-[plan/ROADMAP.md](../plan/ROADMAP.md), `plan/STEP0.md` to `plan/STEP11.md`.
+[history/target-design.md](history/target-design.md), `history/steps/STEP0.md` to `STEP11.md`.
 
 ## Phase 1 - Platform E2E and Production Track (Steps 12-14)
 
@@ -46,15 +48,23 @@ and path completion, production hardening, and deployment validation. Record:
 
 YOLO end-to-end through neuriplo-infer, HTTP and gRPC parity, control/data
 plane split, and multi-model hot reload with zero-downtime version switch.
-Record: [plan/NEXT_STEPS.md](../plan/NEXT_STEPS.md), [plan/E2E_YOLO.md](../plan/E2E_YOLO.md),
-`plan/STEP12.md` to `plan/STEP14.md`.
+Record: [procedures/e2e-yolo.md](procedures/e2e-yolo.md),
+`history/steps/STEP12.md` to `STEP14.md`.
+
+Summary: Step 12 ran real neuriplo-infer to KServe HTTP to runtime to neuriplo
+(ONNX Runtime) to YOLO, with gRPC parity (`real-onnx-grpc`, `scripts/e2e-yolo.sh`).
+Step 13 split control and data plane (`ModelLifecycle`, `SchedulerRetireQueue`).
+Step 14 added the multi-model registry, `/v2/admin/models` load/unload/reload,
+and zero-downtime version activation.
 
 ## Phase 2 - Multi-Backend and Raw Output Path
 
 **Status: Complete**
 
 Backend registry, plugin loader integration, typed byte-buffer input, and the
-raw output hot path (Step 15 adapter work). The Step 15.4 item (LLM on raw
+raw output hot path (Step 15: `RealNeuriploAdapter::infer()` uses
+`get_infer_results_raw()` and maps `RawOutputTensor` directly to `OutputTensor`;
+needs neuriplo PR #14 on `develop`, which gates real-* CI). The Step 15.4 item (LLM on raw
 output) stays deferred until neuriplo exposes it. Released as v0.1.0 to v0.3.2
 (see [CHANGELOG.md](../CHANGELOG.md)).
 
@@ -87,12 +97,25 @@ platform version matrix.
 
 **Status: Planned**
 
-Items from `plan/NEXT_STEPS.md`, in no committed order:
+Items carried from the former next-steps file, in no committed order:
 
-- `--model-repository` Triton-layout scan (`config.pbtxt` to backend id).
-- `device_id` and multi-GPU placement.
+- `--model-repository` Triton-layout scan (`config.pbtxt` to backend id);
+  auto-load a model repository without admin POSTs.
+- `device_id` and multi-GPU placement (per-backend device selection).
 - Per-backend OBJECT-lib isolation in built-in mode.
-- LLM raw output once neuriplo exposes it (Step 15.4).
+- LLM raw output once neuriplo exposes it (Step 15.4): keep `llmInfer()` on
+  `get_infer_results()` until then.
+- CI hardening: pin the neuriplo SHA in runtime real-* jobs (cross-repo API
+  drift guard; in PR #7 / follow-up); free-disk-space step before
+  ROCm/MIGraphX Docker builds (neuriplo-side).
+- Optional byte-identical comparison test of the raw output path versus the old
+  `get_infer_results()` path.
+- Release housekeeping: finish the GitFlow `release/0.3.0` leftovers if not yet
+  done (merge to `master`, tag `v0.3.0`, back-merge to `develop`), and cut the
+  matching neuriplo release once its raw-output API gate is merged and CI is
+  stable. Superseded in practice by Phase 3 (v0.4.0) if already released.
+- Out of scope unless requested: Step 13.2 data-plane work on branch
+  `feature/step-13-2-infer-data-plane` (separate from Step 15).
 
 Each needs a packet before work starts.
 
@@ -101,9 +124,21 @@ Each needs a packet before work starts.
 **Status: Planned, scale-triggered**
 
 Async HTTP reactor, zero-copy tensor buffers, arena/PMR allocators, and
-multi-datatype gRPC codec. Each starts only on its trigger in
-`plan/NEXT_STEPS.md` (concurrency, profiled copy cost, allocation churn, client
-demand).
+multi-datatype gRPC codec. Each starts only on its trigger: connection
+concurrency above O(100) for the reactor (epoll/io_uring), copy overhead visible
+in profiling for zero-copy buffers, allocation churn under load for arena/PMR,
+and client demand for INT8/FP16 in the gRPC codec.
+
+## Infrastructure and Cross-Repo Notes
+
+CI is done: parallel sanitizer matrix (`fail-fast: false`), `real-onnx-grpc`
+preset job, `scripts/e2e-stub.sh` smoke job (11 checks incl. admin lifecycle),
+triggers on `master` and `develop`, `enable_testing()` fix, `.gitignore` entries.
+Cross-repo: neuriplo-infer `feature/neuriplo-kserve-runtime` wires the KServe
+HTTP/gRPC client through `InferenceInterface` (`--kserve_endpoint`,
+`--kserve_model_name`, `--kserve_transport=http|grpc`; no local `--weights`
+needed remotely). A real HTTP E2E with `yolo26s.onnx` on `--backend onnx_runtime`
+succeeded, and neuriplo-infer's 22/22 tests passed.
 
 ## Assumptions to Confirm
 
