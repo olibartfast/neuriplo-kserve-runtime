@@ -1,9 +1,16 @@
+#include "BackendRegistry.hpp"
 #include "KServeRuntime.hpp"
 #include "MetricsRegistry.hpp"
 #include "ModelRegistry.hpp"
 #include "PipelineExecutor.hpp"
 #include "RuntimeConfig.hpp"
 #include "Test.hpp"
+
+#include <chrono>
+#include <condition_variable>
+#include <memory>
+#include <mutex>
+#include <thread>
 
 namespace {
 
@@ -233,4 +240,167 @@ TEST_CASE(repository_unloads_an_ensemble) {
     REQUIRE_EQ(unload.status, 200);
     REQUIRE_EQ(registry.listModels().size(), 1);
     REQUIRE(registry.ready("demo"));
+}
+
+// B-1: tritonclient's load() call sends "{}", not an empty string. A name
+// that is neither already loaded nor in the repository catalog has nothing
+// to fall back to, so it must be rejected the same way an empty body is,
+// rather than silently loading against RuntimeConfig's stub defaults.
+TEST_CASE(repository_load_of_unknown_model_with_empty_object_body_returns_404) {
+    MetricsRegistry metrics;
+    ModelRegistry registry(demoConfig());
+    KServeRuntime runtime(registry, metrics);
+
+    const auto response =
+        runtime.handle(repositoryRequest("POST", "/v2/repository/models/typo/load", "{}"));
+    REQUIRE_EQ(response.status, 404);
+    REQUIRE(!registry.ready("typo"));
+    REQUIRE_EQ(registry.listModels().size(), 1);
+}
+
+// B-3 + B-12: a failed reload of an already-loaded model must leave it
+// untouched and Ready (Triton semantics), and the 409 must say why it
+// failed rather than a generic message.
+TEST_CASE(repository_failed_reload_of_known_model_keeps_it_serving) {
+    MetricsRegistry metrics;
+    ModelRegistry registry(demoConfig());
+    KServeRuntime runtime(registry, metrics);
+    REQUIRE(registry.ready("demo"));
+
+    const auto response = runtime.handle(repositoryRequest(
+        "POST", "/v2/repository/models/demo/load", R"({"backend":"does_not_exist"})"));
+    REQUIRE_EQ(response.status, 409);
+    REQUIRE(response.body.find("unsupported backend") != std::string::npos);
+
+    REQUIRE(registry.ready("demo"));
+    REQUIRE_EQ(registry.listModels().size(), 1);
+    const auto infer = runtime.handle(repositoryRequest(
+        "POST", "/v2/models/demo/infer",
+        R"({"id":"t1","inputs":[{"name":"input","shape":[1,3,224,224],"datatype":"FP32","data":[]}]})"));
+    REQUIRE_EQ(infer.status, 200);
+}
+
+namespace {
+// Rendezvous for the gated factory below, local to this file's concurrency
+// tests (mirrors ModelRegistryTest.cpp's BuildGate, which this file does not
+// link against).
+struct Gate {
+    std::mutex mutex;
+    std::condition_variable cv;
+    bool build_started = false;
+    bool release = false;
+};
+
+void waitForBuildStarted(const std::shared_ptr<Gate> &gate) {
+    std::unique_lock<std::mutex> lock(gate->mutex);
+    REQUIRE(gate->cv.wait_for(lock, std::chrono::seconds(2), [&] { return gate->build_started; }));
+}
+
+void releaseGate(const std::shared_ptr<Gate> &gate) {
+    {
+        std::lock_guard<std::mutex> lock(gate->mutex);
+        gate->release = true;
+    }
+    gate->cv.notify_all();
+}
+
+// Polls loadWaitersForTesting() until `expected` callers are parked on
+// load_cv_, with a bounded timeout. Without this, releasing the gate races
+// the second HTTP request reaching its own wait: if the release (and the
+// build it unblocks) wins, the second request instead finds an
+// already-settled slot and falls through to an ordinary reload instead of
+// deterministically hitting the placeholder-join path this test is for.
+void waitForLoadWaiters(const ModelRegistry &registry, std::size_t expected) {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (registry.loadWaitersForTesting() != expected) {
+        REQUIRE(std::chrono::steady_clock::now() < deadline);
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+}
+} // namespace
+
+// B-17 at the route the finding names: a second /v2/repository/.../load for
+// a name whose first build is still in flight must join that build (and
+// succeed once it resolves) instead of 409ing on a Loading placeholder. The
+// first build here is triggered directly on the registry (so the test
+// controls exactly when it unblocks); the request under test is the second
+// one, through the real HTTP endpoint.
+TEST_CASE(repository_concurrent_load_of_still_loading_model_joins_the_build) {
+    MetricsRegistry metrics;
+    ModelRegistry registry(demoConfig());
+    KServeRuntime runtime(registry, metrics);
+
+    auto gate = std::make_shared<Gate>();
+    RuntimeConfig slow_config = demoConfig();
+    slow_config.model_name = "slow";
+
+    std::thread loader([&registry, slow_config, gate] {
+        registry.loadModel(
+            slow_config,
+            [gate](const RuntimeConfig &cfg, std::string &error) -> std::unique_ptr<Executor> {
+                {
+                    std::lock_guard<std::mutex> lock(gate->mutex);
+                    gate->build_started = true;
+                }
+                gate->cv.notify_all();
+                std::unique_lock<std::mutex> lock(gate->mutex);
+                gate->cv.wait(lock, [&] { return gate->release; });
+                lock.unlock();
+                return createExecutorFor(cfg.backend, cfg, error);
+            });
+    });
+    waitForBuildStarted(gate);
+
+    bool second_ok = false;
+    std::thread second([&runtime, &second_ok] {
+        const auto response =
+            runtime.handle(repositoryRequest("POST", "/v2/repository/models/slow/load"));
+        second_ok = (response.status == 200);
+    });
+    waitForLoadWaiters(registry, 1);
+
+    releaseGate(gate);
+    loader.join();
+    second.join();
+
+    REQUIRE(second_ok);
+    REQUIRE(registry.ready("slow"));
+}
+
+// B-7: unloading a name whose first load is still in flight is "try again",
+// not "no such model".
+TEST_CASE(repository_unload_of_a_still_loading_model_returns_409_not_404) {
+    MetricsRegistry metrics;
+    ModelRegistry registry(demoConfig());
+    KServeRuntime runtime(registry, metrics);
+
+    auto gate = std::make_shared<Gate>();
+    RuntimeConfig slow_config = demoConfig();
+    slow_config.model_name = "slow";
+
+    std::thread loader([&registry, slow_config, gate] {
+        registry.loadModel(
+            slow_config,
+            [gate](const RuntimeConfig &cfg, std::string &error) -> std::unique_ptr<Executor> {
+                {
+                    std::lock_guard<std::mutex> lock(gate->mutex);
+                    gate->build_started = true;
+                }
+                gate->cv.notify_all();
+                std::unique_lock<std::mutex> lock(gate->mutex);
+                gate->cv.wait(lock, [&] { return gate->release; });
+                lock.unlock();
+                return createExecutorFor(cfg.backend, cfg, error);
+            });
+    });
+    waitForBuildStarted(gate);
+
+    const auto response =
+        runtime.handle(repositoryRequest("POST", "/v2/repository/models/slow/unload"));
+    REQUIRE_EQ(response.status, 409);
+    REQUIRE(response.body.find("in progress") != std::string::npos);
+
+    releaseGate(gate);
+    loader.join();
+    REQUIRE(registry.ready("slow"));
 }

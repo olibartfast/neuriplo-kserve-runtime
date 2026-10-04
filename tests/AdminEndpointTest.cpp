@@ -1,8 +1,16 @@
+#include "BackendRegistry.hpp"
 #include "KServeRuntime.hpp"
 #include "MetricsRegistry.hpp"
 #include "ModelRegistry.hpp"
 #include "RuntimeConfig.hpp"
 #include "Test.hpp"
+
+#include <chrono>
+#include <condition_variable>
+#include <memory>
+#include <mutex>
+#include <thread>
+#include <utility>
 
 namespace {
 
@@ -129,4 +137,211 @@ TEST_CASE(admin_endpoint_activates_version) {
         adminRequest("POST", "/v2/admin/models/demo/versions/2/activate", R"({"version":"2"})"));
     REQUIRE_EQ(response.status, 200);
     REQUIRE_EQ(registry.defaultVersion("demo"), "2");
+}
+
+// B-3 + B-12: a failed admin reload of an already-loaded model must leave it
+// untouched and Ready, and the 409 must surface why rather than a generic
+// message.
+TEST_CASE(admin_endpoint_failed_reload_keeps_model_ready_and_surfaces_error) {
+    MetricsRegistry metrics;
+    ModelRegistry registry(demoConfig());
+    KServeRuntime runtime(registry, metrics);
+    REQUIRE(registry.ready("demo"));
+
+    const auto response = runtime.handle(
+        adminRequest("POST", "/v2/admin/models/demo/reload", R"({"backend":"does_not_exist"})"));
+    REQUIRE_EQ(response.status, 409);
+    REQUIRE(response.body.find("unsupported backend") != std::string::npos);
+    REQUIRE(registry.ready("demo"));
+}
+
+// B-3: a failed version activate of an already-loaded model must leave the
+// currently-active version untouched and Ready.
+TEST_CASE(admin_endpoint_failed_version_activate_keeps_current_version_ready) {
+    MetricsRegistry metrics;
+    ModelRegistry registry(demoConfig());
+    KServeRuntime runtime(registry, metrics);
+    REQUIRE(registry.ready("demo"));
+    const auto before_version = registry.defaultVersion("demo");
+
+    const auto response =
+        runtime.handle(adminRequest("POST", "/v2/admin/models/demo/versions/2/activate",
+                                    R"({"version":"2","backend":"does_not_exist"})"));
+    REQUIRE_EQ(response.status, 409);
+    REQUIRE(registry.ready("demo"));
+    REQUIRE_EQ(registry.defaultVersion("demo"), before_version);
+}
+
+// B-2: a known numeric field with the wrong JSON type must 400 naming the
+// field instead of being silently ignored (which would load with
+// instances == 1 while the caller believed they asked for 2).
+TEST_CASE(admin_endpoint_load_rejects_wrong_typed_instances) {
+    MetricsRegistry metrics;
+    ModelRegistry registry(demoConfig());
+    KServeRuntime runtime(registry, metrics);
+
+    const auto response =
+        runtime.handle(adminRequest("POST", "/v2/admin/models/load",
+                                    R"({"model_name":"second","backend":"stub","instances":"2"})"));
+    REQUIRE_EQ(response.status, 400);
+    REQUIRE(response.body.find("instances") != std::string::npos);
+    REQUIRE(!registry.modelConfig("second").has_value());
+}
+
+TEST_CASE(admin_endpoint_load_rejects_wrong_typed_use_gpu) {
+    MetricsRegistry metrics;
+    ModelRegistry registry(demoConfig());
+    KServeRuntime runtime(registry, metrics);
+
+    const auto response = runtime.handle(
+        adminRequest("POST", "/v2/admin/models/load",
+                     R"({"model_name":"second","backend":"stub","use_gpu":"true"})"));
+    REQUIRE_EQ(response.status, 400);
+    REQUIRE(response.body.find("use_gpu") != std::string::npos);
+    REQUIRE(!registry.modelConfig("second").has_value());
+}
+
+// B-2: instances < 1 must 400 rather than reach ModelLifecycle, which cannot
+// build a scheduler with zero executors.
+TEST_CASE(admin_endpoint_load_rejects_zero_instances) {
+    MetricsRegistry metrics;
+    ModelRegistry registry(demoConfig());
+    KServeRuntime runtime(registry, metrics);
+
+    const auto response =
+        runtime.handle(adminRequest("POST", "/v2/admin/models/load",
+                                    R"({"model_name":"second","backend":"stub","instances":0})"));
+    REQUIRE_EQ(response.status, 400);
+    REQUIRE(response.body.find("instances") != std::string::npos);
+    REQUIRE(!registry.modelConfig("second").has_value());
+}
+
+// B-2: instances above the named upper bound must 400 rather than let a
+// client ask the server to spin up an unbounded number of executors.
+TEST_CASE(admin_endpoint_load_rejects_instances_above_upper_bound) {
+    MetricsRegistry metrics;
+    ModelRegistry registry(demoConfig());
+    KServeRuntime runtime(registry, metrics);
+
+    const auto response =
+        runtime.handle(adminRequest("POST", "/v2/admin/models/load",
+                                    R"({"model_name":"second","backend":"stub","instances":65})"));
+    REQUIRE_EQ(response.status, 400);
+    REQUIRE(response.body.find("instances") != std::string::npos);
+    REQUIRE(!registry.modelConfig("second").has_value());
+}
+
+// B-2: an explicit but empty backend is as unusable as a missing one, and
+// must 400 rather than reach a backend lookup with an empty id.
+TEST_CASE(admin_endpoint_load_rejects_empty_backend) {
+    MetricsRegistry metrics;
+    ModelRegistry registry(demoConfig());
+    KServeRuntime runtime(registry, metrics);
+
+    const auto response = runtime.handle(
+        adminRequest("POST", "/v2/admin/models/load", R"({"model_name":"second","backend":""})"));
+    REQUIRE_EQ(response.status, 400);
+    REQUIRE(response.body.find("backend") != std::string::npos);
+    REQUIRE(!registry.modelConfig("second").has_value());
+}
+
+// B-2: mirrors the CLI's own validation -- dynamic batching needs room to
+// batch more than one request.
+TEST_CASE(admin_endpoint_load_rejects_dynamic_batching_with_batch_size_below_two) {
+    MetricsRegistry metrics;
+    ModelRegistry registry(demoConfig());
+    KServeRuntime runtime(registry, metrics);
+
+    const auto response =
+        runtime.handle(adminRequest("POST", "/v2/admin/models/load",
+                                    R"({"model_name":"second","backend":"stub",)"
+                                    R"("dynamic_batching_enabled":true,"max_batch_size":1})"));
+    REQUIRE_EQ(response.status, 400);
+    REQUIRE(response.body.find("max_batch_size") != std::string::npos);
+}
+
+TEST_CASE(admin_endpoint_load_rejects_negative_request_timeout) {
+    MetricsRegistry metrics;
+    ModelRegistry registry(demoConfig());
+    KServeRuntime runtime(registry, metrics);
+
+    const auto response = runtime.handle(
+        adminRequest("POST", "/v2/admin/models/load",
+                     R"({"model_name":"second","backend":"stub","request_timeout_ms":-1})"));
+    REQUIRE_EQ(response.status, 400);
+    REQUIRE(response.body.find("request_timeout_ms") != std::string::npos);
+}
+
+TEST_CASE(admin_endpoint_load_rejects_negative_max_queue_delay) {
+    MetricsRegistry metrics;
+    ModelRegistry registry(demoConfig());
+    KServeRuntime runtime(registry, metrics);
+
+    const auto response = runtime.handle(
+        adminRequest("POST", "/v2/admin/models/load",
+                     R"({"model_name":"second","backend":"stub","max_queue_delay_us":-1})"));
+    REQUIRE_EQ(response.status, 400);
+    REQUIRE(response.body.find("max_queue_delay_us") != std::string::npos);
+}
+
+// B-4 (restored admin semantics): loading an already-loaded name is a 409
+// telling the caller to use reload, not a silent success and not a dropped
+// slot.
+TEST_CASE(admin_endpoint_load_of_already_loaded_model_returns_409) {
+    MetricsRegistry metrics;
+    ModelRegistry registry(demoConfig());
+    KServeRuntime runtime(registry, metrics);
+    REQUIRE(registry.ready("demo"));
+
+    const auto response = runtime.handle(
+        adminRequest("POST", "/v2/admin/models/load", R"({"model_name":"demo","backend":"stub"})"));
+    REQUIRE_EQ(response.status, 409);
+    REQUIRE(response.body.find("already loaded") != std::string::npos);
+    REQUIRE(registry.ready("demo"));
+}
+
+// B-7: an unload while a load/reload is mid-build is "try again", not
+// "no such model".
+TEST_CASE(admin_endpoint_delete_during_reload_in_progress_returns_409_not_404) {
+    MetricsRegistry metrics;
+    ModelRegistry registry(demoConfig());
+    KServeRuntime runtime(registry, metrics);
+
+    auto gate = std::make_shared<std::pair<std::mutex, std::condition_variable>>();
+    bool build_started = false;
+    bool release = false;
+    std::thread reloader([&registry, &gate, &build_started, &release] {
+        RuntimeConfig config = *registry.modelConfig("demo");
+        registry.reload(
+            "demo", config,
+            [&](const RuntimeConfig &cfg, std::string &error) -> std::unique_ptr<Executor> {
+                (void)error;
+                {
+                    std::lock_guard<std::mutex> lock(gate->first);
+                    build_started = true;
+                }
+                gate->second.notify_all();
+                std::unique_lock<std::mutex> lock(gate->first);
+                gate->second.wait(lock, [&] { return release; });
+                return createExecutorFor(cfg.backend, cfg, error);
+            });
+    });
+
+    {
+        std::unique_lock<std::mutex> lock(gate->first);
+        REQUIRE(
+            gate->second.wait_for(lock, std::chrono::seconds(2), [&] { return build_started; }));
+    }
+
+    const auto response = runtime.handle(adminRequest("DELETE", "/v2/admin/models/demo"));
+    REQUIRE_EQ(response.status, 409);
+    REQUIRE(response.body.find("in progress") != std::string::npos);
+
+    {
+        std::lock_guard<std::mutex> lock(gate->first);
+        release = true;
+    }
+    gate->second.notify_all();
+    reloader.join();
+    REQUIRE(registry.ready("demo"));
 }
