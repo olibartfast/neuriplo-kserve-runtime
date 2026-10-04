@@ -26,9 +26,16 @@ to platform packets when a phase is part of one.
 multi-phase work, public-behavior or architecture changes, or low reversibility.
 Trivial fixes need no packet; small contained ones may get a PR-level note.
 
-`plan/` is not replaced by this folder. It stays in place as the historical
-implementation record (`plan/STEP0.md` to `plan/STEP14.md`, `plan/ROADMAP.md`,
-`plan/NEXT_STEPS.md`).
+The former planning folder has been folded into this one:
+
+| Path | Contents |
+| --- | --- |
+| `architecture.md` | Design patterns in use today (formerly the design patterns file). |
+| `procedures/` | Operational procedures, e.g. `e2e-yolo.md`. |
+| `history/target-design.md` | Original milestone target design, kept as reference. |
+| `history/steps/STEP0.md` to `STEP14.md` | Completed step snapshots. No new STEP files; new work gets a dated packet. |
+
+Status that lived in the former next-steps file is now in `roadmap.md`.
 
 ## Packet files
 

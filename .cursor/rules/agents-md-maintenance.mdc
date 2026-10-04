@@ -13,25 +13,25 @@ as the code or plan change.
 
 Update `AGENTS.md` when you:
 
-1. Add, complete, or materially edit `plan/STEP<N>.md` or `plan/NEXT_STEPS.md`
+1. Add or complete a dated `specs/` packet, or materially edit `specs/roadmap.md`
 2. Change build/test/lint commands, CMake presets, or CI validation steps
 3. Add mandatory agent workflow rules (new `.cursor/rules/*.mdc` or equivalent)
 4. Change repo layout, module boundaries, or default runtime invocation
-5. Introduce a cross-cutting architectural pattern (also update `plan/DESIGN_PATTERNS.md`)
+5. Introduce a cross-cutting architectural pattern (also update `specs/architecture.md`)
 
 ## What to sync
 
-- **Step range**: highest `plan/STEP<N>.md` that exists; point to `plan/NEXT_STEPS.md` for current status
-- **One-line current status**: e.g. "Steps 0–14 complete; see `plan/NEXT_STEPS.md`"
+- **Status pointer**: point to `specs/roadmap.md` for current status; step snapshots are frozen at `specs/history/steps/STEP14.md`
+- **One-line current status**: e.g. "Steps 0–14 complete; see `specs/roadmap.md`"
 - **Commands and conventions**: only sections affected by your change; do not rewrite unrelated prose
 
 ## Do not
 
-- Duplicate `plan/NEXT_STEPS.md`, `plan/ROADMAP.md`, or full step snapshots inside `AGENTS.md`
+- Duplicate `specs/roadmap.md`, `specs/history/target-design.md`, or full step snapshots inside `AGENTS.md`
 - Skip the update because the user did not mention `AGENTS.md`
 - Expand `AGENTS.md` with feature-level detail — keep it stable repo conventions plus pointers
 
 ## Quick check before finishing
 
-If you touched `plan/`, `.cursor/rules/`, `CMakePresets.json`, `scripts/check-format.sh`, or
+If you touched `specs/`, `.cursor/rules/`, `CMakePresets.json`, `scripts/check-format.sh`, or
 `.github/workflows/`, re-read `AGENTS.md` and fix stale references before handing off.
