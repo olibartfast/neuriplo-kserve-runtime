@@ -141,6 +141,23 @@ TEST_CASE(admin_endpoint_activates_version) {
     REQUIRE_EQ(registry.defaultVersion("demo"), "2");
 }
 
+// E-4: the request body's "version" (required by parseSwitchVersionRequest)
+// disagreeing with the URL's version must 400 naming both, rather than
+// silently activating whichever one KServeRuntime happens to use.
+TEST_CASE(admin_endpoint_activate_rejects_mismatched_body_version) {
+    MetricsRegistry metrics;
+    ModelRegistry registry(demoConfig());
+    KServeRuntime runtime(registry, metrics);
+
+    const auto response = runtime.handle(
+        adminRequest("POST", "/v2/admin/models/demo/versions/2/activate", R"({"version":"3"})"));
+    REQUIRE_EQ(response.status, 400);
+    REQUIRE(response.body.find("2") != std::string::npos);
+    REQUIRE(response.body.find("3") != std::string::npos);
+    REQUIRE(registry.ready("demo"));
+    REQUIRE(registry.defaultVersion("demo") != "3");
+}
+
 // B-3 + B-12: a failed admin reload of an already-loaded model must leave it
 // untouched and Ready, and the 409 must surface why rather than a generic
 // message.

@@ -76,6 +76,18 @@ ModelRegistry registryWithEchoModel() {
     });
 }
 
+// A model whose factory always fails, so its slot settles Failed (snapshot
+// published, not ready) rather than never existing at all.
+ModelRegistry registryWithFailedModel() {
+    RuntimeConfig config;
+    config.model_name = "yolo";
+    config.backend = "stub";
+    return ModelRegistry(config, [](const RuntimeConfig &, std::string &error) {
+        error = "injected load failure";
+        return nullptr;
+    });
+}
+
 ExecutionRequest requestWith(const std::string &name, std::vector<double> values) {
     ExecutionRequest request;
     InputTensor input;
@@ -1072,6 +1084,23 @@ TEST_CASE(pipeline_rejects_a_model_step_resolving_to_a_nested_ensemble) {
     REQUIRE(handle != nullptr);
     REQUIRE(handle->load_error.has_value());
     REQUIRE(handle->load_error->find("nested ensembles") != std::string::npos);
+}
+
+// A model step whose snapshot exists but settled Failed (or is still a
+// Loading placeholder) must be treated the same as "not loaded": composing
+// metadata from it would load the ensemble READY with empty inputs/outputs
+// and skip the nested-ensemble check.
+TEST_CASE(pipeline_executor_reports_not_ready_for_a_failed_step_model) {
+    auto registry = registryWithFailedModel();
+    REQUIRE(!registry.ready("yolo"));
+
+    REQUIRE(registry.loadModel(pipelineConfig(twoStepGraph())));
+    REQUIRE(!registry.ready("yolo_ensemble"));
+    const auto handle = registry.findHandle("yolo_ensemble");
+    REQUIRE(handle != nullptr);
+    REQUIRE(handle->load_error.has_value());
+    REQUIRE(handle->load_error->find("yolo") != std::string::npos);
+    REQUIRE(handle->load_error->find("not loaded") != std::string::npos);
 }
 
 // Reloading a pipeline with a graph that references its own name must fail

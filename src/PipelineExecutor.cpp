@@ -292,7 +292,7 @@ bool neighbourModelMetadata(const PipelineConfig &config, const PipelineStepReso
             continue;
         }
         auto snapshot = resolver(candidate.model_name, candidate.model_version);
-        if (!snapshot) {
+        if (!snapshot || !snapshot->isReady()) {
             error = "pipeline references model '" + candidate.model_name +
                     "' which is not loaded; load it before the pipeline";
             return false;
@@ -356,7 +356,7 @@ std::unique_ptr<Executor> makePipelineExecutor(const RuntimeConfig &config,
             // time and a pipeline over a missing model fails to load rather
             // than failing on first request.
             auto snapshot = resolver(step_config.model_name, step_config.model_version);
-            if (!snapshot) {
+            if (!snapshot || !snapshot->isReady()) {
                 error = "pipeline step '" + step_config.name + "' references model '" +
                         step_config.model_name + "' which is not loaded";
                 return nullptr;
