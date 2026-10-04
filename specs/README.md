@@ -20,22 +20,32 @@ to platform packets when a phase is part of one.
 | `mission.md` | What the runtime is, who it serves, what it must never do. |
 | `tech-stack.md` | Language, build, dependencies, architectural boundaries, explicit non-choices, validation entrypoints. |
 | `roadmap.md` | Ordered phases with status. Its **Status Key** section defines the status values -- read it there rather than here, so the two cannot drift. |
-| `YYYY-MM-DD-feature-name/` | One feature packet per increment of active work. The date is when the spec was written, not when it shipped. None exist yet. |
+| `YYYY-MM-DD-feature-name/` | One feature packet per increment of work. The date is when the spec was written, not when it shipped. |
+| `templates/` | Copy these to start a packet. |
 
 `roadmap.md`'s **Specification Rule** decides when a packet is required at all:
 multi-phase work, public-behavior or architecture changes, or low reversibility.
 Trivial fixes need no packet; small contained ones may get a PR-level note.
 
-The former planning folder has been folded into this one:
+The former planning, history and procedures folders are folded into packets.
+Steps 0-14 were delivered before packets existed; each is now a
+**retrospective packet**, ported from its step snapshot on 2026-10-05:
 
-| Path | Contents |
+| Packet | Contents |
 | --- | --- |
-| `architecture.md` | Design patterns in use today (formerly the design patterns file). |
-| `procedures/` | Operational procedures, e.g. `e2e-yolo.md`. |
-| `history/target-design.md` | Original milestone target design, kept as reference. |
-| `history/steps/STEP0.md` to `STEP14.md` | Completed step snapshots. No new STEP files; new work gets a dated packet. |
+| `2026-05-23-runtime-target-design/` | The original milestone target design (goal, boundaries, non-goals, lifecycle, scheduler, LLM, observability, error model, manifests, readiness gap analysis). |
+| `2026-05-23-scaffold/` to `2026-06-05-deployment-validation/` | Steps 0-11. |
+| `2026-06-05-yolo-platform-e2e/` | Step 12, including the former YOLO e2e procedure. |
+| `2026-06-10-control-data-plane-split/` | Step 13. |
+| `2026-06-11-multi-model-hot-reload/` | Step 14. |
 
-Status that lived in the former next-steps file is now in `roadmap.md`.
+A retrospective packet keeps the snapshot text as written. Its `requirements.md`
+takes the step's exit criteria from the target design as `R-` items, `plan.md`
+holds the implementation record as `T-` tasks, and `validation.md` records the
+checks the snapshot reports as run, with a **Deviations** section wherever the
+step delivered less than it planned. Design patterns in use today are in
+`architecture.md`; status that lived in the former next-steps file is in
+`roadmap.md`. New work gets a normal packet, with validation written first.
 
 ## Packet files
 
@@ -115,6 +125,6 @@ in `orchestration.md` follows `orchestrate-ai-coding-workflows`. The conventions
 above are what those produce in this repository -- they are recorded here so the
 packets are readable without the skills at hand.
 
-No packet directory exists in this repository as of 2026-10-04. The in-flight
-cross-repo packet for the current phase lives in neuriplo-platform and is linked
-from `roadmap.md`.
+The only packets in this repository are the retrospective ones above. The
+in-flight cross-repo packet for the current phase lives in neuriplo-platform and
+is linked from `roadmap.md`.

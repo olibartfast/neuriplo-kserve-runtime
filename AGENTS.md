@@ -9,8 +9,9 @@ defined in `CMakePresets.json`; CI is defined in `.github/workflows/ci.yml`.
 
 Read `specs/roadmap.md` for current project status and the active work track. Steps 0–14
 and the multi-backend track are complete; see the roadmap phases for the Step 15 raw
-output path and later work. New work gets a dated packet under `specs/`; git history
-and `CHANGELOG.md` are the implementation record.
+output path and later work. Steps 0–14 are recorded as retrospective packets under
+`specs/` (index in `specs/README.md`). New work gets a dated packet under `specs/`; git
+history and `CHANGELOG.md` are the implementation record.
 
 Treat `specs/roadmap.md` phases as the target sequence and `specs/architecture.md` as
 the patterns in use today. Prefer extending existing Strategy/factory/adapter boundaries

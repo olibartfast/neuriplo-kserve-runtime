@@ -1,0 +1,204 @@
+# Step 10: LLM Path Completion - plan
+
+> Retrospective packet. Step 10 was delivered before this repository adopted
+> spec-driven packets; this packet was ported on 2026-10-05 from the Step 10
+> snapshot (`plan/STEP10.md`, later `specs/history/steps/STEP10.md`) and the
+> Step 10 section of the original target design
+> ([`2026-05-23-runtime-target-design`](../2026-05-23-runtime-target-design/plan.md)). The snapshot text is kept as
+> written; file paths and line counts describe the tree at the time.
+
+Tasks are the step's substeps. Each `T-` section is the implementation
+record from the snapshot.
+
+## Summary
+
+Completed the LLM production path: real backend execution scaffolding with generation parameters, token-accurate context enforcement, cancellation and deadline propagation, KV-cache memory pressure admission, SSE streaming responses, and OpenAI-compatible endpoints for chat completions and embeddings.
+
+## [T-1] 10.1 Real LLM Backend Execution
+
+### Changes
+
+**`src/Executor.hpp`** — extended with LLM result metadata and streaming:
+
+- Added `LlmResultMetadata` struct carrying `prompt_tokens`, `completion_tokens`, and `finish_reason`.
+- Added `std::optional<LlmResultMetadata> llm_metadata` to `ExecutionResponse`.
+- Added `StreamingTokenCallback` type alias for token-by-token decode output.
+- Added `virtual inferStreaming()` method to `Executor` base class (default delegates to `infer()`).
+
+**`src/NeuriploAdapter.hpp`** — extended adapter boundary for LLM:
+
+- Added `LlmInferenceParams` struct with `prompt`, `max_tokens`, `temperature`, `top_p`, `top_k`, `cancel_token`, and `streaming_callback`.
+- Added `LlmInferenceResult` struct with `outputs`, `prompt_tokens`, `completion_tokens`, and `finish_reason`.
+- Added `virtual llmInfer()` method to `NeuriploAdapter` base class.
+
+**`src/NeuriploExecutor.hpp/.cpp`** — routes LLM requests through adapter:
+
+- `NeuriploExecutor::inferStreaming()` checks for `llm_params` and calls `adapter_->llmInfer()` when present, falling back to `infer()` for tensor models.
+- Added `extractPrompt()` private helper to extract BYTES prompt text from request inputs.
+- LLM result metadata is mapped from `LlmInferenceResult` to `ExecutionResponse.llm_metadata`.
+
+**`src/RealNeuriploAdapter.cpp`** — adds `llmInfer()` implementation:
+
+- Delegates to the tensor `infer()` path for LLM requests, returning `LlmInferenceResult` with token counts and finish reason.
+- Open for replacement with real llama.cpp/Cactus token counting when the backend provides it.
+
+**`src/StubExecutor.cpp`** — produces LLM result metadata:
+
+- LLM path now populates `LlmResultMetadata` with estimated prompt/completion token counts and `"stop"` finish reason.
+- `inferStreaming()` override produces token-by-token callback chunks.
+
+**`src/NeuriploAdapterDefault.cpp`** — new file providing default `llmInfer()` and vtable.
+
+**`src/ExecutorDefault.cpp`** — new file providing default `inferStreaming()` that delegates to `infer()`.
+
+## [T-2] 10.2 Token-Accurate Context Enforcement
+
+### Changes
+
+**`src/Tokenizer.hpp`** — new file with `Tokenizer` interface:
+
+- `Tokenizer` abstract base class with `countTokens()` and `encode()` methods.
+- `CharRatioTokenizer` implementing `tokens_per_char` estimation (replaces inline character-count proxy).
+- `WhitespaceTokenizer` splitting on whitespace for more accurate English text estimation.
+
+**`src/LlmScheduler.cpp`** — replaces character-proxy with tokenizer:
+
+- Constructor accepts `std::unique_ptr<Tokenizer>` parameter.
+- `validateLlmRequest()` uses `tokenizer_->countTokens()` instead of `tokens_per_char` multiplication.
+- Adds context window check: `prompt_tokens + max_tokens > context_length` rejects over-context requests.
+- Factory `makeLlmScheduler()` default creates `CharRatioTokenizer(tokens_per_char)`.
+- New overload `makeLlmScheduler(..., tokenizer)` accepts custom tokenizer.
+
+## [T-3] 10.3 Cancellation and Deadline Propagation
+
+### Changes
+
+**`src/LlmScheduler.cpp`** — cancellation through decode:
+
+- Cancel token propagation already existed in `ExecutionRequest` from Step 8.
+- `PendingRequest` already carries cancel token and deadline.
+- `processSingle()` checks cancellation before and after decode.
+- `runInference()` checks cancel token after async infer; abandons result if cancelled.
+- Streaming inference checks cancel token before initiating.
+
+**`src/NeuriploAdapter.hpp`** — `LlmInferenceParams` includes `CancelToken`:
+
+- Cancel token passed through to adapter's `llmInfer()`.
+- Real backend adapter can check token during decode loops.
+
+**`src/StubExecutor.cpp`** — checks cancel token at start of `infer()`.
+
+## [T-4] 10.4 KV-Cache Memory Pressure Policy
+
+### Changes
+
+**`src/LlmScheduler.cpp`** — memory pressure admission:
+
+- `LlmSchedulerConfig` includes `memory_budget_bytes` field (default 0 = disabled).
+- `submit()` checks memory pressure before enqueuing: estimated context bytes × active decode slots must not exceed `memory_budget_bytes`.
+- Over-memory-pressure requests are rejected with `QUEUE_FULL` and `memory pressure` message.
+- `requests_memory_pressure_rejected` metric counter incremented.
+
+**`src/SchedulerMetrics.hpp`** — new fields:
+
+- `kv_cache_slots_total` — total configured KV cache slots.
+- `kv_cache_slots_active` — currently active decode slots.
+- `requests_memory_pressure_rejected` — count of memory-pressure rejections.
+
+**`src/MetricsRegistry.cpp`** — exposes KV cache metrics on `/metrics`:
+
+- `neuriplo_kv_cache_slots_total` gauge.
+- `neuriplo_kv_cache_slots_active` gauge.
+- `neuriplo_scheduler_requests_memory_pressure_rejected_total` counter.
+
+**`src/RuntimeConfig.hpp/.cpp`** — CLI flag `--memory-budget-bytes`.
+
+## [T-5] 10.5 Streaming Responses
+
+### Changes
+
+**`src/HttpTypes.hpp`** — streaming support in `HttpResponse`:
+
+- Added `bool streaming = false` flag.
+- Added `std::function<void(StreamWriter &)> stream_callback` for SSE output.
+- Added `StreamWriter` abstract base class with virtual `write()` method.
+
+**`src/HttpServer.cpp`** — SSE response handling:
+
+- `handleClient()` checks `response.streaming` and `response.stream_callback`.
+- Streaming path sends SSE headers (`Content-Type: text/event-stream`, `Cache-Control: no-cache`).
+- `SocketWriter` class wraps `send()` as `StreamWriter` implementation.
+- Callback is invoked with the socket writer for progressive token output.
+- After callback, sends `data: [DONE]\n\n` to signal stream end.
+
+**`src/Executor.hpp`** — `StreamingTokenCallback` type alias.
+
+**`src/StubExecutor.cpp`** — `inferStreaming()` sends tokens in 2-character chunks.
+
+**`src/NeuriploExecutor.cpp`** — `inferStreaming()` delegates to adapter's `llmInfer()` with callback.
+
+**`src/OpenAiCodec.hpp/.cpp`** — new files:
+
+- `streamingChunkJson()` formats SSE data lines for completions and chat.
+- `streamingDoneJson()` returns `"data: [DONE]\n\n"`.
+
+### Streaming Protocol
+
+- `parameters.stream = true` in KServe V2 inference request gates streaming.
+- OpenAI cometions/chat `stream: true` gates streaming output.
+- SSE format: `data: {json}\n\n` per token chunk, ending with `data: [DONE]\n\n`.
+
+## [T-6] 10.6 OpenAI-Compatible Endpoints
+
+### Changes
+
+**`src/OpenAiCodec.hpp/.cpp`** — new files for OpenAI request/response codec:
+
+- `OpenAiCompletionRequest`, `OpenAiChatRequest`, `OpenAiEmbeddingRequest` structs.
+- `OpenAiCompletionResponse`, `OpenAiChatResponse`, `OpenAiEmbeddingResponse` structs.
+- `parseCompletionRequest()`, `parseChatRequest()`, `parseEmbeddingRequest()` parsers.
+- `completionResponseJson()`, `chatResponseJson()`, `embeddingResponseJson()` serializers.
+
+**`src/KServeRuntime.hpp/.cpp`** — new endpoints:
+
+- `POST /v1/completions` — updated from Step 8 scaffold to use `OpenAiCodec`, include token metadata from `LlmResultMetadata`, and support streaming.
+- `POST /v1/chat/completions` — new endpoint parsing `messages` array, constructing prompt from chat history, and returning OpenAI-shaped response with role/content.
+- `POST /v1/embeddings` — new endpoint accepting `model` and `input`, executing inference, and returning embedding vector response.
+
+**`src/KServeRuntime.cpp`** — static helper functions:
+
+- `backendIsLlm()` checks backend capability registry.
+- `estimateTokens()` uses `tokensPerChar` for token count estimation when no metadata available.
+- `chatCompletionsStreaming()` and `completionsStreaming()` for SSE output.
+
+## Files Changed
+
+| File | Change |
+|---|---|
+| `src/Executor.hpp` | LlmResultMetadata, StreamingTokenCallback, virtual inferStreaming |
+| `src/ExecutorDefault.cpp` | New file — default inferStreaming impl |
+| `src/HttpServer.cpp` | SSE streaming support with SocketWriter |
+| `src/HttpTypes.hpp` | HttpResponse streaming flag and callback, StreamWriter |
+| `src/KServeRuntime.cpp` | Chat completions, embeddings, streaming endpoints |
+| `src/KServeRuntime.hpp` | New method declarations |
+| `src/LlmScheduler.cpp` | Tokenizer-based context, memory pressure, cancel propagation |
+| `src/MetricsRegistry.cpp` | KV cache and memory pressure metrics |
+| `src/ModelRegistry.cpp` | Pass memory_budget_bytes to scheduler config |
+| `src/NeuriploAdapter.hpp` | LlmInferenceParams, LlmInferenceResult, llmInfer |
+| `src/NeuriploAdapterDefault.cpp` | New file — default llmInfer and vtable |
+| `src/NeuriploExecutor.cpp` | inferStreaming, extractPrompt |
+| `src/NeuriploExecutor.hpp` | inferStreaming, extractPrompt declarations |
+| `src/OpenAiCodec.cpp` | New file — OpenAI codec implementation |
+| `src/OpenAiCodec.hpp` | New file — OpenAI codec types and parsers |
+| `src/RealNeuriploAdapter.cpp` | llmInfer implementation |
+| `src/RuntimeConfig.cpp` | --memory-budget-bytes flag |
+| `src/RuntimeConfig.hpp` | memory_budget_bytes field |
+| `src/Scheduler.hpp` | LlmSchedulerConfig with memory_budget_bytes, 4-arg factory |
+| `src/SchedulerMetrics.hpp` | KV cache and memory pressure metrics |
+| `src/StubExecutor.cpp` | LlmResultMetadata, inferStreaming |
+| `src/Tokenizer.hpp` | New file — Tokenizer, CharRatioTokenizer, WhitespaceTokenizer |
+| `CMakeLists.txt` | New source and test files |
+| `tests/LlmPathTest.cpp` | New file — LLM path integration tests |
+| `tests/LlmSchedulerTest.cpp` | Updated with token, metric, memory, cancel tests |
+| `tests/OpenAiCodecTest.cpp` | New file — OpenAI codec tests |
+| `tests/TokenizerTest.cpp` | New file — Tokenizer unit tests |

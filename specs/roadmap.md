@@ -5,10 +5,10 @@
 > the current phase is a working sequence to be confirmed.
 
 This roadmap is scoped to the KServe runtime. Design patterns are in
-`architecture.md`. The step snapshots (`STEP0.md` to `STEP14.md`), the original
-target design and the YOLO e2e procedure were removed from the tree; they remain
-in git history at [e77f6f0](https://github.com/olibartfast/neuriplo-kserve-runtime/tree/e77f6f0/specs/). Step status that was in the former
-next-steps file is merged into the phases below.
+`architecture.md`. Steps 0-14 are recorded as retrospective packets under
+`specs/` (see [README.md](README.md)), ported from the step snapshots, the
+original target design and the YOLO e2e procedure. Step status that was in the
+former next-steps file is merged into the phases below.
 
 ## Status Key
 
@@ -31,7 +31,8 @@ Work that spans repositories is specified in
 [neuriplo-platform](https://github.com/olibartfast/neuriplo-platform) `specs/`
 and linked from here. Small contained fixes may use a concise PR-level note;
 trivial fixes need no packet. Do not create speculative packets for inactive
-items or backfill packets for completed work.
+items. The Step 0-14 retrospective packets are the only backfill; completed
+work after them is recorded in its own packet or in `CHANGELOG.md`.
 
 ## Phase 0 - Serving Foundation (Steps 0-11)
 
@@ -40,7 +41,10 @@ items or backfill packets for completed work.
 Scaffold, KServe packaging, V2 protocol, model registry and executors, atomic
 neuriplo integration, scheduler, dynamic batching, observability, LLM backends
 and path completion, production hardening, and deployment validation. Record:
-the target design and `STEP0.md` to `STEP11.md` in [git history](https://github.com/olibartfast/neuriplo-kserve-runtime/tree/e77f6f0/specs/history).
+[2026-05-23-runtime-target-design](2026-05-23-runtime-target-design/plan.md)
+and the Step 0-11 packets it indexes. Their `validation.md` files list the exit
+criteria that were only partly met (Steps 1, 6-11), notably the LLM decode path
+(Step 10) and cluster-level deployment checks (Step 11).
 
 ## Phase 1 - Platform E2E and Production Track (Steps 12-14)
 
@@ -48,8 +52,10 @@ the target design and `STEP0.md` to `STEP11.md` in [git history](https://github.
 
 YOLO end-to-end through neuriplo-infer, HTTP and gRPC parity, control/data
 plane split, and multi-model hot reload with zero-downtime version switch.
-Record: the YOLO e2e procedure and `STEP12.md` to `STEP14.md` in
-[git history](https://github.com/olibartfast/neuriplo-kserve-runtime/tree/e77f6f0/specs/).
+Record: [2026-06-05-yolo-platform-e2e](2026-06-05-yolo-platform-e2e/validation.md)
+(including the YOLO e2e procedure),
+[2026-06-10-control-data-plane-split](2026-06-10-control-data-plane-split/plan.md),
+[2026-06-11-multi-model-hot-reload](2026-06-11-multi-model-hot-reload/plan.md).
 
 Summary: Step 12 ran real neuriplo-infer to KServe HTTP to runtime to neuriplo
 (ONNX Runtime) to YOLO, with gRPC parity (`real-onnx-grpc`, `scripts/e2e-yolo.sh`).
