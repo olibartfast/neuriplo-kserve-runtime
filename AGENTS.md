@@ -8,22 +8,23 @@ server. Unit tests live in `tests/` and are registered through CTest. Build pres
 defined in `CMakePresets.json`; CI is defined in `.github/workflows/ci.yml`. Local editor
 debug tasks are under `.vscode/`.
 
-Read `plan/NEXT_STEPS.md` for current project status and the active work track. Steps 0–14
-and the multi-backend track are complete; Step 15 (raw output hot path) adapter work is on
-`feature/step-15-raw-output` and needs neuriplo PR #14 on `develop` for real-* CI. Completed step snapshots live in `plan/STEP0.md` through
-`plan/STEP14.md` (extend the range when a new `plan/STEP<N>.md` is added). Use `plan/STEP<N>_WIP.md` only for in-progress step work.
-`plan/STEP0.md` remains useful historical context for the original scaffold assumptions.
+Read `specs/roadmap.md` for current project status and the active work track. Steps 0–14
+and the multi-backend track are complete; see the roadmap for the Step 15 raw output path
+and later phases. Completed step snapshots live in `specs/history/steps/STEP0.md` through
+`STEP14.md` (historical; do not add new STEP files, new work gets a dated packet under
+`specs/`). `specs/history/steps/STEP0.md` remains useful context for the original scaffold
+assumptions.
 
-Treat `plan/ROADMAP.md` as the target roadmap and step snapshots as the implementation
-record. For architecture work, read `plan/DESIGN_PATTERNS.md` for patterns in use today and
-the "Architecture And Design Pattern Evolution" section in `plan/ROADMAP.md` for planned
-patterns. Prefer extending existing Strategy/factory/adapter boundaries over adding new
+Treat `specs/history/target-design.md` as the original target design and step snapshots as
+the implementation record. For architecture work, read `specs/architecture.md` for patterns
+in use today and the "Architecture And Design Pattern Evolution" section in
+`specs/history/target-design.md` for planned patterns. Prefer extending existing Strategy/factory/adapter boundaries over adding new
 frameworks unless the roadmap calls for them.
 
 ## Specs And Planning Entry Point
 
 `specs/` is the project constitution (`mission.md`, `tech-stack.md`, `roadmap.md`) and the
-planning entry point; start there. `plan/` remains the historical implementation record.
+planning entry point; start there. The step snapshots and original target design are under `specs/history/`.
 Active work that is multi-phase, changes public behavior or architecture, or has low
 reversibility needs a dated `specs/YYYY-MM-DD-feature-name/` packet (requirements, plan,
 validation) before implementation; cross-repo work uses a neuriplo-platform packet.
@@ -35,11 +36,11 @@ matching `AGENTS.md` section in the same PR/commit — do not wait for the user 
 
 Triggers:
 
-- New or completed `plan/STEP<N>.md`, or material edits to `plan/NEXT_STEPS.md`
+- New dated `specs/` packets, or material edits to `specs/roadmap.md`
 - Build, test, lint, or CI command/preset changes
 - New `.cursor/rules/*.mdc` or other mandatory workflow rules
 - Repo layout, module boundaries, or default runtime invocation changes
-- New cross-cutting architectural patterns (also update `plan/DESIGN_PATTERNS.md`)
+- New cross-cutting architectural patterns (also update `specs/architecture.md`)
 
 Keep `AGENTS.md` as stable conventions and pointers. Do not duplicate full roadmap or step
 snapshot content here.
@@ -99,7 +100,7 @@ scripts/check-format.sh
 
 ## Hyperlink verification
 
-When editing documentation (`README.md`, `plan/*.md`) with hyperlinks:
+When editing documentation (`README.md`, `specs/**/*.md`) with hyperlinks:
 - Verify all relative links resolve to existing files in the repo.
 - Verify absolute GitHub URLs are reachable.
 - Prefer absolute GitHub blob/tree URLs over fragile cross-repo relative paths.
@@ -156,6 +157,6 @@ Feature PRs target `develop`; release and hotfix PRs target `master` (and back-m
 
 Do not commit model files, secrets, tokens, or generated `build*/` directories. Keep
 runtime defaults safe for local development, and document any new network-facing options
-in `README.md` and tests. Update `plan/DESIGN_PATTERNS.md` when introducing a new
-cross-cutting architectural pattern, update `plan/ROADMAP.md` when changing planned
+in `README.md` and tests. Update `specs/architecture.md` when introducing a new
+cross-cutting architectural pattern, update `specs/roadmap.md` when changing planned
 architecture direction, and sync this file per "Agent Guide Maintenance" above.
