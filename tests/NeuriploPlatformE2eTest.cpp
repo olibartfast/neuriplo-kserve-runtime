@@ -19,6 +19,7 @@
 #include "StubExecutor.hpp"
 #include "Test.hpp"
 
+#include <algorithm>
 #include <arpa/inet.h>
 #include <chrono>
 #include <cmath>
