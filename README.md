@@ -146,6 +146,8 @@ environment values.
 MODEL_NAME   default model name
 MODEL_PATH   default model path
 BACKEND      default backend name
+TASK_TYPE    vision task type selecting the tensor serving path (e.g. rfdetr)
+INPUT_SIZES  per-input shapes, e.g. "1,3,560,560" (";" separates inputs)
 STORAGE_URI  retained for diagnostics; the server does not download it
 MAX_REQUEST_BYTES  maximum accepted HTTP request size
 ```
@@ -178,6 +180,30 @@ LLM scheduler flags (llama.cpp, Cactus, GGUF models):
 For GGUF/local LLM artifacts in KServe, mount the model directory at `/mnt/models`
 (for example `/mnt/models/model.gguf` or `/mnt/models/` containing the GGUF file).
 Use `--backend llamacpp` or `--backend cactus` with the LLM scheduler path.
+
+Vision GGUF models (RF-DETR detection / segmentation weights for the neuriplo
+GGML backend) are served on the tensor path instead: pass the neuriplo-tasks
+model type with `--task-type` and send raw tensor I/O (see
+`export/ggml/README.md` in neuriplo-tasks for the weight contract).
+
+```bash
+./build/real-ggml/neuriplo-kserve-runtime \
+    --model-name rfdetr \
+    --model-path /models/rfdetr.gguf \
+    --backend ggml \
+    --task-type rfdetr \
+    --input-sizes 1,3,560,560 \
+    --port 8080
+```
+
+`--task-type` (`TASK_TYPE`) accepts any neuriplo-tasks model-type string (e.g.
+`rfdetr`, `rfdetrseg`, `yolo26`). A non-empty value routes LLM-kind backends
+(`ggml`) to the tensor scheduler and advertises the engine's real tensor I/O
+instead of the BYTES prompt/text LLM convention. It cannot be combined with
+`--scheduler-strategy llm`.
+
+Repository-scan mode (`--models`) does not discover `.gguf` files yet; serve
+vision GGUF with `--model-path` as above.
 
 When `MODEL_PATH` is unset and `/mnt/models` exists, the runtime uses
 `/mnt/models` as the model path. This matches KServe storage-initializer and PVC

@@ -327,7 +327,10 @@ class RealNeuriploAdapter final : public NeuriploAdapter {
         metadata.name = config.model_name;
         metadata.versions = {"1"};
         metadata.platform = "neuriplo_" + config.backend;
-        if (backendKind(config.backend) == BackendKind::Llm) {
+        // A vision task_type (e.g. "rfdetr" for an RF-DETR GGUF) selects the
+        // tensor serving path on LLM-kind backends: advertise the engine's
+        // real tensor I/O instead of the BYTES prompt/text LLM convention.
+        if (backendKind(config.backend) == BackendKind::Llm && config.task_type.empty()) {
             // LLM backends report raw layer metadata (e.g. "prompt1"/FP32), but
             // the KServe LLM convention this runtime serves is a BYTES prompt
             // in and a BYTES text tensor out, matching the stub LLM executor.

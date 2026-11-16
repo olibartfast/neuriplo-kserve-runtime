@@ -143,6 +143,14 @@ bool usesLlmScheduler(const std::string &scheduler_strategy, const std::string &
     return backendKind(backend_id) == BackendKind::Llm;
 }
 
+bool usesLlmScheduler(const std::string &scheduler_strategy, const std::string &backend_id,
+                      const std::string &task_type) {
+    if (!task_type.empty()) {
+        return false;
+    }
+    return usesLlmScheduler(scheduler_strategy, backend_id);
+}
+
 std::vector<std::string> availableBackendIds(const std::string &plugin_dir) {
     registerDefaultBackends();
 

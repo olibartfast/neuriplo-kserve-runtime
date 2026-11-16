@@ -58,6 +58,23 @@ TEST_CASE(backend_registry_auto_detects_llm_backends) {
     REQUIRE(!usesLlmScheduler("tensor", "onnx_runtime"));
 }
 
+TEST_CASE(backend_registry_vision_task_selects_tensor_path) {
+    // A vision task_type routes LLM-kind backends (ggml vision GGUF) down the
+    // tensor serving path instead of the LLM scheduler path.
+    REQUIRE(!usesLlmScheduler("tensor", "ggml", "rfdetr"));
+    REQUIRE(!usesLlmScheduler("tensor", "ggml", "rfdetrseg"));
+    REQUIRE(!usesLlmScheduler("tensor", "llamacpp", "rfdetr"));
+    REQUIRE(!usesLlmScheduler("tensor", "stub", "yolo26"));
+    REQUIRE(!usesLlmScheduler("tensor", "onnx_runtime", "rfdetr"));
+}
+
+TEST_CASE(backend_registry_empty_task_keeps_legacy_routing) {
+    // Empty task_type preserves the two-argument behavior exactly.
+    REQUIRE(usesLlmScheduler("tensor", "ggml", ""));
+    REQUIRE(!usesLlmScheduler("tensor", "onnx_runtime", ""));
+    REQUIRE(usesLlmScheduler("llm", "stub", ""));
+}
+
 TEST_CASE(backend_registry_available_ids_are_sorted_and_include_stub) {
     const auto ids = availableBackendIds();
     REQUIRE(!ids.empty());

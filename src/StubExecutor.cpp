@@ -199,7 +199,8 @@ ModelMetadata llmStubMetadata(const RuntimeConfig &config) {
 
 std::unique_ptr<Executor> makeStubExecutor(const RuntimeConfig &config, std::string &error) {
     (void)error;
-    const bool llm_mode = usesLlmScheduler(config.scheduler_strategy, config.backend);
+    const bool llm_mode =
+        usesLlmScheduler(config.scheduler_strategy, config.backend, config.task_type);
     const auto metadata = llm_mode ? llmStubMetadata(config) : tensorStubMetadata(config);
     return std::make_unique<StubExecutor>(std::move(metadata), llm_mode, config.max_tokens);
 }

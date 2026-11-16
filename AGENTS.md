@@ -11,7 +11,9 @@ Read `specs/roadmap.md` for current project status and the active work track. St
 and the multi-backend track are complete; see the roadmap phases for the Step 15 raw
 output path and later work. Steps 0–14 are recorded as retrospective packets under
 `specs/` (index in `specs/README.md`). New work gets a dated packet under `specs/`; git
-history and `CHANGELOG.md` are the implementation record.
+history and `CHANGELOG.md` are the implementation record. Phase 6 (vision-GGUF serving
+on LLM-kind backends) is specified in
+[2026-11-16-vision-gguf-serving](specs/2026-11-16-vision-gguf-serving/requirements.md).
 
 Treat `specs/roadmap.md` phases as the target sequence and `specs/architecture.md` as
 the patterns in use today. Prefer extending existing Strategy/factory/adapter boundaries

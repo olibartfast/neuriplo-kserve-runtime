@@ -30,6 +30,14 @@ bool isKnownBackend(const std::string &backend_id);
 
 bool usesLlmScheduler(const std::string &scheduler_strategy, const std::string &backend_id);
 
+// Vision-task overload: a non-empty task_type (a neuriplo-tasks model-type
+// string such as "yolo26" or "rfdetr") always selects the tensor serving path,
+// even for LLM-kind backends. A ggml vision GGUF (RF-DETR detection or
+// segmentation) is served with raw tensor I/O, not token generation, which the
+// LLM scheduler cannot speak.
+bool usesLlmScheduler(const std::string &scheduler_strategy, const std::string &backend_id,
+                      const std::string &task_type);
+
 // Backend ids this binary can actually serve: non-neuriplo backends (stub)
 // plus the neuriplo backends compiled in or loaded as plugins.
 std::vector<std::string> availableBackendIds(const std::string &plugin_dir = "");

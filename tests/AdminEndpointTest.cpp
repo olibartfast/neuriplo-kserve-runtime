@@ -220,6 +220,25 @@ TEST_CASE(admin_endpoint_load_rejects_wrong_typed_use_gpu) {
     REQUIRE(!registry.modelConfig("second").has_value());
 }
 
+// A vision task_type is accepted in the admin body and kept on the model config,
+// so a GGUF vision model loaded at runtime takes the tensor path like one loaded
+// from the CLI.
+TEST_CASE(admin_endpoint_load_accepts_task_type) {
+    const auto parsed = parseLoadModelRequest(
+        R"({"model_name":"vision","backend":"ggml","task_type":"rfdetr"})", demoConfig());
+    REQUIRE(parsed.ok);
+    REQUIRE_EQ(parsed.config.task_type, std::string("rfdetr"));
+}
+
+TEST_CASE(admin_endpoint_load_rejects_llm_strategy_with_task_type) {
+    const auto parsed = parseLoadModelRequest(
+        R"({"model_name":"vision","backend":"ggml","task_type":"rfdetr",
+            "scheduler_strategy":"llm"})",
+        demoConfig());
+    REQUIRE(!parsed.ok);
+    REQUIRE(parsed.error_message.find("task_type") != std::string::npos);
+}
+
 // B-2: instances < 1 must 400 rather than reach ModelLifecycle, which cannot
 // build a scheduler with zero executors.
 TEST_CASE(admin_endpoint_load_rejects_zero_instances) {

@@ -122,6 +122,40 @@ size_t parseNonNegativeSize(const std::string &value, const std::string &flag) {
     return static_cast<size_t>(std::stoull(value));
 }
 
+// One input per ';'-separated group, dimensions comma-separated inside a group:
+// "1,3,560,560" or "1,3,224,224;1,10". Backends that cannot introspect shapes
+// (GGML, which requires them; OpenCV DNN) read the geometry from here.
+std::vector<std::vector<int64_t>> parseInputSizes(const std::string &value) {
+    if (value.empty()) {
+        return {};
+    }
+
+    std::vector<std::vector<int64_t>> shapes;
+    std::stringstream groups(value);
+    std::string group;
+    while (std::getline(groups, group, ';')) {
+        // A trailing ';' yields no final extraction, so it is checked below;
+        // an interior empty group (from ";;" or a leading ';') lands here.
+        if (group.empty()) {
+            throw std::invalid_argument("input sizes must not contain empty shapes");
+        }
+        std::vector<int64_t> shape;
+        std::stringstream dims(group);
+        std::string token;
+        while (std::getline(dims, token, ',')) {
+            if (token.empty()) {
+                throw std::invalid_argument("input sizes must not contain empty dimensions");
+            }
+            shape.push_back(static_cast<int64_t>(std::stoll(token)));
+        }
+        shapes.push_back(std::move(shape));
+    }
+    if (!value.empty() && value.back() == ';') {
+        throw std::invalid_argument("input sizes must not contain empty shapes");
+    }
+    return shapes;
+}
+
 std::vector<size_t> parsePreferredBatchSizes(const std::string &value) {
     if (value.empty()) {
         return {};
@@ -198,7 +232,12 @@ RuntimeConfig parseRuntimeConfig(int argc, char **argv, const RuntimeEnvironment
     applyStringEnvironmentDefault(config.model_repository, environment, "MODEL_REPOSITORY");
     applyStringEnvironmentDefault(config.model_control_mode, environment, "MODEL_CONTROL_MODE");
     applyStringEnvironmentDefault(config.backend, environment, "BACKEND");
+    applyStringEnvironmentDefault(config.task_type, environment, "TASK_TYPE");
     applyStringEnvironmentDefault(config.plugin_dir, environment, "NEURIPLO_PLUGIN_DIR");
+    if (const auto input_sizes = environment.get("INPUT_SIZES");
+        input_sizes.has_value() && !input_sizes->empty()) {
+        config.input_sizes = parseInputSizes(*input_sizes);
+    }
     applyStringEnvironmentDefault(config.storage_uri, environment, "STORAGE_URI");
     applyStringEnvironmentDefault(config.deployment, environment, "DEPLOYMENT");
     applySizeEnvironmentDefault(config.max_request_bytes, environment, "MAX_REQUEST_BYTES");
@@ -236,8 +275,12 @@ RuntimeConfig parseRuntimeConfig(int argc, char **argv, const RuntimeEnvironment
         } else if (arg == "--backend") {
             config.backend = requireValue(i, argc, argv, arg);
             backend_explicit = true;
+        } else if (arg == "--task-type") {
+            config.task_type = requireValue(i, argc, argv, arg);
         } else if (arg == "--plugin-dir") {
             config.plugin_dir = requireValue(i, argc, argv, arg);
+        } else if (arg == "--input-sizes") {
+            config.input_sizes = parseInputSizes(requireValue(i, argc, argv, arg));
         } else if (arg == "--deployment") {
             config.deployment = requireValue(i, argc, argv, arg);
         } else if (arg == "--max-queue-size") {
@@ -292,7 +335,8 @@ RuntimeConfig parseRuntimeConfig(int argc, char **argv, const RuntimeEnvironment
                 "[--grpc-port 9000] "
                 "[--max-request-bytes 67108864] [--model-name demo] [--model-version 1] "
                 "[--model-path path] [--models path | --model-repository path] "
-                "[--model-control-mode none] [--backend stub] [--use-gpu false] "
+                "[--model-control-mode none] [--backend stub] [--task-type rfdetr] "
+                "[--input-sizes 1,3,560,560] [--use-gpu false] "
                 "[--plugin-dir path] [--deployment stable] "
                 "[--max-queue-size 64] [--request-timeout-ms 30000] "
                 "[--instances 1] [--dynamic-batching-enabled false] [--max-batch-size 1] "
@@ -384,6 +428,12 @@ RuntimeConfig parseRuntimeConfig(int argc, char **argv, const RuntimeEnvironment
                                     "is enabled");
     }
     parseSchedulerStrategy(config.scheduler_strategy);
+    if (config.scheduler_strategy == "llm" && !config.task_type.empty()) {
+        // A vision task can only be served on the tensor path; the LLM
+        // scheduler speaks token generation, not task tensors.
+        throw std::invalid_argument("task-type selects tensor serving and cannot be "
+                                    "combined with --scheduler-strategy llm");
+    }
 
     return config;
 }

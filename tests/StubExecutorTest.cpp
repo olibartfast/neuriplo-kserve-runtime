@@ -29,6 +29,22 @@ TEST_CASE(stub_executor_exposes_metadata) {
     REQUIRE_EQ(executor->metadata().outputs[0].shape[1], 1000);
 }
 
+TEST_CASE(stub_executor_vision_task_selects_tensor_metadata) {
+    // A vision task_type keeps even LLM-kind backends on the tensor stub path
+    // (mirrors the RealNeuriploAdapter metadata branch without a real engine).
+    RuntimeConfig config = stubConfig();
+    config.backend = "ggml";
+    config.task_type = "rfdetr";
+    std::string error;
+    const auto executor = makeStubExecutor(config, error);
+    REQUIRE(executor != nullptr);
+    REQUIRE_EQ(executor->metadata().platform, "neuriplo_ggml");
+    REQUIRE(!executor->metadata().inputs.empty());
+    REQUIRE(executor->metadata().inputs[0].name != "prompt");
+    REQUIRE_EQ(executor->metadata().outputs[0].shape.size(), static_cast<size_t>(2));
+    REQUIRE_EQ(executor->metadata().outputs[0].shape[1], 1000);
+}
+
 TEST_CASE(stub_executor_returns_deterministic_output) {
     std::string error;
     const auto executor = makeStubExecutor(stubConfig(), error);

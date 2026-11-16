@@ -94,6 +94,15 @@
       }
     },
     {
+      "name": "real-ggml",
+      "inherits": "real-onnx",
+      "displayName": "Real neuriplo GGML backend (vision GGUF)",
+      "binaryDir": "${sourceDir}/build/real-ggml",
+      "cacheVariables": {
+        "DEFAULT_BACKEND": "GGML"
+      }
+    },
+    {
       "name": "grpc",
       "inherits": "debug",
       "displayName": "gRPC V2 support",
@@ -160,6 +169,7 @@
     { "name": "real-plugin", "configurePreset": "real-plugin" },
     { "name": "grpc", "configurePreset": "grpc" },
     { "name": "real-onnx-grpc", "configurePreset": "real-onnx-grpc" },
+    { "name": "real-ggml", "configurePreset": "real-ggml" },
     { "name": "real-openvino", "configurePreset": "real-openvino" },
     { "name": "real-openvino-grpc", "configurePreset": "real-openvino-grpc" },
     { "name": "real-executorch", "configurePreset": "real-executorch" },

@@ -149,6 +149,18 @@ in profiling for zero-copy buffers, allocation churn under load for arena/PMR,
 error-handling bugs for structured result types,
 and client demand for INT8/FP16 in the gRPC codec.
 
+## Phase 6 - Vision GGUF Serving
+
+**Status: Specified** - branch `feature/ggml-vision-serving-v2`, packet
+[2026-11-16-vision-gguf-serving](2026-11-16-vision-gguf-serving/requirements.md).
+
+RF-DETR detection and segmentation GGUF weights are served through the neuriplo
+GGML backend on the tensor path. A vision `--task-type` (`TASK_TYPE`) selects the
+tensor scheduler and the engine's tensor metadata for LLM-kind backends, and
+`--input-sizes` (`INPUT_SIZES`) supplies the static geometry the GGML backend
+requires. `--scheduler-strategy llm` combined with a task is rejected. Repository
+scan discovery of `.gguf` files stays deferred (Phase 4).
+
 ## Infrastructure and Cross-Repo Notes
 
 CI is done: parallel sanitizer matrix (`fail-fast: false`), `real-onnx-grpc`
