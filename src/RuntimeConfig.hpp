@@ -32,6 +32,11 @@ struct RuntimeConfig {
     // cannot take the server down with it before it has even been asked for.
     std::string model_control_mode = "none";
     std::string backend = "stub";
+    // Vision task type (a neuriplo-tasks model-type string such as "yolo26" or
+    // "rfdetr"). Empty means no task-selected serving path. A non-empty value
+    // routes LLM-kind backends (ggml vision GGUF) down the tensor serving path
+    // instead of the LLM scheduler path.
+    std::string task_type;
     // Run inference on the GPU when the selected backend supports it. Without
     // this the runtime could only ever serve on the CPU, whatever the backend
     // build was capable of.

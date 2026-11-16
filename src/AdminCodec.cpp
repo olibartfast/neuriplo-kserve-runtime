@@ -120,6 +120,9 @@ std::optional<std::string> applyCommonFields(const Json &json, RuntimeConfig &co
     if (!readString(json, "plugin_dir", config.plugin_dir, &type_error) && !type_error.empty()) {
         return type_error;
     }
+    if (!readString(json, "task_type", config.task_type, &type_error) && !type_error.empty()) {
+        return type_error;
+    }
     if (!readInputSizes(json, config, &type_error) && !type_error.empty()) {
         return type_error;
     }
@@ -214,6 +217,13 @@ std::optional<std::string> applyCommonFields(const Json &json, RuntimeConfig &co
     if (config.dynamic_batching_enabled && config.max_batch_size < 2) {
         return std::string(
             "max_batch_size must be at least 2 when dynamic_batching_enabled is true");
+    }
+
+    // Same rule as the CLI: a vision task serves tensors, so an LLM scheduler
+    // request and a task_type cannot both be asked for.
+    if (config.scheduler_strategy == "llm" && !config.task_type.empty()) {
+        return std::string("task_type selects tensor serving and cannot be combined with "
+                           "scheduler_strategy llm");
     }
 
     return std::nullopt;

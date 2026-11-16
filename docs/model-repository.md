@@ -527,6 +527,9 @@ engine wins.
 one of them cannot be placed in a repository tree — it must be served in
 single-model mode (`--model-path`) or loaded through
 `/v2/repository/models/<name>/load` with an explicit backend in the request body.
+A vision GGUF on `ggml` (RF-DETR) additionally needs `--task-type` (or
+`task_type` in the admin body) to select the tensor serving path; see
+`README.md`.
 
 `.pb` maps to `libtensorflow`, but a TensorFlow SavedModel is a *directory*
 (`model.savedmodel/`), and the scanner only inspects files inside a version

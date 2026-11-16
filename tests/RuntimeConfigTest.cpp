@@ -2,6 +2,7 @@
 #include "Test.hpp"
 
 #include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -110,6 +111,62 @@ TEST_CASE(parse_runtime_config_accepts_overrides) {
     REQUIRE_EQ(config.model_name, "classifier");
     REQUIRE_EQ(config.model_path, "/models/model.onnx");
     REQUIRE_EQ(config.backend, "onnx_runtime");
+}
+
+TEST_CASE(parse_runtime_config_task_type_env_and_cli) {
+    const auto env_config =
+        parse({"neuriplo-kserve-runtime"}, testEnvironment({{"TASK_TYPE", "rfdetr"}}));
+    REQUIRE_EQ(env_config.task_type, "rfdetr");
+
+    const auto cli_config = parse({"neuriplo-kserve-runtime", "--task-type", "rfdetrseg"},
+                                  testEnvironment({{"TASK_TYPE", "rfdetr"}}));
+    REQUIRE_EQ(cli_config.task_type, "rfdetrseg");
+}
+
+TEST_CASE(parse_runtime_config_task_type_defaults_empty) {
+    const auto config = parse({"neuriplo-kserve-runtime"});
+    REQUIRE(config.task_type.empty());
+}
+
+TEST_CASE(parse_runtime_config_rejects_llm_strategy_with_task_type) {
+    bool threw = false;
+    try {
+        (void)parse(
+            {"neuriplo-kserve-runtime", "--scheduler-strategy", "llm", "--task-type", "rfdetr"});
+    } catch (const std::invalid_argument &) {
+        threw = true;
+    }
+    REQUIRE(threw);
+}
+
+TEST_CASE(parse_runtime_config_input_sizes_flag_and_env) {
+    const auto cli_config = parse({"neuriplo-kserve-runtime", "--input-sizes", "1,3,560,560"});
+    REQUIRE_EQ(cli_config.input_sizes.size(), static_cast<size_t>(1));
+    REQUIRE_EQ(cli_config.input_sizes[0], std::vector<int64_t>({1, 3, 560, 560}));
+
+    const auto multi_config =
+        parse({"neuriplo-kserve-runtime", "--input-sizes", "1,3,224,224;1,10"});
+    REQUIRE_EQ(multi_config.input_sizes.size(), static_cast<size_t>(2));
+    REQUIRE_EQ(multi_config.input_sizes[1], std::vector<int64_t>({1, 10}));
+
+    const auto env_config =
+        parse({"neuriplo-kserve-runtime"}, testEnvironment({{"INPUT_SIZES", "1,3,432,432"}}));
+    REQUIRE_EQ(env_config.input_sizes.size(), static_cast<size_t>(1));
+    REQUIRE_EQ(env_config.input_sizes[0], std::vector<int64_t>({1, 3, 432, 432}));
+}
+
+TEST_CASE(parse_runtime_config_rejects_malformed_input_sizes) {
+    for (const char *bad : {"1,3,,560", ";1,3,224,224", "1,3,224,224;", "abc"}) {
+        bool threw = false;
+        try {
+            (void)parse({"neuriplo-kserve-runtime", "--input-sizes", bad});
+        } catch (const std::invalid_argument &) {
+            threw = true;
+        } catch (const std::out_of_range &) {
+            threw = true;
+        }
+        REQUIRE(threw);
+    }
 }
 
 TEST_CASE(parse_runtime_config_rejects_invalid_port) {

@@ -74,7 +74,7 @@ void ModelLifecycle::load(ModelHandle &handle, const RuntimeConfig &config, Exec
         handle.name = handle.metadata.name;
         handle.versions = handle.metadata.versions;
 
-        if (usesLlmScheduler(config.scheduler_strategy, config.backend)) {
+        if (usesLlmScheduler(config.scheduler_strategy, config.backend, config.task_type)) {
             LlmSchedulerConfig scheduler_config;
             scheduler_config.max_queue_size = config.max_queue_size;
             scheduler_config.request_timeout_ms = config.request_timeout_ms;

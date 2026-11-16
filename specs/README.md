@@ -38,6 +38,7 @@ Steps 0-14 were delivered before packets existed; each is now a
 | `2026-06-05-yolo-platform-e2e/` | Step 12, including the former YOLO e2e procedure. |
 | `2026-06-10-control-data-plane-split/` | Step 13. |
 | `2026-06-11-multi-model-hot-reload/` | Step 14. |
+| `2026-11-16-vision-gguf-serving/` | Phase 6: RF-DETR detection/segmentation GGUF served on the tensor path (`--task-type`, `--input-sizes`). |
 
 A retrospective packet keeps the snapshot text as written. Its `requirements.md`
 takes the step's exit criteria from the target design as `R-` items, `plan.md`

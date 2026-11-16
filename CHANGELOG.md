@@ -6,6 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- **Vision GGUF serving**: `--task-type` (env `TASK_TYPE`) selects the tensor
+  serving path for LLM-kind backends, so an RF-DETR detection or segmentation
+  `.gguf` on `--backend ggml` is served with the engine's tensor I/O instead of
+  the BYTES prompt/text LLM convention. `--input-sizes` (env `INPUT_SIZES`)
+  supplies the static geometry the GGML backend requires, and the admin
+  load/reload body accepts `task_type`. Combining a task with
+  `--scheduler-strategy llm` is rejected. New `real-ggml` presets and
+  `scripts/e2e-ggml-rfdetr.sh`; see
+  `specs/2026-11-16-vision-gguf-serving/`.
+
+### Fixed
+- Missing `<algorithm>` include in `tests/NeuriploPlatformE2eTest.cpp` that
+  broke the build on GCC 15.
+
 ## [0.4.0] - 2026-10-05
 
 ### Added
